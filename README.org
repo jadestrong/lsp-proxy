@@ -23,6 +23,8 @@ Before installing LSP-COPILOT, you should install rust and cargo first.
 git clone https://github.com/jadestrong/lsp-copilot.git ./your-directory
 cd ./your-directory
 cargo build --release
+# delete old file if exist
+rm lsp-copilot
 cp ./target/release/lsp-copilot ./
 #+end_src
 ** Doom Emacs
