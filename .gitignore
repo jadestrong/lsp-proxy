@@ -1,0 +1,5 @@
+/target
+.aider*
+.env
+.vscode
+lsp-copilot

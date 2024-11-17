@@ -1,0 +1,289 @@
+[language-server]
+basedpyright = { command = "basedpyright-langserver", args = ["--stdio"], config = {} }
+taplo = { command = "taplo", args = ["lsp", "stdio"] }
+bash-language-server = { command = "bash-language-server", args = ["start"] }
+vscode-json-language-server = { command = "vscode-json-language-server", args = ["--stdio"], config = { provideFormatter = true, json = { validate = { enable = true } } } }
+jdtls = { command = "jdtls" }
+
+[language-server.css-ls]
+command = "vscode-css-language-server"
+args = ["--stdio"]
+
+[language-server.css-ls.config.css]
+hover = {documentation = true, references = true}
+"lint" = {"compatibleVendorPrefixes" = "ignore", "vendorPrefix" = "warning", "duplicateProperties" = "ignore", "emptyRules" = "warning", "importStatement" = "ignore", "boxModel" = "ignore", "universalSelector" = "ignore", "zeroUnits" = "ignore", "fontFaceProperties" = "warning", "hexColorLength" = "error", "argumentsInColorFunction" = "error", "unknownProperties" = "warning", "validProperties" = [], "ieHack" = "ignore", "unknownVendorSpecificProperties" = "ignore", "propertyIgnoredDueToDisplay" = "warning", "important" = "ignore", "float" = "ignore", "idSelector" = "ignore", "unknownAtRules" = "warning"}
+"trace" = {"server" = "off"}
+"format" = {"enable" = true, "newlineBetweenSelectors" = true, "newlineBetweenRules" = true, "spaceAroundSelectorSeparator" = false, "braceStyle" = "collapse", "preserveNewLines" = true, "maxPreserveNewLines" = ""}
+customData = []
+completion = { "triggerPropertyValueCompletion" = true, "completePropertyWithSemicolon" = true }
+validate = true
+
+[language-server.css-ls.config.less]
+"completion" = {"triggerPropertyValueCompletion" = true}
+"validate" = true
+"hover" = {"documentation" = true}
+"lint" = {"compatibleVendorPrefixes" = "ignore", "vendorPrefix" = "warning", "duplicateProperties" = "ignore", "emptyRules" = "warning", "importStatement" = "ignore", "boxModel" = "ignore", "universalSelector" = "ignore", "zeroUnits" = "ignore", "fontFaceProperties" = "warning", "hexColorLength" = "error", "argumentsInColorFunction" = "error", "unknownProperties" = "warning", "validProperties" = [], "ieHack" = "ignore", "unknownVendorSpecificProperties" = "ignore", "propertyIgnoredDueToDisplay" = "warning", "important" = "ignore", "float" = "ignore", "idSelector" = "ignore"}
+"format" = {"enable" = true, "newlineBetweenSelectors" = true, "newlineBetweenRules" = true, "spaceAroundSelectorSeparator" = false, "braceStyle" = "collapse", "preserveNewLines" = true, "maxPreserveNewLines" = ""}
+"completePropertyWithSemicolon" = true
+"references" = true
+"unknownAtRules" = "warning"
+
+[language-server.css-ls.config.scss]
+"completion" = {"triggerPropertyValueCompletion" = true}
+"validate" = true
+"hover" = {"documentation" = true}
+"lint" = {"compatibleVendorPrefixes" = "ignore", "vendorPrefix" = "warning", "duplicateProperties" = "ignore", "emptyRules" = "warning", "importStatement" = "ignore", "boxModel" = "ignore", "universalSelector" = "ignore", "zeroUnits" = "ignore", "fontFaceProperties" = "warning", "hexColorLength" = "error", "argumentsInColorFunction" = "error", "unknownProperties" = "warning", "validProperties" = [], "ieHack" = "ignore", "unknownVendorSpecificProperties" = "ignore", "propertyIgnoredDueToDisplay" = "warning", "important" = "ignore", "float" = "ignore", "idSelector" = "ignore"}
+"format" = {"enable" = true, "newlineBetweenSelectors" = true, "newlineBetweenRules" = true, "spaceAroundSelectorSeparator" = false, "braceStyle" = "collapse", "preserveNewLines" = true, "maxPreserveNewLines" = ""}
+"completePropertyWithSemicolon" = true
+"references" = true
+"unknownAtRules" = "warning"
+
+[language-server.tailwindcss-ls]
+command = "tailwindcss-language-server"
+args = ["--stdio"]
+
+[language-server.tailwindcss-ls.config.editor]
+userLanguages = { eelixir = "html-eex", eruby = "erb" }
+
+[language-server.tailwindcss-ls.config.tailwindCSS]
+emmetCompletions = false
+showPixelEquivalents = true
+rootFontSize = 16
+validate = true
+hovers = true
+suggestions = true
+codeActions = true
+lint = { invalidScreen = "error", invalidVariant = "error", invalidTailwindDirective = "error", invalidApply = "error", invalidConfigPath = "error", cssConflict = "warning", recommendedVariantOrder = "warning" }
+experimental = { classRegex = '' }
+classAttributes = ['class', 'className', 'ngClass']
+
+[language-server.vtsls]
+command = "vtsls"
+args = ["--stdio"]
+
+[language-server.vtsls.config.typescript]
+tsserver = { log = "off", maxTsServerMemory = 3072 }
+suggest = { completeFunctionCalls = true }
+format = { enable = false }
+
+[language-server.vtsls.config.javascript]
+suggest = { completeFunctionCalls = true }
+format = { enable = false }
+
+[language-server.typescript-language-server]
+command = "typescript-language-server"
+args = ["--stdio"]
+config.hostInfo = "Emacs"
+config.tsserver.logVerbosity = "off"
+config.maxTsServerMemory = 3072
+config.preferences = { includePackageJsonAutoImports = "auto", includeAutomaticOptionalChainCompletions = true }
+
+[language-server.typescript-language-server.config.javascript]
+implementationsCodeLens = { enabled = false }
+referencesCodeLens = { enabled = false }
+format = { enable = false, insertSpaceAfterCommaDelimiter = true, insertSpaceAfterConstructor = false, insertSpaceAfterFunctionKeywordForAnonymousFunctions = true, insertSpaceAfterKeywordsInControlFlowStatements = true, insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces = false, insertSpaceAfterOpeningAndBeforeClosingEmptyBraces = false, insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true, insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets = false, insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis = false, insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false, insertSpaceAfterSemicolonInForStatements = true, insertSpaceAfterTypeAssertion = false, insertSpaceBeforeAndAfterBinaryOperators = true, insertSpaceBeforeFunctionParenthesis = false, placeOpenBraceOnNewLineForControlBlocks = false, placeOpenBraceOnNewLineForFunctions = false }
+inlayHints = { includeInlayEnumMemberValueHints = true, includeInlayFunctionLikeReturnTypeHints = true, includeInlayFunctionParameterTypeHints = true, includeInlayParameterNameHints = "none", includeInlayParameterNameHintsWhenArgumentMatchesName = true, includeInlayPropertyDeclarationTypeHints = true, includeInlayVariableTypeHints = true }
+[language-server.typescript-language-server.config.typescript]
+implementationsCodeLens = { enabled = false }
+referencesCodeLens = { enabled = false }
+format = { enable = false, insertSpaceAfterCommaDelimiter = true, insertSpaceAfterConstructor = false, insertSpaceAfterFunctionKeywordForAnonymousFunctions = true, insertSpaceAfterKeywordsInControlFlowStatements = true, insertSpaceAfterOpeningAndBeforeClosingJsxExpressionBraces = false, insertSpaceAfterOpeningAndBeforeClosingEmptyBraces = false, insertSpaceAfterOpeningAndBeforeClosingNonemptyBraces = true, insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets = false, insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis = false, insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces = false, insertSpaceAfterSemicolonInForStatements = true, insertSpaceAfterTypeAssertion = false, insertSpaceBeforeAndAfterBinaryOperators = true, insertSpaceBeforeFunctionParenthesis = false, placeOpenBraceOnNewLineForControlBlocks = false, placeOpenBraceOnNewLineForFunctions = false }
+inlayHints = { includeInlayEnumMemberValueHints = true, includeInlayFunctionLikeReturnTypeHints = true, includeInlayFunctionParameterTypeHints = true, includeInlayParameterNameHints = "none", includeInlayParameterNameHintsWhenArgumentMatchesName = true, includeInlayPropertyDeclarationTypeHints = true, includeInlayVariableTypeHints = true }
+[language-server.typescript-language-server.config.completions]
+completeFunctionCalls = true
+
+[language-server.eslint]
+command = "vscode-eslint-language-server"
+args = ["--stdio"]
+
+[language-server.eslint.config]
+validate = "probe"
+packageManager = "npm"
+useESLintClass = false
+codeAction = { disableRuleComment = { enable = true, location = "separateLine" }, showDocumentation = { enable = true } }
+codeActionOnSave = { enable = false, mode = "all" }
+format = true
+quiet = false
+onIgnoredFiles = "off"
+options = {}
+rulesCustomizations = []
+run = "onType"
+nodePath = ""
+# workingDirectory = ""
+experimental = { useFlatConfig = false }
+problems = { shortenToSingleLine = false }
+
+
+[language-server.rust-analyzer]
+command = "rust-analyzer"
+
+[language-server.rust-analyzer.config]
+inlayHints.bindingModeHints.enable = false
+inlayHints.closingBraceHints.minLines = 10
+inlayHints.closureReturnTypeHints.enable = "with_block"
+inlayHints.discriminantHints.enable = "fieldless"
+inlayHints.lifetimeElisionHints.enable = "skip_trivial"
+inlayHints.typeHints.hideClosureInitialization = false
+
+# [language-server.rust-analyzer.experimental]
+# snippetTextEdit = true NOT SUPPORT NOW
+
+[[language]]
+name = "javascript"
+language-id = "javascript"
+file-types = ["js", "mjs", "cjs", "rules", "es6", "pac", "jakefile"]
+roots = ["package.json"]
+language-servers = [
+  # { name = "typescript-language-server", except-features = [
+  #   "format",
+  # ] },
+  { name = "vtsls", except-features = [ "format" ] },
+  { name = "eslint", support-workspace = true },
+]
+
+[[language]]
+name = "jsx"
+language-id = "javascriptreact"
+file-types = ["jsx"]
+roots = ["package.json"]
+language-servers = [
+  # { name = "typescript-language-server", except-features = [
+  #   "format",
+  # ] },
+  { name = "vtsls", except-features = [ "format" ] },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+]
+
+[[language]]
+name = "typescript"
+language-id = "typescript"
+file-types = ["ts", "mts", "cts"]
+roots = ["package.json"]
+language-servers = [
+  # { name = "typescript-language-server", except-features = [
+  #   "format",
+  # ] },
+  { name = "vtsls", except-features = [ "format" ] },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+]
+
+[[language]]
+name = "tsx"
+language-id = "typescriptreact"
+file-types = ["tsx"]
+roots = ["package.json"]
+language-servers = [
+  { name = "vtsls", except-features = [ "format" ] },
+  # { name = "typescript-language-server", except-features = [
+  #   "format",
+  # ] },
+  "tailwindcss-ls",
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+]
+
+[[language]]
+name = "less"
+language-id = "less"
+file-types = ["less"]
+language-servers = ["css-ls"]
+
+[[language]]
+name = "python"
+file-types = ["py", "pyi", "py3", "pyw", "ptl", "rpy", "cpy", "ipy", "pyt", { glob = ".python_history" }, { glob = ".pythonstartup" }, { glob = ".pythonrc" }, { glob = "SConstruct" }, { glob = "SConscript" }]
+roots = ["pyproject.toml", "setup.py", "poetry.lock", "pyrightconfig.json"]
+language-servers = [ "basedpyright" ]
+
+
+[[language]]
+name = "rust"
+file-types = ["rs"]
+roots = ["Cargo.toml", "Cargo.lock"]
+language-servers = [
+  { name = "rust-analyzer", library-directories = ["~/.cargo/registry/src", "~/.rustup/toolchains"] }
+]
+
+[[language]]
+name = "toml"
+file-types = ["toml", { glob = "pdm.lock" }, { glob = "poetry.lock" }, { glob = "Cargo.lock" }, { glob = "uv.lock" }]
+language-servers = [ "taplo" ]
+
+[[language]]
+name = "bash"
+file-types = [
+  "sh",
+  "bash",
+  "ash",
+  "dash",
+  "ksh",
+  "mksh",
+  "zsh",
+  "zshenv",
+  "zlogin",
+  "zlogout",
+  "zprofile",
+  "zshrc",
+  "eclass",
+  "ebuild",
+  "bazelrc",
+  "Renviron",
+  "zsh-theme",
+  "cshrc",
+  "tcshrc",
+  "bashrc_Apple_Terminal",
+  "zshrc_Apple_Terminal",
+  { glob = "tmux.conf" },
+  { glob = ".bash_history" },
+  { glob = ".bash_login" },
+  { glob = ".bash_logout" },
+  { glob = ".bash_profile" },
+  { glob = ".bashrc" },
+  { glob = ".profile" },
+  { glob = ".zshenv" },
+  { glob = ".zlogin" },
+  { glob = ".zlogout" },
+  { glob = ".zprofile" },
+  { glob = ".zshrc" },
+  { glob = ".zimrc" },
+  { glob = "APKBUILD" },
+  { glob = ".bash_aliases" },
+  { glob = ".Renviron" },
+  { glob = ".xprofile" },
+  { glob = ".xsession" },
+  { glob = ".xsessionrc" },
+  { glob = ".yashrc" },
+  { glob = ".yash_profile" },
+  { glob = ".hushlogin" },
+]
+language-servers = [ "bash-language-server" ]
+
+[[language]]
+name = "json"
+file-types = [
+  "json",
+  "arb",
+  "ipynb",
+  "geojson",
+  "gltf",
+  "webmanifest",
+  { glob = "flake.lock" },
+  { glob = ".babelrc" },
+  { glob = ".bowerrc" },
+  { glob = ".jscrc" },
+  "js.map",
+  "ts.map",
+  "css.map",
+  { glob = ".jslintrc" },
+  "jsonl",
+  "jsonld",
+  { glob = ".vuerc" },
+  { glob = "composer.lock" },
+  { glob = ".watchmanconfig" },
+  "avsc",
+  { glob = ".prettierrc" },
+]
+language-servers = [ "vscode-json-language-server" ]
+
+[[language]]
+name = "java"
+file-types = ["java", "jav", "pde"]
+roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
+language-servers = [ "jdtls" ]

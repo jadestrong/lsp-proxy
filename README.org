@@ -1,0 +1,204 @@
+#+title: LSP-COPILOT
+
+* Introducation
+Lsp-Copilot is an LSP (Language Server Protocol) client for Emacs, implemented in Rust and inspired by [[https://github.com/manateelazycat/lsp-bridge][lsp-bridge]]. It uses ~jsonrpc.el~ to facilitate communication between Emacs and the Lsp-Copilot Server. The Lsp-Copilot Server acts as an intermediary between Emacs and various language servers, handling communication with the language servers, processing the responses, and returning them to Emacs.
+
+The features it supports are:
+- find definitions/references/implementatoins/type-definition/declaration (as a xref backend)
+- completion (as a capf function) support snippet and auto import, reuse requests that are already being processed, while caching the results to improve response speed, before returning all the completion candidates, the server will do fuzzy matching and filter out entries with no match.
+- diagnostics (as a flycheck backend) process diagnostics when idle.
+- hover (triggered by ~lsp-copilot-describe-thing-at-point~)
+- code action (triggered by ~lsp-copilot-execute-code-action~)
+- rename (triggered by ~lsp-copilot-rename~)
+- format buffer (triggered by ~lsp-copilot-format-buffer~)
+- workspace command, such as ~typescript.restartTsServer(vtsls)~ 、 ~reloadWorkspace(rust-analyzer)~ (triggered by ~lsp-copilot-execute-command~)
+- signature/inlay hints (triggered by ~lsp-copilot-signature-mode~ 、 ~lsp-copilot-inlay-hints-mode~), there might be bugs and usability issues, as it is used relatively infrequently.
+
+[[file:images/show.gif]]
+
+* Installation
+Before installing LSP-COPILOT, you should install rust and cargo first.
+** Manually
+#+begin_src bash
+git clone https://github.com/jadestrong/lsp-copilot.git ./your-directory
+cd ./your-directory
+cargo build --release
+cp ./target/release/lsp-copilot ./
+#+end_src
+** Doom Emacs
+package.el
+#+begin_src elisp
+(package! lsp-copilot :recipe (:host github :repo "jadestrong/lsp-copilot"
+                :files ("lsp-copilot.el" "lsp-copilot")
+                :pre-build (("cargo" "build" "--release") ("cp" "./target/release/lsp-copilot" "./"))))
+#+end_src
+* How to use
+#+begin_src emacs-lisp
+(use-package lsp-copilot
+  ;; :load-path "/path/to/lsp-copilot"
+  :config
+  (add-hook! '(
+               tsx-ts-mode-hook
+               js-ts-mode-hook
+               typescript-mode-hook
+               typescript-ts-mode-hook
+               rjsx-mode-hook
+               less-css-mode-hook
+               web-mode-hook
+               python-ts-mode-hook
+               rust-mode-hook
+               rustic-mode-hook
+               rust-ts-mode-hook
+               toml-ts-mode-hook
+               conf-toml-mode-hook
+               bash-ts-mode-hook
+               ) #'lsp-copilot-mode))
+#+end_src
+
+#+begin_src elisp
+;; Doom Emacs
+(set-lookup-handlers! 'lsp-copilot-mode
+    :definition '(lsp-copilot-find-definition :async t)
+    :references '(lsp-copilot-find-references :async t)
+    :implementations '(lsp-copilot-find-implementations :async t)
+    :type-definition '(lsp-copilot-find-type-definition :async t)
+    :documentation '(lsp-copilot-describe-thing-at-point :async t))
+#+end_src
+* Add a new language
+Currently, I have only tested it on macOS and use it for daily development in JavaScript, Rust, etc. Therefore, tools like vtsls, typescript-language-server, eslint, tailwindcss, css, and others work fine
+- JavaScript/Typescript: [[https://github.com/yioneko/vtsls][vtsls]] (built-in)、[[https://github.com/typescript-language-server/typescript-language-server][typescript-language-server]]
+- eslint、html、css、html: [[https://github.com/hrsh7th/vscode-langservers-extracted][vscode-langservers-extracted]]
+- tailwindcss: [[https://www.npmjs.com/package/@tailwindcss/language-server][@tailwindcss/language-server]]
+
+The configuration for a new language can refer to the [[https://github.com/helix-editor/helix/blob/master/languages.toml][Helix configuration]]. Supported fields are based on [[https://github.com/jadestrong/lsp-copilot/blob/main/languages.toml][the built-in configuration file]], and only LSP-related fields are supported.
+Open custom language config file by ~lsp-copilot-open-config-file~ and add your config, then execute ~lsp-copilot-restart~.
+
+- Vue2:
+#+begin_src toml
+[languge-server.vls]
+command = "vls"
+args = ["--stdio"]
+
+[[language]]
+name = "vue"
+roots = ["package.json"]
+language-id = "vue"
+file-types = ["vue"]
+language-servers = ["vls"]
+#+end_src
+
+- Vue3
+#+begin_src sh
+yarn global add @vue/language-server @vue/typescript-plugin
+#+end_src
+
+#+begin_src toml
+[language-server.typescript-language-server]
+config.plugins = [
+  { name = "@vue/typescript-plugin", location = "${your-path}/node_modules/@vue/typescript-plugin", languages = ["vue"]}
+]
+
+[language-server.vue-language-server]
+command = "vue-language-server"
+args = ["--stdio"]
+config.typescript = { tsdk = "${your-path}/node_modules/typescript/lib" }
+config.vue = { hybridMode = false }
+
+[[language]]
+name = "vue"
+roots = ["package.json"]
+language-id = "vue"
+file-types = ["vue", "ts"]
+language-servers = ["vue-language-server", "typescript-language-server"]
+
+# Override the build-in config. The built-in configuration uses vtsls, but it seems incompatible with vue-language-server. It could also be that my configuration is incorrect.
+# Others, such as JavaScript and TSX, can be added as needed.
+[[language]]
+name = "typescript"
+language-id = "typescript"
+file-types = ["ts", "mts", "cts"]
+roots = ["package.json"]
+language-servers = [
+  { name = "typescript-language-server", except-features = [
+    "format",
+  ] },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+]
+#+end_src
+
+- ~except-features~ can disable server's feature, view the [[https://github.com/jadestrong/lsp-copilot/blob/2ffc7cf0d5e42f66076feabee4c099a36f70997f/src/syntax.rs#L153][supported features]].
+
+* Debug
+** Server bug
+- ~(setq lsp-copilot-log-level 3)~
+- M-x ~lsp-copilot-restart~
+- M-x ~lsp-copilot-open-log-file~
+** Server crash
+- Open ~*lsp-copilot-events*~ buffer
+** Lsp server message
+- Open ~*lsp-copilot-log*~
+
+* Commands
+ - ~lsp-copilot-find-definition~
+ - ~lsp-copilot-find-references~
+ - ~lsp-copilot-find-declaration~
+ - ~lsp-copilot-find-type-definition~
+ - ~lsp-copilot-find-implementations~
+ - ~lsp-copilot-format-buffer~
+ - ~lsp-copilot-rename~
+ - ~lsp-copilot-execute-code-action~
+ - ~lsp-copilot-execute-command~
+ - ~lsp-copilot-describe-thing-at-point~
+ - ~lsp-copilot-show-project-diagnostics~
+
+ -----
+ - lsp-copilot-open-log-file
+ - lsp-copilot-open-config-file
+ - lsp-copilot-restart: Restart the server
+ - lsp-copilot-restart-workspace: Restart the LSP server for the current project
+
+* Customization
+| Variable                          | Default                                           | Description                                            |
+| lsp-copilot-user-languages-config | `user-emacs-directory/lsp-copilot/languages.toml` | Where custom language server configurations are stored |
+| lsp-copilot-log-file-directory    | temporary-file-directory                          | Log file storage directory                             |
+| lsp-copilot-log-level             | 1                                                 | A number indicating the log level. Defaults to 1. Warn = 0, Info = 1, Debug = 2, Trace = 3      |
+
+
+* Recommend config
+** Company and Corfu
+#+begin_src elisp
+;; company
+(setq company-idle-delay 0)
+;; If you encounter issues when typing Vue directives (e.g., v-), you can try setting it to 1. I'm not sure if it's a problem with Volar.
+(setq company-minimum-prefix-length 2)
+(setq company-tooltip-idle-delay 0)
+
+;; corfu
+(setq corfu-auto-delay 0)
+(setq corfu-popupinfo-delay '(0.1 . 0.1))
+#+end_src
+
+** company-box
+#+begin_src elisp
+(defun company-box-icons--lsp-copilot (candidate)
+    (-when-let* ((copilot-item (get-text-property 0 'lsp-copilot--item candidate))
+                 (lsp-item (plist-get copilot-item :item))
+                 (kind-num (plist-get lsp-item :kind)))
+      (alist-get kind-num company-box-icons--lsp-alist)))
+
+(setq company-box-icons-functions
+      (cons #'company-box-icons--lsp-copilot company-box-icons-functions))
+#+end_src
+
+** flycheck or flymake
+Currently, only Flycheck is supported. You can refer to the configuration in [[https://github.com/emacs-lsp/lsp-mode/blob/master/lsp-diagnostics.el][lsp-mode]] to add support for others.
+
+* Acknowledgements
+Thanks to [[https://github.com/helix-editor/helix][Helix]], the architecture of Lsp-Copilot Server is entirely based on Helix's implementation. Language configuration and communication with different language servers are all dependent on Helix. As a Rust beginner, I've gained a lot from this approach during the implementation.
+
+Regarding the communication between Emacs and Lsp-Copilot, I would like to especially thank [[https://github.com/copilot-emacs/copilot.el][copilot.el]] and [[https://github.com/rust-lang/rust-analyzer][rust-analyzer]]. The usage of jsonrpc.el was learned from copilot.el, while the approach to receiving and handling Emacs requests was inspired by the implementation in rust-analyzer.
+
+The various methods used to implement LSP-related functionality on the Emacs side were learned from [[https://github.com/emacs-lsp/lsp-mode][lsp-mode]] and [[https://github.com/joaotavora/eglot][eglot]]. Without their guidance, many of these features would have been difficult to implement.
+
+Regarding the communication data format between Emacs and Lsp-Copilot, I would like to especially thank [[https://github.com/blahgeek/emacs-lsp-booster][emacs-lsp-booster]]. The project integrates the implementation of emacs-lsp-booster, which encodes the JSON data returned to Emacs, further reducing the load on Emacs.
+
