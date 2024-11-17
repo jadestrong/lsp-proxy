@@ -1,13 +1,14 @@
-use core::fmt;
-use std::{cmp::Ordering, collections::HashSet, panic, sync::Arc, time::Instant};
 use anyhow::Result;
+use core::fmt;
 use crossbeam_channel::Sender;
 use futures_util::{stream::FuturesUnordered, TryStreamExt};
+use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
 use lsp_types::{request::Request, CodeAction};
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
+use std::{cmp::Ordering, collections::HashSet, panic, sync::Arc, time::Instant};
 use stringslice::StringSlice;
 
 use crate::{
@@ -40,6 +41,7 @@ where
     R: lsp_types::request::Request + 'static,
     R::Params: DeserializeOwned + Send + fmt::Debug + panic::UnwindSafe,
 {
+    let ls_names = language_servers.iter().map(|ls| ls.name()).join("、");
     let language_server = match (language_server_id, feature) {
         (Some(ls_id), _) => language_servers.iter().find(|ls| ls.id() == ls_id),
         (None, Some(feature)) => language_servers.iter().find(|ls| ls.with_feature(feature)),
@@ -57,8 +59,8 @@ where
             }
         }
         None => Err(anyhow::Error::msg(format!(
-            "No language server found for {:?}.",
-            req.method
+            "Language server {:?} not support {:?}.",
+            ls_names, req.method
         ))),
     }
 }
@@ -174,7 +176,11 @@ where
             Err(err) => Err(err.into()),
         }
     } else {
-        Err(anyhow::Error::msg("No language server found.".to_string()))
+        let ls_names = language_servers.iter().map(|ls| ls.name()).join("、");
+        Err(anyhow::Error::msg(format!(
+            "Language server {:?} not support {:?}.",
+            ls_names, req.method
+        )))
     }
 }
 
