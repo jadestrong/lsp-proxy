@@ -89,9 +89,8 @@ pub fn default_syntax_loader() -> syntax::Configuration {
             config
         }
         Err(err) => {
-            // error!("Cound not serialize built-in languages.toml: {}", err);
             panic!(
-                "Cound not serialize config.toml or languages.toml: {}",
+                "Cound not serialize your custom languages.toml: {}",
                 err.to_string()
             )
         }
