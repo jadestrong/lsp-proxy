@@ -73,6 +73,9 @@ Currently, I have only tested it on macOS and use it for daily development in Ja
 The configuration for a new language can refer to the [[https://github.com/helix-editor/helix/blob/master/languages.toml][Helix configuration]]. Supported fields are based on [[https://github.com/jadestrong/lsp-copilot/blob/main/languages.toml][the built-in configuration file]], and only LSP-related fields are supported.
 Open custom language config file by ~lsp-copilot-open-config-file~ and add your config, then execute ~lsp-copilot-restart~.
 
+The configuration fields for adding language support are: ~name、roots、language-id、file-types、language-servers~ . Other fields in the Helix configuration are not supported.
+
+
 - Vue2:
 #+begin_src toml
 [languge-server.vls]
