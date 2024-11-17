@@ -418,7 +418,7 @@ impl Application {
                         }
                     }
                     NotificationFromServer::ShowMessage(params) => {
-                        log::warn!("unhandled window/showMessage: {:?}", params);
+                        self.send_notification::<lsp_types::notification::ShowMessage>(params)
                     }
                     NotificationFromServer::LogMessage(params) => {
                         self.send_notification::<lsp_types::notification::LogMessage>(params)

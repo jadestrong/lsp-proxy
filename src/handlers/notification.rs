@@ -1,8 +1,9 @@
 use anyhow::Result;
+use itertools::Itertools;
 use log::error;
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidSaveTextDocumentParams,
-    WillSaveTextDocumentParams,
+    MessageType, WillSaveTextDocumentParams,
 };
 
 use crate::{application::Application, document::DocumentId, lsp_ext, utils::get_activate_time};
@@ -31,6 +32,13 @@ pub(crate) fn handle_did_open_text_document(
                         trigger_characters: doc.get_trigger_characters(),
                         signature_trigger_characters: doc.get_signature_trigger_characters(),
                         support_inlay_hints: doc.is_has_inlay_hints_support(),
+                    },
+                );
+                let lang_servers = doc.language_servers.keys().join("、");
+                app.send_notification::<lsp_types::notification::ShowMessage>(
+                    lsp_types::ShowMessageParams {
+                        typ: MessageType::INFO,
+                        message: format!("Connected to {:?}.", lang_servers),
                     },
                 )
             } else {

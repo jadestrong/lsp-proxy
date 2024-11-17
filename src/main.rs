@@ -97,6 +97,7 @@ fn run_server() -> Result<()> {
     let (connect, io_threads) = Connection::stdio();
     let syn_loader_config = config::default_syntax_loader();
     main_loop(connect, syn_loader_config).unwrap();
+    info!("Server started successfully.");
     io_threads.join()?;
     Ok(())
 }
