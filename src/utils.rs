@@ -7,10 +7,38 @@ use std::{
 };
 use stringslice::StringSlice;
 
-pub mod path {
-    use std::path::{Component, Path, PathBuf};
+pub fn current_working_dir() -> PathBuf {
+    let path = std::env::current_dir()
+        .and_then(dunce::canonicalize)
+        .expect("Cound't determine current working directory");
+    path
+}
 
-    use home_dir::HomeDirExt;
+pub mod path {
+    use std::{borrow::Cow, path::{Component, Path, PathBuf}};
+    use etcetera::home_dir;
+    use crate::utils::current_working_dir;
+
+    /// Expands tilde `~` into users home directory if available, otherwise returns the path
+    /// unchanged. The tilde will only be expanded when present as the first component of the path
+    /// and only slash follows it.
+    pub fn expand_tilde<'a, P>(path: P) -> Cow<'a, Path>
+    where
+        P: Into<Cow<'a, Path>>,
+    {
+        let path = path.into();
+        let mut components = path.components();
+        if let Some(Component::Normal(c)) = components.next() {
+            if c == "~" {
+                if let Ok(mut buf) = home_dir() {
+                    buf.push(components);
+                    return Cow::Owned(buf);
+                }
+            }
+        }
+
+        path
+    }
 
     ///  Normalize a path without resolving symlinks. Copy from helix-stdx
     // Strategy: start from the first component and move up. Cannonicalize previous path,
@@ -82,10 +110,27 @@ pub mod path {
         dunce::simplified(&ret).to_path_buf()
     }
 
+    /// Returns the canonical, absolute form of a path with all intermediate components normalized.
+    ///
+    /// This function is used instead of [`std::fs::canonicalize`] because we don't want to verify
+    /// here if the path exists, just normalize it's components.
+    pub fn canonicalize(path: impl AsRef<Path>) -> PathBuf {
+        let path = expand_tilde(path.as_ref());
+        let path = if path.is_relative() {
+            Cow::Owned(current_working_dir().join(path))
+        } else {
+            path
+        };
+
+        normalize(path)
+    }
+
     /// 判断两个给定的文件路径是否指向相同的文件或目录
     pub fn paths_are_same(path_a: &str, path_b: &str) -> bool {
-        let a = normalize(&path_a.expand_home().unwrap());
-        let b = normalize(&path_b.expand_home().unwrap());
+        let a = canonicalize(&path_a);
+        let b = canonicalize(&path_b);
+        // let a = normalize(&path_a.expand_home().unwrap());
+        // let b = normalize(&path_b.expand_home().unwrap());
         if a.exists() && b.exists() {
             a == b
         } else {
@@ -97,9 +142,10 @@ pub mod path {
         if paths_are_same(path_a, path_b) {
             return false;
         }
-
-        let a = normalize(&path_a.expand_home().unwrap());
-        let b = normalize(&path_b.expand_home().unwrap());
+        let a = canonicalize(&path_a);
+        let b = canonicalize(&path_b);
+        // let a = normalize(&path_a.expand_home().unwrap());
+        // let b = normalize(&path_b.expand_home().unwrap());
 
         if !a.exists() || !b.exists() {
             return false;
@@ -107,13 +153,6 @@ pub mod path {
 
         return b.starts_with(a);
     }
-}
-
-pub fn current_working_dir() -> PathBuf {
-    let path = std::env::current_dir()
-        .and_then(dunce::canonicalize)
-        .expect("Cound't determine current working directory");
-    path
 }
 
 /// Finds the current workspace folder.
