@@ -177,9 +177,6 @@ the buffer when it becomes large."
 (defvar-local lsp-copilot--change-idle-timer nil
   "Idle timer for didChange signals.")
 
-(defvar lsp-copilot--xref-callback nil
-  "XREF callback.")
-
 (defvar-local lsp-copilot--completion-trigger-characters nil
   "Completion trigger characters.")
 
@@ -691,24 +688,20 @@ LSP server result."
   (list (propertize (or (thing-at-point 'symbol) "")
                     'identifier-at-point t)))
 
-(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-copilot)) _identifier callback)
+(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-copilot)) _identifier)
   (save-excursion
-    (setq lsp-copilot--xref-callback callback)
     (lsp-copilot-find-definition)))
 
-(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-copilot)) _identifier callback)
+(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-copilot)) _identifier)
   (save-excursion
-    (setq lsp-copilot--xref-callback callback)
     (lsp-copilot-find-references)))
 
-(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-copilot)) _identifier callback)
+(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-copilot)) _identifier)
   (save-excursion
-    (setq lsp-copilot--xref-callback callback)
     (lsp-copilot-find-implementations)))
 
-(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-copilot)) _identifier callback)
+(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-copilot)) _identifier)
   (save-excursion
-    (setq lsp-copilot--xref-callback callback)
     (lsp-copilot-find-type-definition)))
 
 
