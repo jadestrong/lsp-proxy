@@ -34,11 +34,30 @@ pub(crate) fn handle_did_open_text_document(
                         support_inlay_hints: doc.is_has_inlay_hints_support(),
                     },
                 );
-                let lang_servers = doc.language_servers.keys().join("、");
+                let configed_servers = doc.language_servers.keys().join("、");
+                let lang_servers = doc
+                    .language_servers
+                    .iter()
+                    .filter_map(
+                        |(key, ls)| {
+                            if ls.is_initialized() {
+                                Some(key)
+                            } else {
+                                None
+                            }
+                        },
+                    )
+                    .join("、");
                 app.send_notification::<lsp_types::notification::ShowMessage>(
                     lsp_types::ShowMessageParams {
                         typ: MessageType::INFO,
-                        message: format!("Connected to {:?}.", lang_servers),
+                        message: if configed_servers.is_empty() {
+                            format!("No language server config found for this file, please check your custom config by M-x lsp-copilot-open-config-file.")
+                        } else if lang_servers.is_empty() {
+                            format!("Detect {:?} configuration.", configed_servers)
+                        } else {
+                            format!("Connected to {:?}.", lang_servers)
+                        },
                     },
                 )
             } else {
