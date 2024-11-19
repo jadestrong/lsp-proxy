@@ -1,5 +1,4 @@
 use core::fmt;
-pub mod pool;
 
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
 where

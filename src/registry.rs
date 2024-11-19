@@ -260,37 +260,6 @@ impl Registry {
 
         new_clients
     }
-
-    pub fn restart(
-        &mut self,
-        server_name: String,
-        server_id: usize,
-        doc_path: Option<&PathBuf>,
-        language_config: &LanguageConfiguration,
-    ) -> Result<Arc<Client>> {
-        let root_dirs: Vec<PathBuf> = Vec::new();
-        let client =
-            match self.start_client(server_name.clone(), language_config, doc_path, &root_dirs) {
-                Ok(client) => client,
-                _error => {
-                    panic!("restart new client failed.");
-                }
-            };
-        self.inner
-            .entry(server_name)
-            .or_default()
-            .push(client.clone());
-        match self.get_by_id_v2(server_id) {
-            Some(old_client) => {
-                tokio::spawn(async move {
-                    let _ = old_client.force_shutdown().await;
-                });
-            }
-            None => {}
-        }
-        self.remove_by_id(server_id);
-        Ok(client)
-    }
 }
 
 fn start_client(

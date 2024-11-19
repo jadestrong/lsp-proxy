@@ -156,9 +156,12 @@ the buffer when it becomes large."
     (const :tag "Pick flycheck" :flycheck))
   :group 'lsp-copilot)
 
-(defvar lsp-copilot--exec-file (expand-file-name "./lsp-copilot" (if load-file-name
-                                                                     (file-name-directory load-file-name)
-                                                                   default-directory)))
+(defvar lsp-copilot--exec-file (expand-file-name (if (eq system-type 'windows-nt)
+                                                     "./lsp-copilot.exe"
+                                                   "./lsp-copilot")
+                                                 (if load-file-name
+                                                     (file-name-directory load-file-name)
+                                                   default-directory)))
 (defvar-local lsp-copilot--on-idle-timer nil)
 
 (defvar lsp-copilot--log-file nil
@@ -1080,11 +1083,14 @@ Only works when mode is `tick or `alive."
 (defun lsp-copilot--start-agent ()
   "Start the lsp copilot agent process in local."
   (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
-        (random-num (random 100000))
-        (filename (format "lsp-copilot-%s-%05d.log" timestamp random-num)))
+         (random-num (random 100000))
+         (filename (format "lsp-copilot-%s-%05d.log" timestamp random-num)))
     (setq lsp-copilot--log-file (concat lsp-copilot-log-file-directory filename))
-    (setq lsp-copilot--connection (lsp-copilot--make-connection))
-    (message "Lsp copilot agent started.")))
+    (if (file-exists-p lsp-copilot--exec-file)
+        (progn
+          (setq lsp-copilot--connection (lsp-copilot--make-connection))
+          (message "Lsp copilot agent started."))
+      (lsp-copilot--error "No lsp-copilot file found, please check your `lsp-copilot--exec-file'"))))
 
 (defun lsp-copilot--handle-notification (_ method msg)
   "Handle MSG of type METHOD."
@@ -2379,11 +2385,11 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
             "Passthrough completion."))
     (cond
      ((and (or
-                 (and (eq lsp-copilot-diagnostics-provider :auto)
-                      (functionp 'flycheck-mode))
-                 (and (eq lsp-copilot-diagnostics-provider :flycheck)
-                      (or (functionp 'flycheck-mode)
-                          (user-error "The lsp-copilot-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
+            (and (eq lsp-copilot-diagnostics-provider :auto)
+                 (functionp 'flycheck-mode))
+            (and (eq lsp-copilot-diagnostics-provider :flycheck)
+                 (or (functionp 'flycheck-mode)
+                     (user-error "The lsp-copilot-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
            (require 'flycheck nil t))
       (lsp-copilot-diagnostics-flycheck-enable))
      (t (lsp-copilot--warn "Unable to configuration flycheck. The diagnostics won't be rendered.")))
