@@ -67,7 +67,7 @@ package.el
     :documentation '(lsp-copilot-describe-thing-at-point :async t))
 #+end_src
 * Add a new language
-Currently, I have only tested it on macOS and use it for daily development in JavaScript, Rust, etc. Therefore, tools like vtsls, typescript-language-server, eslint, tailwindcss, css, and others work fine
+Performed simple tests on Windows 11 and Arch Linux, it works properly. I have tested it on macOS and use it for daily development in JavaScript, Rust, etc. Therefore, tools like vtsls, typescript-language-server, eslint, tailwindcss, css, and others work fine
 - JavaScript/Typescript: [[https://github.com/yioneko/vtsls][vtsls]] (built-in)、[[https://github.com/typescript-language-server/typescript-language-server][typescript-language-server]]
 - eslint、html、css、html: [[https://github.com/hrsh7th/vscode-langservers-extracted][vscode-langservers-extracted]]
 - tailwindcss: [[https://www.npmjs.com/package/@tailwindcss/language-server][@tailwindcss/language-server]]
