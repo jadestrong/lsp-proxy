@@ -195,6 +195,19 @@ language-servers = [
       (cons #'company-box-icons--lsp-copilot company-box-icons-functions))
 #+end_src
 
+** tabnine
+Install [[https://github.com/shuxiao9058/tabnine][tabnine]] package first, then add the following configuration to your config:
+#+begin_src elisp
+(when (fboundp #'tabnine-completion-at-point)
+  (add-hook 'lsp-copilot-mode-hook
+            (defun lsp-copilot-capf ()
+              (remove-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point t)
+              (add-hook 'completion-at-point-functions
+                        (cape-capf-super
+                         #'lsp-copilot-completion-at-point
+                         #'tabnine-completion-at-point) nil t))))
+#+end_src
+
 ** flycheck or flymake
 Currently, only Flycheck is supported. You can refer to the configuration in [[https://github.com/emacs-lsp/lsp-mode/blob/master/lsp-diagnostics.el][lsp-mode]] to add support for others.
 
