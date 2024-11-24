@@ -155,7 +155,13 @@ where
         lsp_types::request::GotoTypeDefinition::METHOD => LanguageServerFeature::GotoTypeDefinition,
         _ => LanguageServerFeature::GotoDefinition,
     };
-    if let Some(ls) = language_servers.iter().find(|ls| ls.with_feature(feature)) {
+    // Some language servers (e.g., Dart) did not declare `definitionProvider` but still support it.
+    let language_server = if language_servers.len() == 1 {
+        language_servers.first()
+    } else {
+        language_servers.iter().find(|ls| ls.with_feature(feature))
+    };
+    if let Some(ls) = language_server {
         match ls.call::<R>(req.id.clone(), params).await {
             Ok(json) => match serde_json::from_value::<lsp_types::GotoDefinitionResponse>(json) {
                 Ok(mut resp) => {

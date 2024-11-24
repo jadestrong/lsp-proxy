@@ -4,6 +4,7 @@ taplo = { command = "taplo", args = ["lsp", "stdio"] }
 bash-language-server = { command = "bash-language-server", args = ["start"] }
 vscode-json-language-server = { command = "vscode-json-language-server", args = ["--stdio"], config = { provideFormatter = true, json = { validate = { enable = true } } } }
 jdtls = { command = "jdtls" }
+dart = { command = "dart", args = ["language-server", "--client-id=emacs.lsp-copilot"] }
 
 [language-server.css-ls]
 command = "vscode-css-language-server"
@@ -287,3 +288,10 @@ name = "java"
 file-types = ["java", "jav", "pde"]
 roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
 language-servers = [ "jdtls" ]
+
+
+[[language]]
+name = "dart"
+file-types = ["dart"]
+roots = ["pubspec.yaml"]
+language-servers = [ { name = "dart", library-directories = ["~/.pub-cache"]} ]
