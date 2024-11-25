@@ -9,28 +9,30 @@
 ;; Version: 0.0.1
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
 ;; Homepage: https://github.com/bytedance/lsp-copilot
-;; Package-Requires: ((emacs "29.1"))
+;; Package-Requires: ((emacs "29.1") (s "1.13.1") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
 ;;; Commentary:
-;;
+
 ;;  Description
 ;;
 ;;; Code:
 (require 'cl-lib)
 (require 'json)
 (require 'jsonrpc)
+(require 'xref)
+(require 'compile)
+(require 'seq)
+(require 'url-util)
+(require 'project)
+
 (require 's)
 (require 'f)
 (require 'ht)
 (require 'dash)
 (require 'posframe)
-(require 'url-util)
 (require 'yasnippet)
-(require 'xref)
-(require 'seq)
-(require 'compile)
 
 (declare-function projectile-project-root "ext:projectile")
 (declare-function yas-expand-snippet "ext:yasnippet")
@@ -421,7 +423,9 @@ FORMAT and ARGS is the same as for `messsage'."
   "Return the project root of current project."
   (if lsp-copilot--cur-project-root
       lsp-copilot--cur-project-root
-    (let* ((root (projectile-project-root))
+    ;; TODO make an customizable option
+    (let* ((root (or (and (fboundp 'projectile-project-root) (projectile-project-root))
+                     (project-root (project-current))))
            (root-path (and root (directory-file-name root))))
       (setq lsp-copilot--cur-project-root root-path)
       root-path)))
