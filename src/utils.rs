@@ -196,7 +196,6 @@ pub fn find_workspace_for_file(filepath: &PathBuf) -> (PathBuf, bool) {
 pub fn find_lsp_workspace(
     file: &str,
     root_markers: &[String],
-    root_dirs: &[PathBuf],
     workspace: &Path,
     workspace_is_cwd: bool,
 ) -> Option<PathBuf> {
@@ -223,16 +222,6 @@ pub fn find_lsp_workspace(
             .any(|marker| ancestor.join(marker).exists())
         {
             top_marker = Some(ancestor);
-        }
-
-        if root_dirs
-            .iter()
-            .any(|root_dir| path::normalize(&workspace.join(root_dir)) == ancestor)
-        {
-            debug!("top_marker {:?}", top_marker);
-            // if the workspace is the cwd do not search any higher for workspaces
-            // but specify
-            return Some(top_marker.unwrap_or(workspace).to_owned());
         }
 
         if ancestor == workspace {

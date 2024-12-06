@@ -108,7 +108,6 @@ impl Registry {
         &'a mut self,
         language_config: &'a LanguageConfiguration,
         doc_path: Option<&'a std::path::PathBuf>,
-        root_dirs: &'a [PathBuf],
     ) -> impl Iterator<Item = (LanguageServerName, Result<Arc<Client>>)> + 'a {
         // NOTE 从 language_config 中查找是否有满足的 lsp server ，是否可以将所有支持的 language lsp adapter 都注册到 editor 实例上
         // 直接从 LspRegistry 中查找？
@@ -123,7 +122,6 @@ impl Registry {
                     if let Some((_, client)) = clients.iter().enumerate().find(|(_, client)| {
                         client.try_add_doc(
                             &language_config.roots,
-                            root_dirs,
                             doc_path,
                             support_workspace.to_owned(),
                         )
@@ -145,7 +143,7 @@ impl Registry {
                     }
                 }
 
-                match self.start_client(name.clone(), language_config, doc_path, root_dirs) {
+                match self.start_client(name.clone(), language_config, doc_path) {
                     Ok(client) => {
                         self.inner
                             .entry(name.to_owned())
@@ -159,15 +157,7 @@ impl Registry {
         )
     }
 
-    pub fn get_by_id(&self, id: usize) -> Option<&Client> {
-        self.inner
-            .values()
-            .flatten()
-            .find(|client| client.id() == id)
-            .map(|client| &**client)
-    }
-
-    pub fn get_by_id_v2(&self, id: usize) -> Option<Arc<Client>> {
+    pub fn get_by_id(&self, id: usize) -> Option<Arc<Client>> {
         self.inner
             .values()
             .flatten()
@@ -188,7 +178,6 @@ impl Registry {
         name: String,
         ls_config: &LanguageConfiguration,
         doc_path: Option<&std::path::PathBuf>,
-        root_dirs: &[PathBuf],
     ) -> Result<Arc<Client>> {
         // 加载 LanguageServerConfiguration
         let config = self
@@ -198,8 +187,7 @@ impl Registry {
             .ok_or_else(|| anyhow!("Language server '{name}' not defined."))?;
         let id = self.counter;
         self.counter += 1;
-        let NewClient(client, incoming) =
-            start_client(id, name, ls_config, config, doc_path, root_dirs)?;
+        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path)?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -214,21 +202,16 @@ impl Registry {
         old_client_ids: Vec<usize>,
         doc_path: Option<PathBuf>,
     ) -> Result<Vec<Arc<Client>>> {
-        let root_dirs: Vec<PathBuf> = Vec::new();
         let new_clients = language_config
             .language_servers
             .iter()
             .filter_map(|LanguageServerFeatures { name, .. }| {
                 if self.inner.contains_key(name) {
-                    let client = match self.start_client(
-                        name.clone(),
-                        language_config,
-                        doc_path.as_ref(),
-                        &root_dirs,
-                    ) {
-                        Ok(client) => client,
-                        error => return Some(error),
-                    };
+                    let client =
+                        match self.start_client(name.clone(), language_config, doc_path.as_ref()) {
+                            Ok(client) => client,
+                            error => return Some(error),
+                        };
 
                     // 这样是将所有同名的 server 都清空了
                     // let old_clients = self
@@ -249,7 +232,7 @@ impl Registry {
 
         let old_clients: Vec<Arc<Client>> = old_client_ids
             .into_iter()
-            .filter_map(|old_client_id| self.get_by_id_v2(old_client_id))
+            .filter_map(|old_client_id| self.get_by_id(old_client_id))
             .collect();
         for old_client in old_clients {
             self.file_event_handler.remove_client(old_client.id());
@@ -268,7 +251,6 @@ fn start_client(
     config: &LanguageConfiguration,
     ls_config: &LanguageServerConfiguration,
     doc_path: Option<&std::path::PathBuf>,
-    root_dirs: &[PathBuf],
 ) -> Result<NewClient> {
     let (client, incoming, initialize_notify) = Client::start(
         &ls_config.command,
@@ -277,7 +259,6 @@ fn start_client(
         ls_config.experimental.clone(),
         ls_config.environment.clone(),
         &config.roots,
-        config.workspace_lsp_roots.as_deref().unwrap_or(root_dirs),
         id,
         name.clone(),
         ls_config.timeout,
@@ -306,13 +287,11 @@ fn start_client(
             error!("failed to initialize language server: {}", e);
             return;
         }
-
         debug!("server {:?} capabilities {:?}", _client.name(), value.ok());
-
         // next up, notify<initialized>
-        _client
-            .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
-            .unwrap();
+        // _client
+        //     .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
+        //     .unwrap();
 
         initialize_notify.notify_one();
     });

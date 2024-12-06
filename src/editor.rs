@@ -1,20 +1,18 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    num::NonZeroUsize,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-
-use anyhow::Result;
-use log::error;
-use lsp_types::Url;
-
 use crate::{
     client::Client,
     document::{Document, DocumentId},
     lsp_ext,
     registry::Registry,
     syntax,
+};
+use anyhow::Result;
+use log::error;
+use lsp_types::Url;
+use std::{
+    collections::{BTreeMap, HashMap},
+    num::NonZeroUsize,
+    path::Path,
+    sync::Arc,
 };
 
 pub struct Editor {
@@ -44,8 +42,7 @@ impl Editor {
         let id = if let Some(id) = id {
             id
         } else {
-            self.new_document(uri, "".to_string())
-            // self.launch_langauge_servers(id);
+            self.new_document(uri)
         };
 
         Ok(id)
@@ -81,8 +78,8 @@ impl Editor {
             .find(|doc| doc.uri().map(|u| u == uri).unwrap_or(false))
     }
 
-    pub fn new_document(&mut self, uri: &Url, text: String) -> DocumentId {
-        let mut doc = Document::new(uri, text, Some(self.syn_loader.clone()));
+    pub fn new_document(&mut self, uri: &Url) -> DocumentId {
+        let mut doc = Document::new(uri, Some(self.syn_loader.clone()));
         let id = self.next_document_id;
         self.next_document_id =
             DocumentId(unsafe { NonZeroUsize::new_unchecked(self.next_document_id.0.get() + 1) });
@@ -91,7 +88,6 @@ impl Editor {
         id
     }
 
-    /// FIXME some different need to align
     pub fn launch_langauge_servers(
         &mut self,
         doc_id: DocumentId,
@@ -103,25 +99,25 @@ impl Editor {
         let Some(doc_url) = doc.uri() else {
             return;
         };
-        let (lang, path) = (doc.language.clone(), doc.path());
-        // TODO doc.config and workspace_lsp_roots
-        // let config = doc.config
-        let root_dirs: Vec<PathBuf> = Vec::new();
-        let language_servers = lang.as_ref().map_or_else(HashMap::default, |language| {
-            self.language_servers
-                .get(language, path.as_ref(), &root_dirs)
-                .filter_map(|(lang, client)| match client {
-                    Ok(client) => Some((lang, client)),
-                    Err(err) => {
-                        error!(
+        let (language_config, doc_path) = (doc.language_config.clone(), doc.path());
+        let language_servers =
+            language_config
+                .as_ref()
+                .map_or_else(HashMap::default, |language_config| {
+                    self.language_servers
+                        .get(language_config, doc_path.as_ref())
+                        .filter_map(|(lang, client)| match client {
+                            Ok(client) => Some((lang, client)),
+                            Err(err) => {
+                                error!(
                             "Failed to initialize the language servers for `{}` - `{}` {{ {} }}",
-                            language.language_id, lang, err,
+                            language_config.language_id, lang, err,
                         );
-                        None
-                    }
-                })
-                .collect::<HashMap<_, _>>()
-        });
+                                None
+                            }
+                        })
+                        .collect::<HashMap<_, _>>()
+                });
 
         // 如果没有合适的 language server 则直接返回
         // 如果存在？
@@ -141,7 +137,6 @@ impl Editor {
             });
 
         for (_, language_server) in doc_language_servers_not_in_registry {
-            // tokio::spawn();
             language_server
                 .text_document_did_close(lsp_types::DidCloseTextDocumentParams {
                     text_document: doc.identifier(),
@@ -173,12 +168,7 @@ impl Editor {
     }
 
     #[inline]
-    pub fn language_server_by_id(&self, language_server_id: usize) -> Option<&Client> {
+    pub fn language_server_by_id(&self, language_server_id: usize) -> Option<Arc<Client>> {
         self.language_servers.get_by_id(language_server_id)
-    }
-
-    #[inline]
-    pub fn language_server_by_id_v2(&self, language_server_id: usize) -> Option<Arc<Client>> {
-        self.language_servers.get_by_id_v2(language_server_id)
     }
 }

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
 };
 
@@ -32,9 +32,6 @@ pub struct LanguageConfiguration {
         deserialize_with = "deserialize_lang_features"
     )]
     pub language_servers: Vec<LanguageServerFeatures>,
-    /// Hardcoded LSP root directories relative to the workspace root, like `examples` or `tools/fuzz`.
-    /// Falling back to the current working directory if none are configured.
-    pub workspace_lsp_roots: Option<Vec<PathBuf>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
 use anyhow::Context;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::{collections::HashMap, sync::Arc};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
     process::{ChildStderr, ChildStdin, ChildStdout},
@@ -11,9 +11,7 @@ use tokio::{
         Mutex, Notify,
     },
 };
-
 use crate::msg::RequestId;
-
 use super::{jsonrpc, Error, Result};
 
 #[derive(Debug)]
@@ -181,8 +179,16 @@ impl Transport {
             tokio::select! {
                 biased;
                 _ = initialize_notify.notified() => {
+                    let initialized = jsonrpc::Notification {
+                        jsonrpc: None,
+                        method: lsp_types::notification::Initialized::METHOD.to_string(),
+                        params: jsonrpc::Params::None,
+                    };
+                    transport.send_payload_to_server(&mut server_stdin, Payload::Notification(initialized)).await.unwrap();
                     is_pending = false;
 
+                    // Hack: inject an initialized notification so we trigger code that needs to happen after init
+                    // callback: main_loop.rs handle_language_server_message
                     use lsp_types::notification::Notification;
                     let notification = ServerMessage::Call(jsonrpc::Call::Notification(jsonrpc::Notification {
                         jsonrpc: None,
@@ -208,18 +214,16 @@ impl Transport {
                     }
                 }
                 msg = client_rx.recv() => {
-                    // let language_server_name = &transport.name;
                     if let Some(msg) = msg {
                         if is_pending && is_shutdown(&msg) {
                             break;
                         } else if is_pending && !is_initialize(&msg) {
                             // ignore notifications
-                            if let Payload::Notification(_) = msg {
-                                continue;
-                            }
+                            // if let Payload::Notification(_) = msg {
+                            //     continue;
+                            // }
                             pending_messages.push(msg);
                         } else {
-                            // debug!("{} recv the msg send to server {:?}", language_server_name, msg);
                             match transport.send_payload_to_server(&mut server_stdin, msg).await {
                                 Ok(_) => {},
                                 Err(err) => {
@@ -292,15 +296,8 @@ impl Transport {
         reader.read_exact(&mut content).await?;
         let msg = std::str::from_utf8(&content).context("invalid utf8 from server")?;
 
-        // let json_parse_start = Instant::now();
-        // debug!("[{:?}] {_language_server_name} <- {msg}", json_parse_start);
         debug!("{_language_server_name} <- {msg}");
         let output: serde_json::Result<ServerMessage> = serde_json::from_str(msg);
-        // info!(
-        //     "[{:?}] json parse cost {:0.2?}",
-        //     json_parse_start,
-        //     json_parse_start.elapsed()
-        // );
 
         Ok(output?)
     }

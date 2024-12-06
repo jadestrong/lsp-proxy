@@ -82,7 +82,6 @@ impl Client {
     pub fn try_add_doc(
         self: &Arc<Self>,
         root_markers: &[String],
-        manual_roots: &[PathBuf],
         doc_path: Option<&std::path::PathBuf>,
         may_support_workspace: bool,
     ) -> bool {
@@ -90,13 +89,11 @@ impl Client {
         let (workspace, workspace_is_cwd) = find_workspace_for_file(doc_path.unwrap());
         let workspace = path::normalize(&workspace);
         // FIXME 当非 git 项目时得到的 workspace 地址是错误的
-        // 根据 root_markers 和 manual_roots 等规则（如果有的话）找到所属 lsp workspace ，兜底是上面的项目目录
         let root = find_lsp_workspace(
             doc_path
                 .and_then(|x| x.parent().and_then(|x| x.to_str()))
                 .unwrap_or("."),
             root_markers,
-            manual_roots,
             &workspace,
             workspace_is_cwd,
         );
@@ -192,7 +189,6 @@ impl Client {
         experimental: Option<Value>,
         server_envirment: HashMap<String, String>,
         root_markers: &[String],
-        manual_roots: &[PathBuf],
         id: usize,
         name: String,
         req_timeout: u64,
@@ -224,13 +220,11 @@ impl Client {
         // 找出 git 目录，如果不存在，则使用当前目录
         let (workspace, workspace_is_cwd) = find_workspace_for_file(doc_path.unwrap());
         let workspace = path::normalize(&workspace);
-        // TODO check if some config in workspace?
         let root = find_lsp_workspace(
             doc_path
                 .and_then(|x| x.parent().and_then(|x| x.to_str()))
                 .unwrap_or("."),
             root_markers,
-            manual_roots,
             &workspace,
             workspace_is_cwd,
         );

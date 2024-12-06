@@ -96,7 +96,6 @@ impl Application {
             Call::MethodCall(jsonrpc::MethodCall {
                 method, params, id, ..
             }) => {
-                // debug!("recivied method call from server {} {:?}", method, params);
                 let reply = match MethodCall::parse(&method, params) {
                     Err(lsp::Error::Unhandled) => {
                         error!(
@@ -175,9 +174,6 @@ impl Application {
                                                 "uri": workspace_folder.0,
                                                 "name": workspace_folder.1,
                                             });
-                                            // if let Value::Object(m) = config {
-                                            //     m.insert("workspaceFolder".to_string(), v);
-                                            // }
                                             let config = match config {
                                                 Value::Object(m) => {
                                                     let mut m = m.clone();
@@ -306,48 +302,9 @@ impl Application {
                         // This might not be required by the spec but Neovim does this as well, so it's
                         // probably a good idea for compatibility.
                         if let Some(config) = language_server.config() {
-                            // tokio::spawn();
                             language_server
                                 .did_change_configuration(config.clone())
                                 .unwrap();
-                        }
-
-                        // 新 launch 一个 server ，则找出当前以前打开的文件中所有适合该 server 的 doc ，依次打开
-                        let docs: Vec<&Document> = self
-                            .editor
-                            .documents()
-                            .filter(|doc| doc.supports_language_server(server_id))
-                            .collect();
-
-                        for doc in &docs {
-                            let url = match doc.uri.clone() {
-                                Some(url) => url,
-                                None => continue, // skip documents with no path
-                            };
-
-                            let language_id =
-                                doc.language_id().map(ToOwned::to_owned).unwrap_or_default();
-
-                            // tokio::spawn();
-                            language_server
-                                .text_document_did_open(
-                                    url.clone(),
-                                    doc.version(),
-                                    doc.text.clone(), // TODO How to fix doc.text not exist?
-                                    language_id,
-                                )
-                                .unwrap();
-
-                            // 告知 emacs 端，记录所有 server 支持的 triggerCharacters
-                            self.send_notification::<lsp_ext::DidRecordTriggerCharacters>(
-                                lsp_ext::DidRecordTriggerCharactersParams {
-                                    uri: url.to_string(),
-                                    trigger_characters: doc.get_trigger_characters(),
-                                    signature_trigger_characters: doc
-                                        .get_signature_trigger_characters(),
-                                    support_inlay_hints: doc.is_has_inlay_hints_support(),
-                                },
-                            );
                         }
                     }
                     NotificationFromServer::Exit => {
@@ -466,7 +423,7 @@ impl Application {
             }
             Message::Request(req) => match self.get_working_document(&req) {
                 Ok(doc) => {
-                    Self::on_request_v3(req, self.sender.clone(), doc.get_all_language_servers());
+                    Self::on_request(req, self.sender.clone(), doc.get_all_language_servers());
                 }
                 Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
             },
@@ -476,7 +433,7 @@ impl Application {
         Ok(())
     }
 
-    fn on_request_v3(
+    fn on_request(
         req: msg::Request,
         response_sender: Sender<Message>,
         language_servers: Vec<Arc<Client>>,

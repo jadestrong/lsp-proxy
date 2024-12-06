@@ -1,9 +1,7 @@
 use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
-
 use lsp::Diagnostic;
 use lsp_types::{self as lsp, Url};
 use serde::{Deserialize, Serialize};
-
 use crate::{
     client::Client,
     registry::LanguageServerName,
@@ -37,28 +35,26 @@ pub struct DiagnosticItem {
 pub struct Document {
     pub(crate) id: DocumentId,
     pub uri: Option<Url>,
-    pub text: String,
     /// Corresponding language scope name. Usually `source.<lang>`.
-    pub language: Option<Arc<LanguageConfiguration>>,
+    pub language_config: Option<Arc<LanguageConfiguration>>,
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
     pub(crate) diagnostics: Option<Vec<DiagnosticItem>>,
     pub version: i32,
 }
 
 impl Document {
-    pub fn new(uri: &Url, text: String, config_loader: Option<Arc<syntax::Loader>>) -> Self {
+    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>) -> Self {
         let mut doc = Document {
             id: DocumentId::default(),
             uri: Some(uri.clone()),
-            language: None,
+            language_config: None,
             language_servers: HashMap::new(),
             version: 0,
-            text,
             diagnostics: None,
         };
 
         if let Some(loader) = config_loader {
-            doc.detect_language(loader);
+            doc.set_language_config(loader);
         }
 
         doc
@@ -67,10 +63,6 @@ impl Document {
     pub fn id(&self) -> DocumentId {
         self.id
     }
-
-    // pub fn set_uri(&mut self, uri: Option<Url>) {
-    //     self.uri = uri;
-    // }
 
     #[inline]
     /// File url
@@ -93,9 +85,6 @@ impl Document {
             {
                 let mut triggers = triggers.clone();
                 trigger_characters.append(&mut triggers);
-                // if language_server.name() == "tailwindcss-ls" {
-                //     trigger_characters.push("-".to_string());
-                // }
             }
         });
 
@@ -121,35 +110,14 @@ impl Document {
             .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
     }
 
-    pub fn detect_language(&mut self, config_loader: Arc<syntax::Loader>) {
-        self.set_language(
-            self.detect_language_config(&config_loader),
-            Some(config_loader),
-        )
-    }
-
-    pub fn set_language(
-        &mut self,
-        language_config: Option<Arc<syntax::LanguageConfiguration>>,
-        loader: Option<Arc<syntax::Loader>>,
-    ) {
-        if let (Some(language_config), Some(_)) = (language_config, loader) {
-            self.language = Some(language_config);
-        } else {
-            self.language = None;
-        }
-    }
-
-    pub fn detect_language_config(
-        &self,
-        config_loader: &syntax::Loader,
-    ) -> Option<Arc<syntax::LanguageConfiguration>> {
-        config_loader.language_config_for_file_name(self.path()?.as_ref())
+    fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
+        let language_config = config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
+        self.language_config = language_config;
     }
 
     /// Language name for the document. Corresponds to the `name` key in `language.toml` configuration
     pub fn language_name(&self) -> Option<&str> {
-        self.language
+        self.language_config
             .as_ref()
             .map(|language| language.language_id.as_str())
     }
@@ -164,7 +132,7 @@ impl Document {
     }
 
     pub fn language_config(&self) -> Option<&LanguageConfiguration> {
-        self.language.as_deref()
+        self.language_config.as_deref()
     }
 
     /// Current document version, incremented at each change.
@@ -190,52 +158,6 @@ impl Document {
     #[inline]
     pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
         lsp::TextDocumentIdentifier::new(self.uri().cloned().unwrap())
-    }
-
-    pub fn supports_language_server(&self, id: usize) -> bool {
-        self.language_servers().any(|l| l.id() == id)
-    }
-
-    pub fn language_servers_with_feature(
-        &self,
-        feature: LanguageServerFeature,
-    ) -> impl Iterator<Item = &Client> {
-        self.language_config().into_iter().flat_map(move |config| {
-            config.language_servers.iter().filter_map(move |features| {
-                let ls = &**self.language_servers.get(&features.name)?;
-                if ls.is_initialized()
-                    && (ls.supports_feature(feature) || ls.supports_registered_feature(feature))
-                    && features.has_features(feature)
-                {
-                    Some(ls)
-                } else {
-                    None
-                }
-            })
-        })
-    }
-
-    pub fn language_servers_with_feature_v2(
-        &self,
-        feature: LanguageServerFeature,
-    ) -> Vec<Arc<Client>> {
-        self.language_config()
-            .into_iter()
-            .flat_map(move |config| {
-                // 这里拿到 language.toml 所有配置的服务的 features ，然后根据 features.name 找到所属
-                config.language_servers.iter().filter_map(move |features| {
-                    let ls = self.language_servers.get(&features.name).cloned()?;
-                    if ls.is_initialized()
-                        && (ls.supports_feature(feature) || ls.supports_registered_feature(feature))
-                        && features.has_features(feature)
-                    {
-                        Some(ls)
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect()
     }
 
     pub fn get_all_language_servers(&self) -> Vec<Arc<Client>> {
