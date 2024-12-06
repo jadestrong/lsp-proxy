@@ -180,7 +180,7 @@ impl Transport {
                 biased;
                 _ = initialize_notify.notified() => {
                     let initialized = jsonrpc::Notification {
-                        jsonrpc: None,
+                        jsonrpc: Some(jsonrpc::Version::V2),
                         method: lsp_types::notification::Initialized::METHOD.to_string(),
                         params: jsonrpc::Params::None,
                     };
@@ -311,7 +311,7 @@ impl Transport {
         if err.read_line(buffer).await? == 0 {
             return Err(Error::StreamClosed);
         };
-        error!(" recv server error: {language_server_name} err <- {buffer:?}");
+        error!("{language_server_name} err <- {buffer:?}");
         Ok(())
     }
 

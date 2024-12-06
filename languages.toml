@@ -5,6 +5,7 @@ bash-language-server = { command = "bash-language-server", args = ["start"] }
 vscode-json-language-server = { command = "vscode-json-language-server", args = ["--stdio"], config = { provideFormatter = true, json = { validate = { enable = true } } } }
 jdtls = { command = "jdtls" }
 dart = { command = "dart", args = ["language-server", "--client-id=emacs.lsp-copilot"] }
+clangd = { command = "clangd" }
 
 [language-server.css-ls]
 command = "vscode-css-language-server"
@@ -295,3 +296,13 @@ name = "dart"
 file-types = ["dart"]
 roots = ["pubspec.yaml"]
 language-servers = [ { name = "dart", library-directories = ["~/.pub-cache"]} ]
+
+[[language]]
+name = "c"
+file-types = ["c"]
+language-servers = [ "clangd" ]
+
+[[language]]
+name = "cpp"
+file-types = ["cc", "hh", "c++", "cpp", "hpp", "h", "ipp", "tpp", "cxx", "hxx", "ixx", "txx", "ino", "C", "H", "cu", "cuh", "cppm", "h++", "ii", "inl", { glob = ".hpp.in" }, { glob = ".h.in" }]
+language-servers = [ "clangd" ]

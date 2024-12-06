@@ -1,9 +1,7 @@
 use core::fmt;
 use std::io::{self, BufRead, Write};
-
 use log::{debug, warn};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-
 use crate::{bytecode, error::ExtractError};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -200,15 +198,8 @@ impl Message {
             msg: self,
         })?;
 
-        // debug!("> {}", text);
-
         match bytecode::generate_bytecode_repl(&json_val, bytecode::BytecodeOptions::default()) {
             Ok(bytecode_str) => {
-                // debug!(
-                //     "server->client: json {} byteds, converted to bytecode, {} bytes",
-                //     text.len(),
-                //     bytecode_str.len()
-                // );
                 write_msg_text(w, &bytecode_str)
             }
             Err(err) => {
