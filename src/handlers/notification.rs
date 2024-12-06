@@ -50,7 +50,7 @@ pub(crate) fn handle_did_open_text_document(
                         message: if configed_servers.is_empty() {
                             format!("No language server config found for this file, please check your custom config by M-x lsp-copilot-open-config-file.")
                         } else {
-                            format!("Detect {:?} configuration.", configed_servers)
+                            format!("Connected to {:?}.", configed_servers)
                         }
                     },
                 )
