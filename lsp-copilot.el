@@ -153,7 +153,11 @@ the buffer when it becomes large."
   :type
   '(choice
     (const :tag "Pick flycheck if present and fallback to flymake" :auto)
-    (const :tag "Pick flycheck" :flycheck))
+    (const :tag "Pick flycheck" :flycheck)
+    (const :tag "Pick flymake" :flymake)
+    (const :tag "Use neither flymake nor lsp" :none)
+    (const :tag "Prefer flymake" t)
+    (const :tag "Prefer flycheck" nil))
   :group 'lsp-copilot)
 
 (defvar lsp-copilot--exec-file (expand-file-name (if (eq system-type 'windows-nt)
@@ -194,6 +198,10 @@ from language server.")
 
 (defvar-local lsp-copilot-diagnostics--flycheck-enabled nil
   "True when lsp-copilot diagnostics flycheck integration
+ has been enabled in this buffer.")
+
+(defvar-local lsp-copilot-diagnostics--flymake-enabled nil
+  "True when lsp-copilot diagnostics flymake integration
  has been enabled in this buffer.")
 
 (defvar-local lsp-copilot-diagnostics--flycheck-checker nil
@@ -1105,10 +1113,11 @@ Only works when mode is `tick or `alive."
               (if (seq-empty-p diagnostics)
                   (remhash filepath workspace-diagnostics)
                 (puthash filepath (append diagnostics nil) workspace-diagnostics)))
-            ;; (message "%s publish %s" (format-time-string "%H:%M:%S.%6N") uri)
-            ;; (setq-local lsp-copilot--record-diagnostics diagnostics)
-            (add-hook 'lsp-copilot-on-idle-hook #'lsp-copilot-diagnostics--flycheck-buffer nil t)
-            (lsp-copilot--idle-reschedule (current-buffer)))))))
+            (cond (lsp-copilot-diagnostics--flycheck-enabled
+                   (add-hook 'lsp-copilot-on-idle-hook #'lsp-copilot-diagnostics--flycheck-buffer nil t)
+                   (lsp-copilot--idle-reschedule (current-buffer)))
+                  (lsp-copilot-diagnostics--flymake-enabled
+                   (lsp-copilot-diagnostics--flymake-after-diagnostics))))))))
   (when  (eql method 'window/logMessage)
     (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
       (lsp-copilot-log (lsp-copilot--propertize message type))))
@@ -1852,6 +1861,85 @@ CALLBACK is the status callback passed by Flycheck."
   (when lsp-copilot-diagnostics--flycheck-enabled
     (setq-local lsp-copilot-diagnostics--flycheck-enabled nil)))
 
+;; Flycheck integration
+(declare-function flymake-mode "ext:flymake")
+(declare-function flymake-make-diagnostic "ext:flymake")
+(declare-function flymake-diag-region "ext:flymake")
+
+(defvar flymake-diagnostic-functions)
+(defvar flymake-mode)
+(defvar-local lsp-copilot-diagnostics--flymake-report-fn nil)
+
+(defun lsp-copilot-diagnostics-flymake-enable ()
+  "Setup flymake."
+  (setq lsp-copilot-diagnostics--flymake-report-fn nil)
+  (unless lsp-copilot-diagnostics--flymake-enabled
+    (setq-local lsp-copilot-diagnostics--flymake-enabled t)
+    (add-hook 'flymake-diagnostic-functions 'lsp-copilot-diagnostics--flymake-backend nil t))
+  (flymake-mode 1))
+
+(defun lsp-copilot-diagnostics-flymake-disable ()
+  "Disable flymake integartion for the current buffer."
+  (when lsp-copilot-diagnostics--flymake-enabled
+    (setq-local lsp-copilot-diagnostics--flymake-enabled nil)))
+
+(defun lsp-copilot-diagnostics--flymake-after-diagnostics ()
+  "Handler for diagnostics update."
+  (cond
+   ((and lsp-copilot-diagnostics--flymake-report-fn flymake-mode)
+    (lsp-copilot-diagnostics--flymake-update-diagnostics))
+   ((not flymake-mode)
+    (setq lsp-copilot-diagnostics--flymake-report-fn nil))))
+
+(defun lsp-copilot-diagnostics--flymake-backend (report-fn &rest _args)
+  "Flymake backend using REPORT-FN."
+  (let ((first-run (null lsp-copilot-diagnostics--flymake-report-fn)))
+    (setq lsp-copilot-diagnostics--flymake-report-fn report-fn)
+    (when first-run
+      (lsp-copilot-diagnostics--flymake-update-diagnostics))))
+
+(defun lsp-copilot-diagnostics--flymake-update-diagnostics ()
+  "Report new diagnostics to flymake."
+  (let* ((workspace-diagnostics (lsp-copilot--get-or-create-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map))
+         (buffer-diagnostics (gethash (buffer-file-name) workspace-diagnostics '()))
+         (diags (mapcar
+                 (lambda (diagnostic)
+                   (let* ((message (plist-get diagnostic :message))
+                          (severity (plist-get diagnostic :severity))
+                          (range (plist-get diagnostic :range))
+                          (start (plist-get range :start))
+                          (end (plist-get range :end))
+                          (start-line (plist-get start :line))
+                          (character (plist-get start :character))
+                          (end-line (plist-get end :line))
+                          (start-point (lsp-copilot--position-point start))
+                          (end-point (lsp-copilot--position-point end)))
+                     (when (= start-point end-point)
+                       (if-let ((region (flymake-diag-region (current-buffer)
+                                                             (1+ start-line)
+                                                             character)))
+                           (setq start-point (car region)
+                                 end-point (cdr region))
+                         (lsp-copilot--save-restriction-and-excursion
+                           (goto-char (point-min))
+                           (setq start-point (line-beginning-position (1+ start-line))
+                                 end-point (line-end-position (1+ end-line))))))
+                     (flymake-make-diagnostic (current-buffer)
+                                              start-point
+                                              end-point
+                                              (cl-case severity
+                                                (1 :error)
+                                                (2 :warning)
+                                                (t :note))
+                                              message)))
+                 buffer-diagnostics)))
+    (funcall lsp-copilot-diagnostics--flymake-report-fn
+             diags
+             ;; This :region keyword forces flymake to delete old diagnostics in
+             ;; case the buffer hasn't changed since the last call to the report
+             ;; function. See https://github.com/joaotavora/eglot/issues/159
+             :region (cons (point-min) (point-max)))))
+
 ;; project diagnostics
 (defvar lsp-copilot-diagnostics-buffer-mode-map
   (let ((map (make-sparse-keymap)))
@@ -2392,6 +2480,13 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
                      (user-error "The lsp-copilot-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
            (require 'flycheck nil t))
       (lsp-copilot-diagnostics-flycheck-enable))
+     ((or (eq lsp-copilot-diagnostics-provider :auto)
+          (eq lsp-copilot-diagnostics-provider :flymake)
+          (eq lsp-copilot-diagnostics-provider t))
+      (require 'flymake)
+      (lsp-copilot-diagnostics-flymake-enable))
+     ((not (eq lsp-copilot-diagnostics-provider :none))
+      (lsp-copilot--warn "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
      (t (lsp-copilot--warn "Unable to configuration flycheck. The diagnostics won't be rendered.")))
     (let ((buffer (current-buffer)))
       (run-with-idle-timer 0 nil (lambda ()
@@ -2413,6 +2508,7 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
   (setq-local completion-styles-alist
               (cl-remove 'lsp-copilot-passthrough completion-styles-alist :key #'cl-first))
   (lsp-copilot-diagnostics-flycheck-disable)
+  (lsp-copilot-diagnostics-flymake-disable)
   ;; Send the close event for the active buffer since activating the mode will open it again.
   (lsp-copilot--on-doc-close))
 

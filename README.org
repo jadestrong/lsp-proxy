@@ -6,7 +6,7 @@ Lsp-Copilot is an LSP (Language Server Protocol) client for Emacs, implemented i
 The features it supports are:
 - find definitions/references/implementatoins/type-definition/declaration (as a xref backend)
 - completion (as a capf function) support snippet and auto import, reuse requests that are already being processed, while caching the results to improve response speed, before returning all the completion candidates, the server will do fuzzy matching and filter out entries with no match.
-- diagnostics (as a flycheck backend) process diagnostics when idle.
+- diagnostics (as a flycheck backend default or flymake) process diagnostics when idle.
 - hover (triggered by ~lsp-copilot-describe-thing-at-point~)
 - code action (triggered by ~lsp-copilot-execute-code-action~)
 - rename (triggered by ~lsp-copilot-rename~)
@@ -209,9 +209,11 @@ Install [[https://github.com/shuxiao9058/tabnine][tabnine]] package first, then 
                          #'tabnine-completion-at-point) nil t))))
 #+end_src
 
-** flycheck or flymake
-Currently, only Flycheck is supported. You can refer to the configuration in [[https://github.com/emacs-lsp/lsp-mode/blob/master/lsp-diagnostics.el][lsp-mode]] to add support for others.
-
+** flycheck / flymake
+Flycheck enabled default if flycheck-mode is installed. You can also select *flymake* by:
+#+begin_src elisp
+(setq lsp-copilot-diagnostics-provider :flymake)
+#+end_src
 * Acknowledgements
 Thanks to [[https://github.com/helix-editor/helix][Helix]], the architecture of Lsp-Copilot Server is entirely based on Helix's implementation. Language configuration and communication with different language servers are all dependent on Helix. As a Rust beginner, I've gained a lot from this approach during the implementation.
 
