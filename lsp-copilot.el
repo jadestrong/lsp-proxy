@@ -1120,7 +1120,7 @@ Only works when mode is `tick or `alive."
                    (lsp-copilot-diagnostics--flymake-after-diagnostics))))))))
   (when  (eql method 'window/logMessage)
     (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
-      (lsp-copilot-log (lsp-copilot--propertize message type))))
+      (lsp-copilot-log "%s" (lsp-copilot--propertize message type))))
   (when  (eql method 'window/showMessage)
     (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
       (lsp-copilot--info (lsp-copilot--propertize message type))))
