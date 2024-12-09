@@ -156,7 +156,7 @@ pub(crate) fn handle_cancel(
     if let Some(doc) = doc {
         doc.language_servers().for_each(|ls| {
             ls.cancel(lsp_types::CancelParams {
-                id: lsp_types::NumberOrString::Number(params.id.clone().into()),
+                id: params.id.clone().into(),
             })
             .unwrap()
         })

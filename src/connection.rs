@@ -2,10 +2,7 @@ use std::{
     io::{self, stdin, stdout},
     thread,
 };
-
 use crossbeam_channel::{bounded, Receiver, Sender};
-// use log::debug;
-
 use crate::msg::Message;
 
 pub struct Connection {
@@ -34,8 +31,6 @@ impl Connection {
             let mut stdin = stdin.lock();
             while let Some(msg) = Message::read(&mut stdin)? {
                 let is_exit = matches!(&msg, Message::Notification(n) if n.is_exit());
-                // debug!("sending message {:#?}", msg);
-                // 从 stdin 读取到输入，通过 sender 发送给处理程序
                 reader_sender
                     .send(msg)
                     .expect("receiver was dropped, failed to send a message.");
@@ -47,7 +42,6 @@ impl Connection {
             Ok(())
         });
         let threads = IoThreads { reader, writer };
-        // let (sender, receiver, io_threads) = stdio::stdio_transport();
         (
             Connection {
                 sender: writer_sender,
