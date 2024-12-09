@@ -185,15 +185,14 @@ impl Message {
             msg: self.clone(),
         })?;
 
-        let text = serde_json::to_string(&JsonRpc {
-            jsonrpc: "2.0",
-            msg: self,
-        })?;
-
         match bytecode::generate_bytecode_repl(&json_val, bytecode::BytecodeOptions::default()) {
             Ok(bytecode_str) => write_msg_text(w, &bytecode_str),
             Err(err) => {
                 warn!("Failed to convert json to bytecode: {}", err);
+                let text = serde_json::to_string(&JsonRpc {
+                    jsonrpc: "2.0",
+                    msg: self,
+                })?;
                 write_msg_text(w, &text)
             }
         }

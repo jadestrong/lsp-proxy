@@ -213,7 +213,7 @@ pub enum Call {
 }
 
 fn default_id() -> RequestId {
-    RequestId::from("-1".to_string())
+    RequestId::from("null".to_string())
 }
 
 fn default_params() -> Params {
@@ -230,14 +230,6 @@ impl From<Notification> for Call {
     fn from(value: Notification) -> Self {
         Call::Notification(value)
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[serde(untagged)]
-pub enum Request {
-    Single(Call),
-    Batch(Vec<Call>),
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -269,24 +261,5 @@ impl From<Output> for Result<Value, Error> {
             Output::Success(success) => Ok(success.result),
             Output::Failure(failure) => Err(failure.error),
         }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Response {
-    Single(Output),
-    Batch(Vec<Output>),
-}
-
-impl From<Success> for Response {
-    fn from(value: Success) -> Self {
-        Response::Single(Output::Success(value))
-    }
-}
-
-impl From<Failure> for Response {
-    fn from(value: Failure) -> Self {
-        Response::Single(Output::Failure(value))
     }
 }
