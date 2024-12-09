@@ -1,8 +1,8 @@
+use crate::{bytecode, error::ExtractError, lsp::jsonrpc};
 use core::fmt;
-use std::io::{self, BufRead, Write};
 use log::{debug, warn};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use crate::{bytecode, error::ExtractError};
+use std::io::{self, BufRead, Write};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
@@ -147,15 +147,7 @@ pub struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ResponseError>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResponseError {
-    pub code: i32,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
+    pub error: Option<jsonrpc::Error>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -199,9 +191,7 @@ impl Message {
         })?;
 
         match bytecode::generate_bytecode_repl(&json_val, bytecode::BytecodeOptions::default()) {
-            Ok(bytecode_str) => {
-                write_msg_text(w, &bytecode_str)
-            }
+            Ok(bytecode_str) => write_msg_text(w, &bytecode_str),
             Err(err) => {
                 warn!("Failed to convert json to bytecode: {}", err);
                 write_msg_text(w, &text)
@@ -218,8 +208,8 @@ impl Response {
             error: None,
         }
     }
-    pub fn new_err(id: RequestId, code: i32, message: String) -> Response {
-        let error = ResponseError {
+    pub fn new_err(id: RequestId, code: jsonrpc::ErrorCode, message: String) -> Response {
+        let error = jsonrpc::Error {
             code,
             message,
             data: None,
@@ -364,51 +354,51 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug)]
-#[non_exhaustive]
-#[allow(dead_code)]
-pub enum ErrorCode {
-    // Defined by JSON RPC:
-    ParseError = -32700,
-    InvalidRequest = -32600,
-    MethodNotFound = -32601,
-    InvalidParams = -32602,
-    InternalError = -32603,
-    ServerErrorStart = -32099,
-    ServerErrorEnd = -32000,
+// #[derive(Clone, Copy, Debug)]
+// #[non_exhaustive]
+// #[allow(dead_code)]
+// pub enum ErrorCode {
+//     // Defined by JSON RPC:
+//     ParseError = -32700,
+//     InvalidRequest = -32600,
+//     MethodNotFound = -32601,
+//     InvalidParams = -32602,
+//     InternalError = -32603,
+//     ServerErrorStart = -32099,
+//     ServerErrorEnd = -32000,
 
-    /// Error code indicating that a server received a notification or
-    /// request before the server has received the `initialize` request.
-    ServerNotInitialized = -32002,
-    UnknownErrorCode = -32001,
+//     /// Error code indicating that a server received a notification or
+//     /// request before the server has received the `initialize` request.
+//     ServerNotInitialized = -32002,
+//     UnknownErrorCode = -32001,
 
-    // Defined by the protocol:
-    /// The client has canceled a request and a server has detected
-    /// the cancel.
-    RequestCanceled = -32800,
+//     // Defined by the protocol:
+//     /// The client has canceled a request and a server has detected
+//     /// the cancel.
+//     RequestCanceled = -32800,
 
-    /// The server detected that the content of a document got
-    /// modified outside normal conditions. A server should
-    /// NOT send this error code if it detects a content change
-    /// in it unprocessed messages. The result even computed
-    /// on an older state might still be useful for the client.
-    ///
-    /// If a client decides that a result is not of any use anymore
-    /// the client should cancel the request.
-    ContentModified = -32801,
+//     /// The server detected that the content of a document got
+//     /// modified outside normal conditions. A server should
+//     /// NOT send this error code if it detects a content change
+//     /// in it unprocessed messages. The result even computed
+//     /// on an older state might still be useful for the client.
+//     ///
+//     /// If a client decides that a result is not of any use anymore
+//     /// the client should cancel the request.
+//     ContentModified = -32801,
 
-    /// The server cancelled the request. This error code should
-    /// only be used for requests that explicitly support being
-    /// server cancellable.
-    ///
-    /// @since 3.17.0
-    ServerCancelled = -32802,
+//     /// The server cancelled the request. This error code should
+//     /// only be used for requests that explicitly support being
+//     /// server cancellable.
+//     ///
+//     /// @since 3.17.0
+//     ServerCancelled = -32802,
 
-    /// A request failed but it was syntactically correct, e.g the
-    /// method name was known and the parameters were valid. The error
-    /// message should contain human readable information about why
-    /// the request failed.
-    ///
-    /// @since 3.17.0
-    RequestFailed = -32803,
-}
+//     /// A request failed but it was syntactically correct, e.g the
+//     /// method name was known and the parameters were valid. The error
+//     /// message should contain human readable information about why
+//     /// the request failed.
+//     ///
+//     /// @since 3.17.0
+//     RequestFailed = -32803,
+// }

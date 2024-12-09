@@ -24,6 +24,7 @@ pub enum ErrorCode {
     MethodNotFound,
     InvalidParams,
     InternalError,
+    RequestCanceled,
     ServerError(i64),
 }
 
@@ -35,6 +36,7 @@ impl ErrorCode {
             ErrorCode::MethodNotFound => -32601,
             ErrorCode::InvalidParams => -32602,
             ErrorCode::InternalError => -32603,
+            ErrorCode::RequestCanceled => -32800,
             ErrorCode::ServerError(code) => code,
         }
     }
@@ -48,6 +50,7 @@ impl From<i64> for ErrorCode {
             -32601 => ErrorCode::MethodNotFound,
             -32602 => ErrorCode::InvalidParams,
             -32603 => ErrorCode::InternalError,
+            -32800 => ErrorCode::RequestCanceled,
             code => ErrorCode::ServerError(code),
         }
     }
@@ -100,24 +103,6 @@ impl std::fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
-
-#[derive(Debug, PartialEq, Eq, Clone, Hash, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum Id {
-    Null,
-    Num(u64),
-    Str(String),
-}
-
-impl std::fmt::Display for Id {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Id::Null => f.write_str("null"),
-            Id::Num(num) => write!(f, "{}", num),
-            Id::Str(string) => f.write_str(string),
-        }
-    }
-}
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
 pub enum Version {
@@ -223,12 +208,12 @@ pub enum Call {
     Notification(Notification),
     Invalid {
         #[serde(default = "default_id")]
-        id: Id,
+        id: RequestId,
     },
 }
 
-fn default_id() -> Id {
-    Id::Null
+fn default_id() -> RequestId {
+    RequestId::from("-1".to_string())
 }
 
 fn default_params() -> Params {

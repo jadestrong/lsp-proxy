@@ -7,7 +7,6 @@ use std::{
         Arc,
     },
 };
-
 use futures_util::Future;
 use log::debug;
 use lsp::{
@@ -293,9 +292,10 @@ impl Client {
         self.workspace_folders.lock()
     }
 
-    fn next_request_id(&self) -> jsonrpc::Id {
+    fn next_request_id(&self) -> RequestId {
         let id = self.request_counter.fetch_add(1, Ordering::Relaxed);
-        jsonrpc::Id::Num(id)
+        // avoid duplicate with emacs request
+        RequestId::from(format!("req{:?}", id))
     }
 
     fn value_into_params(value: Value) -> jsonrpc::Params {
@@ -434,12 +434,7 @@ impl Client {
         R::Result: core::fmt::Debug, // TODO temporary
     {
         // a future that resolves into the response
-        let json = self
-            .call::<R>(
-                RequestId::from(format!("req{:?}", self.next_request_id())),
-                params,
-            )
-            .await?;
+        let json = self.call::<R>(self.next_request_id(), params).await?;
         let response = serde_json::from_value(json)?;
         Ok(response)
     }

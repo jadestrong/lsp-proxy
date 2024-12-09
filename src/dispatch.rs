@@ -10,7 +10,8 @@ use crate::{
     client::Client,
     error::ExtractError,
     handlers::request::create_error_response,
-    msg::{ErrorCode, Message, Notification, Request, Response},
+    lsp::jsonrpc,
+    msg::{Message, Notification, Request, Response},
     utils::from_json,
 };
 
@@ -64,7 +65,7 @@ impl RequestDispatcher {
             Ok(params) => Some((req, params)),
             Err(err) => {
                 let response =
-                    Response::new_err(req.id, ErrorCode::InvalidParams as i32, err.to_string());
+                    Response::new_err(req.id, jsonrpc::ErrorCode::InvalidParams, err.to_string());
                 self.sender.send(response.into()).unwrap();
                 None
             }
@@ -76,7 +77,7 @@ impl RequestDispatcher {
             error!("unknown request: {:?}", req);
             let response = Response::new_err(
                 req.id,
-                ErrorCode::MethodNotFound as i32,
+                jsonrpc::ErrorCode::MethodNotFound,
                 "unknown request".to_string(),
             );
             self.sender.send(response.into()).unwrap();

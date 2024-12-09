@@ -1,5 +1,4 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
-
 use anyhow::anyhow;
 use futures_util::stream::SelectAll;
 use log::{debug, error};
@@ -8,13 +7,13 @@ use lsp_types as lsp;
 use thiserror::Error;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-
 use crate::{
     client::Client,
     lsp::{
         file_event,
         jsonrpc::{self, Call},
     },
+    msg::RequestId,
     syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
     utils::path,
 };
@@ -32,7 +31,7 @@ pub enum Error {
     #[error("IO Error: {0}")]
     IO(#[from] std::io::Error),
     #[error("request {0} timed out")]
-    Timeout(jsonrpc::Id),
+    Timeout(RequestId),
     #[error("server closed the stream")]
     StreamClosed,
     #[error("Unhandled")]

@@ -1,7 +1,6 @@
 use crate::{
     client::Client,
     document::{Document, DocumentId},
-    lsp_ext,
     registry::Registry,
     syntax,
 };
@@ -88,15 +87,8 @@ impl Editor {
         id
     }
 
-    pub fn launch_langauge_servers(
-        &mut self,
-        doc_id: DocumentId,
-        params: lsp_ext::CustomizeDidOpenTextDocumentParams,
-    ) {
+    pub fn launch_langauge_servers(&mut self, doc_id: DocumentId) {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
-            return;
-        };
-        let Some(doc_url) = doc.uri() else {
             return;
         };
         let (language_config, doc_path) = (doc.language_config.clone(), doc.path());
@@ -119,18 +111,13 @@ impl Editor {
                         .collect::<HashMap<_, _>>()
                 });
 
-        // 如果没有合适的 language server 则直接返回
-        // 如果存在？
-        if language_servers.is_empty() {
+        if language_servers.is_empty() && doc.language_servers.is_empty() {
             return;
         }
-
-        let language_id = doc.language_id().map(ToOwned::to_owned).unwrap_or_default();
 
         // only spawn new language servers if the servers aren't the same
         let doc_language_servers_not_in_registry =
             doc.language_servers.iter().filter(|(name, doc_ls)| {
-                // 最新的属于该文档的 server ，如果 doc 记录的 servers 中存在多出来的，则需要关闭
                 language_servers
                     .get(*name)
                     .map_or(true, |ls| ls.id() != doc_ls.id())
@@ -141,26 +128,6 @@ impl Editor {
                 .text_document_did_close(lsp_types::DidCloseTextDocumentParams {
                     text_document: doc.identifier(),
                 })
-                .unwrap();
-        }
-
-        // 针对还没有记录到 doc 对象里面的，则表示是第一次打开
-        let language_servers_not_in_doc = language_servers.iter().filter(|(name, ls)| {
-            doc.language_servers
-                .get(*name)
-                .map_or(true, |doc_ls| ls.id() != doc_ls.id())
-        });
-
-        // TODO 这一步不要在这里做，放到接到 did open 请求时转发
-        for (_, language_server) in language_servers_not_in_doc {
-            // TODO this now races with on_init_code if the init happens too quickly
-            language_server
-                .text_document_did_open(
-                    doc_url.clone(),
-                    doc.version(),
-                    params.text_document.text.clone(), // TODO
-                    language_id.clone(),
-                )
                 .unwrap();
         }
 

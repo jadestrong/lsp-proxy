@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::msg::{ErrorCode, Request, RequestId, Response, ResponseError};
+use crate::{
+    lsp::jsonrpc,
+    msg::{Request, RequestId, Response},
+};
 
 #[derive(Debug)]
 pub struct ReqQueue<I, O> {
@@ -42,8 +45,8 @@ impl<I> Incoming<I> {
 
     pub fn cancel(&mut self, id: RequestId) -> Option<Response> {
         let _data = self.complete(id.clone())?;
-        let error = ResponseError {
-            code: ErrorCode::RequestCanceled as i32,
+        let error = jsonrpc::Error {
+            code: jsonrpc::ErrorCode::RequestCanceled,
             message: "canceled by client".to_string(),
             data: None,
         };

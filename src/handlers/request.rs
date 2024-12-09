@@ -19,15 +19,16 @@ use crate::{
     completion_cache::CompletionCache,
     document::DiagnosticItem,
     fuzzy,
+    lsp::jsonrpc,
     lsp_ext::{self, CommandItem, CompletionItem},
-    msg::{self, Context, ErrorCode, Message, RequestId, Response},
+    msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::truncate_completion_item,
 };
 
 pub fn create_error_response(id: &RequestId, message: String) -> Response {
     error!("result to response err {}", message);
-    Response::new_err(id.clone(), ErrorCode::InternalError as i32, message)
+    Response::new_err(id.clone(), jsonrpc::ErrorCode::InternalError, message)
 }
 
 async fn call_single_language_server<R>(
@@ -414,9 +415,7 @@ pub(crate) async fn handle_completion(
             let res = items_future.await;
             match res {
                 Ok(res) => Response::new_ok(req.id.clone(), res),
-                Err(e) => {
-                    create_error_response(&req.id, e.to_string())
-                }
+                Err(e) => create_error_response(&req.id, e.to_string()),
             }
         };
         let requst_start = Instant::now();
@@ -846,9 +845,7 @@ pub(crate) async fn handle_code_action(
                 let res = actions_future.await;
                 let response = match res {
                     Ok(res) => Response::new_ok(req.id.clone(), res),
-                    Err(e) => {
-                        create_error_response(&req.id, e.to_string())
-                    }
+                    Err(e) => create_error_response(&req.id, e.to_string()),
                 };
 
                 response_sender.send(response.into()).unwrap();

@@ -21,12 +21,12 @@ pub(crate) fn handle_did_open_text_document(
             let doc_id = app.editor.new_document(&params.text_document.uri);
             let uri = params.text_document.uri.to_owned();
             let text = params.text_document.text.to_owned();
-            app.editor.launch_langauge_servers(doc_id, params);
+            app.editor.launch_langauge_servers(doc_id);
             let doc = app.editor.document_by_uri(&uri);
             if let Some(doc) = doc {
                 // send didOpen notification directly, notifies will pending until server initialized.
                 let language_id = doc.language_id().to_owned().unwrap_or_default();
-                doc.language_servers().for_each(|ls| {
+                doc.language_servers.values().for_each(|ls| {
                     ls.text_document_did_open(
                         uri.clone(),
                         doc.version(),
