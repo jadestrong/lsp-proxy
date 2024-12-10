@@ -18,7 +18,7 @@ const REQUEST_WHITELIST: &[&str] = &["textDocument/signatureHelp", "emacs/worksp
 
 pub struct Controller {
     sender_for_server: UnboundedSender<Message>,
-    sender_for_emacs: Sender<Message>,
+    sender_to_emacs: Sender<Message>,
     req_queue: ReqQueue,
     processing_request: Option<Request>,
 }
@@ -30,7 +30,7 @@ impl Controller {
     ) -> Self {
         Controller {
             sender_for_server,
-            sender_for_emacs,
+            sender_to_emacs: sender_for_emacs,
             req_queue: ReqQueue::default(),
             processing_request: None,
         }
@@ -81,13 +81,13 @@ impl Controller {
                         Ok(msg) => {
                             match msg {
                                 Message::Request(req) => {
-                                    self.sender_for_emacs.send(req.into()).unwrap();
+                                    self.sender_to_emacs.send(req.into()).unwrap();
                                 },
                                 Message::Response(resp) => {
                                     self.respond(resp);
                                 },
                                 Message::Notification(not) => {
-                                    self.sender_for_emacs.send(not.into()).unwrap();
+                                    self.sender_to_emacs.send(not.into()).unwrap();
                                 },
                             }
                         },
@@ -177,7 +177,7 @@ impl Controller {
                 "handled {} - ({}) in {:0.2?}",
                 method, response.id, duration
             );
-            self.sender_for_emacs.send(response.into()).unwrap();
+            self.sender_to_emacs.send(response.into()).unwrap();
         } else {
             debug!(
                 "received response({:?}), but request had been canceled",

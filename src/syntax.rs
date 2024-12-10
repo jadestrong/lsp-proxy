@@ -286,7 +286,7 @@ pub struct LanguageServerConfiguration {
 }
 
 fn default_timeout() -> u64 {
-    20
+    8
 }
 
 fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>

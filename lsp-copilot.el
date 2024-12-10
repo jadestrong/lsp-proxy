@@ -982,7 +982,7 @@ Only works when mode is `tick or `alive."
                                            (message "range %s end %s" range end)
                                            (> end-point first-edited)))
                           edits))
-           (lsp-copilot--warn "TextEdits will not be applied since document has been modified before of them.")
+           (lsp-copilot--warn "%s" "TextEdits will not be applied since document has been modified before of them.")
          (lsp-copilot--apply-text-edits edits)))
      (lambda ()
        (remove-hook 'before-change-functions func t)))))
@@ -1023,6 +1023,11 @@ Only works when mode is `tick or `alive."
     (lsp-copilot--error "%s" (or (and err (plist-get err :message)) err)))
   "Default handler for error message.")
 
+(defconst lsp-copilot--show-timeout
+  (lambda ()
+    (lsp-copilot--error "%s" "Request timeout"))
+  "Default handler for timeout.")
+
 (defsubst lsp-copilot--connection-alivep ()
   "Non-nil if the `lsp-copilot--connection' is alive."
   (and lsp-copilot--connection
@@ -1049,7 +1054,7 @@ Only works when mode is `tick or `alive."
            (jsonrpc-notify lsp-copilot--connection ,method new-params))
        (lsp-copilot--on-doc-open))))
 
-(cl-defmacro lsp-copilot--async-request (method params &rest args &key (success-fn #'lsp-copilot--ignore-response) (error-fn #'lsp-copilot--show-error) &allow-other-keys)
+(cl-defmacro lsp-copilot--async-request (method params &rest args &key (success-fn #'lsp-copilot--ignore-response) (error-fn #'lsp-copilot--show-error) (timeout-fn #'lsp-copilot--show-timeout) &allow-other-keys)
   "Send an asynchronous request to the lsp copilot agent."
   `(progn
      (unless (lsp-copilot--connection-alivep)
@@ -1066,6 +1071,9 @@ Only works when mode is `tick or `alive."
                                               (funcall ,success-fn result)))
                               :error-fn (lambda (err)
                                           (funcall ,error-fn err))
+                              :timeout-fn (lambda ()
+                                            (with-current-buffer buf
+                                                (funcall ,timeout-fn)))
                               ,@args))))
 
 (defun lsp-copilot--make-connection ()
@@ -1123,7 +1131,7 @@ Only works when mode is `tick or `alive."
       (lsp-copilot-log "%s" (lsp-copilot--propertize message type))))
   (when  (eql method 'window/showMessage)
     (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
-      (lsp-copilot--info (lsp-copilot--propertize message type))))
+      (lsp-copilot--info "%s" (lsp-copilot--propertize message type))))
   (when (eql method 'emacs/triggerCharacters)
     (lsp-copilot--dbind (:uri uri :triggerCharacters trigger-characters :signatureTriggerCharacters signature-trigger-characters :supportInlayHints support-inlay-hints) (plist-get msg :params)
       (let* ((filepath (lsp-copilot--uri-to-path uri)))
@@ -1278,7 +1286,7 @@ Only works when mode is `tick or `alive."
                          (with-help-window lsp-copilot-hover-buffer
                            (insert (lsp-copilot--format-markup hover-help))))
                        (run-mode-hooks))
-                   (lsp-copilot--info "No content at point.")))))
+                   (lsp-copilot--info "%s" "No content at point.")))))
 
 (defun lsp-copilot--get-indent-width (mode)
   "Get indentation offset for MODE."
@@ -1305,7 +1313,7 @@ Only works when mode is `tick or `alive."
                      (progn
                        (lsp-copilot--apply-text-edits edits)
                        (save-buffer))
-                   (lsp-copilot--info "No formatting changes provided")))))
+                   (lsp-copilot--info "%s" "No formatting changes provided")))))
 
 ;;
 ;; completion
@@ -1794,7 +1802,7 @@ relied upon."
    :success-fn (lambda (edits)
                  (if edits
                      (lsp-copilot--apply-workspace-edit edits t)
-                   (lsp-copilot--warn "Server does not support rename.")))))
+                   (lsp-copilot--warn "%s" "Server does not support rename.")))))
 
 ;;
 ;; Flycheck
@@ -2067,8 +2075,8 @@ CALLBACK is the status callback passed by Flycheck."
                                                          all-edits)
                                       "\n ")))
             (setq confirmed nil)
-            (lsp-copilot--info "User cancelled server edit"))
-        (lsp-copilot--info "No edits to apply")
+            (lsp-copilot--info "%s" "User cancelled server edit"))
+        (lsp-copilot--info "%s" "No edits to apply")
         (setq confirmed nil)))
     (when (and confirmed (length> all-edits 0))
       (let (change
@@ -2107,7 +2115,7 @@ CALLBACK is the status callback passed by Flycheck."
 (defun lsp-copilot--select-action (actions)
   "Select an action to execute from ACTIONS."
   (cond
-   ((seq-empty-p actions) (lsp-copilot--info "No code actions found.") nil)
+   ((seq-empty-p actions) (lsp-copilot--info "%s" "No code actions found.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into actions 'list))
              (col (mapcar #'lsp-copilot--code-action-transform collection))
@@ -2158,7 +2166,7 @@ Request codeAction/resolve for more info if server supports."
            :success-fn (lambda (action)
                          (if action
                              (lsp-copilot--execute-code-action action)
-                           (lsp-copilot--info "No code action found."))))
+                           (lsp-copilot--info "%s" "No code action found."))))
         (lsp-copilot--execute-code-action action)))))
 
 (defun lsp-copilot--execute-code-action (action)
@@ -2331,7 +2339,7 @@ Request codeAction/resolve for more info if server supports."
 (defun lsp-copilot--select-command (commands)
   "Select a command to execute from COMMANDS."
   (cond
-   ((seq-empty-p commands) (lsp-copilot--info "No command found.") nil)
+   ((seq-empty-p commands) (lsp-copilot--info "%s" "No command found.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into commands 'list))
              (col (mapcar (lambda (it) (cons (plist-get it :id) it)) collection))
@@ -2486,8 +2494,8 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
       (require 'flymake)
       (lsp-copilot-diagnostics-flymake-enable))
      ((not (eq lsp-copilot-diagnostics-provider :none))
-      (lsp-copilot--warn "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
-     (t (lsp-copilot--warn "Unable to configuration flycheck. The diagnostics won't be rendered.")))
+      (lsp-copilot--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
+     (t (lsp-copilot--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
     (let ((buffer (current-buffer)))
       (run-with-idle-timer 0 nil (lambda ()
                                    (when (buffer-live-p buffer)
@@ -2555,7 +2563,7 @@ textDocument/didOpen for the new file."
 (defun lsp-copilot--select-server (servers)
   "Select a server in SERVERS to restart."
   (cond
-   ((seq-empty-p servers) (lsp-copilot--info "No server associated.") nil)
+   ((seq-empty-p servers) (lsp-copilot--info "%s" "No server associated.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into servers 'list))
              (col (mapcar #'lsp-copilot--server-transform collection))

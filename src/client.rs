@@ -1,12 +1,3 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    process::Stdio,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
 use futures_util::Future;
 use log::debug;
 use lsp::{
@@ -16,6 +7,15 @@ use lsp::{
 use lsp_types as lsp;
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    process::Stdio,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
 use tokio::{
     io::{BufReader, BufWriter},
     process::{Child, Command},
@@ -481,10 +481,9 @@ impl Client {
                 })
                 .map_err(|e| Error::Other(e.into()))?;
 
-            // 等待请求返回
             timeout(Duration::from_secs(timeout_secs), rx.recv())
                 .await
-                .map_err(|_| Error::Timeout(req_id))?
+                .map_err(|_| Error::Timeout(format!("{}({})", R::METHOD, req_id)))?
                 .ok_or(Error::StreamClosed)?
         }
     }

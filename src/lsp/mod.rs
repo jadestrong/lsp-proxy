@@ -1,7 +1,4 @@
 use thiserror::Error;
-
-use crate::msg::RequestId;
-
 pub mod file_event;
 pub mod jsonrpc;
 pub mod transport;
@@ -17,7 +14,7 @@ pub enum Error {
     #[error("IO Error: {0}")]
     IO(#[from] std::io::Error),
     #[error("request {0} timed out")]
-    Timeout(RequestId),
+    Timeout(String),
     #[error("server closed the stream")]
     StreamClosed,
     #[error("Unhandled")]
