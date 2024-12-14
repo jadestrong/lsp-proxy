@@ -2508,7 +2508,7 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
   ;; remove hook
   (dolist (hook lsp-copilot--internal-hooks)
     (remove-hook (car hook) (cdr hook) t))
-  (remove-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point)
+  (remove-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point 'local)
   (remove-hook 'window-selection-change-functions #'lsp-copilot--on-doc-focus 'local)
   (remove-hook 'window-buffer-change-functions #'lsp-copilot--on-doc-focus 'local)
   (setq-local completion-category-defaults
