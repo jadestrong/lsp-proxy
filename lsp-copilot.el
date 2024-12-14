@@ -994,7 +994,7 @@ Only works when mode is `tick or `alive."
   "Return the status of the progress for the current workspaces."
   (when lsp-copilot-mode
     (let ((progress-status
-           (when-let ((tokens (gethash (lsp-copilot-project-root) lsp-copilot--project-hashmap)))
+           (when-let* ((tokens (gethash (lsp-copilot-project-root) lsp-copilot--project-hashmap)))
              (unless (ht-empty? tokens)
                (mapconcat
                 (lambda (value)
@@ -1073,7 +1073,7 @@ Only works when mode is `tick or `alive."
                                           (funcall ,error-fn err))
                               :timeout-fn (lambda ()
                                             (with-current-buffer buf
-                                                (funcall ,timeout-fn)))
+                                              (funcall ,timeout-fn)))
                               ,@args))))
 
 (defun lsp-copilot--make-connection ()
@@ -1480,8 +1480,8 @@ CANDIDATE is a string returned by `company-lsp--make-candidate'."
                                    (point)))
     (if (cl-plusp (length additionalTextEdits))
         (lsp-copilot--apply-text-edits additionalTextEdits)
-      (if-let ((resolved-item (get-text-property 0 'resolved-item candidate)))
-          (if-let (additionalTextEdits (plist-get resolved-item :additionalTextEdits))
+      (if-let* ((resolved-item (get-text-property 0 'resolved-item candidate)))
+          (if-let* ((additionalTextEdits (plist-get resolved-item :additionalTextEdits)))
               (lsp-copilot--apply-text-edits additionalTextEdits))
         (-let [(callback cleanup-fn) (lsp-copilot--create-apply-text-edits-handlers)]
           (lsp-copilot--async-resolve copilot-item callback cleanup-fn))))))
@@ -1503,11 +1503,11 @@ CANDIDATE is a string returned by `company-lsp--make-candidate'."
     (concat
      (when detail
        (concat " " (s-replace "\r" "" detail)))
-     (when-let (label--detail (and label-detail (plist-get label-detail :detail)))
+     (when-let* ((label--detail (and label-detail (plist-get label-detail :detail))))
        (format " %s" label--detail))
-     (when-let (description (and label-detail (plist-get label-detail :description)))
+     (when-let* ((description (and label-detail (plist-get label-detail :description))))
        (format " %s" description))
-     (when-let ((kind-name (alist-get kind lsp-copilot--kind->symbol)))
+     (when-let* ((kind-name (alist-get kind lsp-copilot--kind->symbol)))
        (format " (%s)" kind-name)))))
 
 (defun lsp-copilot--doc-buffer (item)
@@ -1551,7 +1551,7 @@ The CLEANUP-FN will be called to cleanup."
      'completionItem/resolve
      (lsp-copilot--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :success-fn (lambda (resolved-item)
-                   (if-let ((complete-item (plist-get resolved-item :item))
+                   (if-let* ((complete-item (plist-get resolved-item :item))
                             (additionalTextEdits (plist-get complete-item :additionalTextEdits)))
                        (funcall callback additionalTextEdits))
                    (when cleanup-fn (funcall cleanup-fn))))
@@ -1749,7 +1749,7 @@ renaming is generally supported but cannot be done at point.
 START and END are the bounds of the identifiers being renamed,
 while PLACEHOLDER?, is either nil or a string suggested by the
 language server as the initial input of a new-name prompt."
-  (when-let ((bounds (bounds-of-thing-at-point 'symbol)))
+  (when-let* ((bounds (bounds-of-thing-at-point 'symbol)))
     (cons bounds nil)))
 
 (defface lsp-copilot-face-rename '((t :underline t))
@@ -1923,7 +1923,7 @@ CALLBACK is the status callback passed by Flycheck."
                           (start-point (lsp-copilot--position-point start))
                           (end-point (lsp-copilot--position-point end)))
                      (when (= start-point end-point)
-                       (if-let ((region (flymake-diag-region (current-buffer)
+                       (if-let* ((region (flymake-diag-region (current-buffer)
                                                              (1+ start-line)
                                                              character)))
                            (setq start-point (car region)
