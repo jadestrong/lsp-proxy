@@ -461,7 +461,7 @@ pub(crate) async fn handle_completion_resolve(
                                     lsp_types::MarkupContent {
                                         kind: markdown_doc.kind.clone(),
                                         value: format!(
-                                            "{}\n{}",
+                                            "`{}`\n\n{}",
                                             detail.as_ref().unwrap().clone(),
                                             markdown_doc.value
                                         ),
