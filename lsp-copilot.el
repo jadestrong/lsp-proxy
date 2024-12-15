@@ -1364,11 +1364,12 @@ Or nil if none."
   "Get lsp completions."
   ;; (when (not (nth 4 (syntax-ppss)))
   (let* ((trigger-characters lsp-copilot--completion-trigger-characters)
-         (bounds-start (if-let ((bounds (lsp-copilot--get-english-dash-string-boundaries)))
+         (current-point (point))
+         (bounds-start (if-let* ((bounds (lsp-copilot--get-english-dash-string-boundaries)))
                            (cl-first bounds)
                          (or (cl-first (bounds-of-thing-at-point 'symbol))
-                             (point))))
-         (prefix (buffer-substring-no-properties bounds-start (point)))
+                             current-point)))
+         (prefix (buffer-substring-no-properties bounds-start current-point))
          (candidates
           (lambda ()
             (let* ((resp (lsp-copilot--request
@@ -1379,7 +1380,7 @@ Or nil if none."
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
                               :prefix ,prefix
                               :boundsStart ,bounds-start
-                              :startPoint ,(point)
+                              :startPoint ,current-point
                               :triggerKind ,(if (null lsp-copilot--last-inserted-char) 1 2)))) ;; 只用来区分是否是空字符触发的，如果是空认为是主动触发，否则就是自动触发
                           :cancel-on-input t))
                    (items (mapcar (lambda (candidate)
