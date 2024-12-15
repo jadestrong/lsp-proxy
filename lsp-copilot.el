@@ -1421,9 +1421,8 @@ Or nil if none."
      trigger-characters)))
 
 (defun lsp-copilot--company-post-completion (candidate status)
-  "Replace a CompletionItem's label with its insertText.  Apply text edits.
-
-CANDIDATE is a string returned by `company-lsp--make-candidate'."
+  "Replace a CompletionItem's label with its insertText.
+Apply text edits in CANDIDATE when STATUS is finished or exact."
   (when (memq status '(finished exact))
     (let* ((copilot-item (get-text-property 0 'lsp-copilot--item candidate))
            (resolved-item (get-text-property 0 'resolved-item candidate))
@@ -1440,7 +1439,7 @@ CANDIDATE is a string returned by `company-lsp--make-candidate'."
         (lsp-copilot--company-post-completion-item (or resolved-item copilot-item) candidate marker)))))
 
 (defun lsp-copilot--company-post-completion-item (copilot-item candidate marker)
-  "Complete CANDIDATE of ITEM from MARKER."
+  "Complete CANDIDATE of COPILOT-ITEM from MARKER."
   (let* ((item (plist-get copilot-item :item))
          (label (plist-get item :label))
          (insertText (plist-get item :insertText))
@@ -1530,6 +1529,7 @@ CANDIDATE is a string returned by `company-lsp--make-candidate'."
       (current-buffer))))
 
 (defun lsp-copilot--sync-resolve (copilot-item)
+  "Request `completionItem/resolve' of COPILOT-ITEM synchronously."
   (when-let* ((language-server-id (plist-get copilot-item :language_server_id))
               (start (plist-get copilot-item :start))
               (end (plist-get copilot-item :end))
@@ -1553,7 +1553,7 @@ The CLEANUP-FN will be called to cleanup."
      (lsp-copilot--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :success-fn (lambda (resolved-item)
                    (if-let* ((complete-item (plist-get resolved-item :item))
-                            (additionalTextEdits (plist-get complete-item :additionalTextEdits)))
+                             (additionalTextEdits (plist-get complete-item :additionalTextEdits)))
                        (funcall callback additionalTextEdits))
                    (when cleanup-fn (funcall cleanup-fn))))
     :error-fn cleanup-fn
@@ -1769,8 +1769,9 @@ the new name."
 AT-POINT shall be a structure as returned by
 `lsp-copilot--get-symbol-to-rename'.
 
-Returns a string, which should be the new name for the identifier at point. If renaming
-cannot be done at point (as determined from AT-POINT), throw a `user-error'.
+Returns a string, which should be the new name for the identifier at point.
+If renaming cannot be done at point (as determined from AT-POINT),
+throw a `user-error'.
 
 This function is for use in `lsp-copilot-rename' only, and shall not be
 relied upon."
@@ -1847,6 +1848,7 @@ CALLBACK is the status callback passed by Flycheck."
 
 ;;;###autoload
 (defun lsp-copilot-diagnostics-lsp-copilot-checker-if-needed ()
+  "Create a `lsp-copilot' checker of flycheck."
   (unless (flycheck-valid-checker-p 'lsp-copilot)
     (flycheck-define-generic-checker 'lsp-copilot
       "A syntax checker using the langauge server protocol provided by lsp-copilot."
@@ -1925,8 +1927,8 @@ CALLBACK is the status callback passed by Flycheck."
                           (end-point (lsp-copilot--position-point end)))
                      (when (= start-point end-point)
                        (if-let* ((region (flymake-diag-region (current-buffer)
-                                                             (1+ start-line)
-                                                             character)))
+                                                              (1+ start-line)
+                                                              character)))
                            (setq start-point (car region)
                                  end-point (cdr region))
                          (lsp-copilot--save-restriction-and-excursion
@@ -1957,7 +1959,8 @@ CALLBACK is the status callback passed by Flycheck."
     map))
 
 (defun lsp-copilot-show-diagnostic (pos &optional other-window)
-  "Show location of diagnostic at POS."
+  "Show location of diagnostic at POS.
+If OTHER-WINDOW is non nil, show diagnosis in a new window."
   (interactive (list (point) t))
   (let* ((id (or (tabulated-list-get-id pos)
                  (user-error "Nothing at point")))
@@ -2183,13 +2186,13 @@ Request codeAction/resolve for more info if server supports."
 
 ;; inlay hints
 (defface lsp-copilot-inlay-hint-face '((t (:height 0.8 :inherit shadow)))
-  "Face used for inlay hint overlays.")
+  "Face used for inlay hint overlays." :group 'lsp-copilot-mode)
 
 (defface lsp-copilot-type-hint-face '((t (:inherit lsp-copilot-inlay-hint-face)))
-  "Face used for type inlay hint overlays.")
+  "Face used for type inlay hint overlays." :group 'lsp-copilot-mode)
 
 (defface lsp-copilot-parameter-hint-face '((t (:inherit lsp-copilot-inlay-hint-face)))
-  "Face used for parameter inlay hint overlays.")
+  "Face used for parameter inlay hint overlays." :group 'lsp-copilot-mode)
 
 (defvar-local lsp-copilot--outstanding-inlay-hints-region (cons nil nil)
   "Jit-lock-calculated (FROM . TO) region with potentially outdated hints.")
@@ -2200,7 +2203,8 @@ Request codeAction/resolve for more info if server supports."
   "Helper timer for `lsp-copilot--update-hints'.")
 
 (defun lsp-copilot--update-inlay-hints (from to)
-  "Jit-lock function for Eglot inlay hints."
+  "Jit-lock function for lsp-copilot inlay hints.
+Update the range of `(FROM TO)'."
   (cl-symbol-macrolet ((region lsp-copilot--outstanding-inlay-hints-region)
                        (last-region lsp-copilot--outstanding-inlay-hints-last-region)
                        (timer lsp-copilot--outstanding-inlay-regions-timer))
@@ -2411,9 +2415,11 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                               (setq lsp-copilot--change-idle-timer nil))))))))
 
 (defun lsp-copilot--before-revert-hook ()
+  "Hook of `before-revert-hook'."
   (lsp-copilot--on-doc-close))
 
 (defun lsp-copilot--after-revert-hook ()
+  "Hook of `after-revert-hook'."
   (lsp-copilot--on-doc-focus (selected-window)))
 
 (defun lsp-copilot--post-command-hook ()
