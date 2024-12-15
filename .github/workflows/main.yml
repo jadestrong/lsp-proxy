@@ -1,6 +1,8 @@
-name: build
+name: release
 on:
-  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*.*.*"
 jobs:
   build:
     name: build
@@ -28,7 +30,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust
         uses: actions-rs/toolchain@v1
@@ -64,4 +66,32 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.archive-name }}
-          path: archive/${{ matrix.archive-name }}
+          path: archive
+  release:
+      name: Release
+      needs: build
+      runs-on: ubuntu-latest
+
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Download artifacts
+          uses: actions/download-artifact@v4
+          with:
+            path: assets
+
+        - name: Create GitHub Release
+          uses: softprops/action-gh-release@v2
+          if: startsWith(github.ref, 'refs/tags/')
+          with:
+            files: |
+                   ./assets/lsp-copilot-linux.tar.gz/lsp-copilot-linux.tar.gz
+                   ./assets/lsp-copilot-macos.tar.gz/lsp-copilot-macos.tar.gz
+                   ./assets/lsp-copilot-windows.7z/lsp-copilot-windows.7z
+            body: |
+              Automated release for build artifacts.
+            draft: false
+            prerelease: false
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
