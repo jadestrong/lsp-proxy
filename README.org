@@ -35,6 +35,11 @@ package.el
                 :files ("lsp-copilot.el" "lsp-copilot")
                 :pre-build (("cargo" "build" "--release") ("cp" "./target/release/lsp-copilot" "./"))))
 #+end_src
+** Download prebuilt binary
+You can download the prebuilt binary from [[https://github.com/jadestrong/lsp-copilot/releases][releases]]. For MacOS users, you should allow this binary to run first time, like this:
+#+begin_quote
+The application cannot be opened because it is from an unidentified developer. You can allow this app to run by going to System Settings > Privacy & Security and selecting 'Allow Anyway' for this app.
+#+end_quote
 * How to use
 #+begin_src emacs-lisp
 (use-package lsp-copilot
