@@ -453,7 +453,7 @@ pub(crate) async fn handle_completion_resolve(
                         match documentation {
                             lsp_types::Documentation::String(str_doc) => {
                                 resp.documentation = Some(lsp_types::Documentation::String(
-                                    format!("{}\n\n{}", detail.as_ref().unwrap().clone(), str_doc),
+                                    format!("```\n{}\n```\n\n{}", detail.as_ref().unwrap().clone(), str_doc),
                                 ))
                             }
                             lsp_types::Documentation::MarkupContent(markdown_doc) => {
@@ -461,7 +461,7 @@ pub(crate) async fn handle_completion_resolve(
                                     lsp_types::MarkupContent {
                                         kind: markdown_doc.kind.clone(),
                                         value: format!(
-                                            "`{}`\n\n{}",
+                                            "```\n{}\n```\n\n{}",
                                             detail.as_ref().unwrap().clone(),
                                             markdown_doc.value
                                         ),
@@ -474,7 +474,7 @@ pub(crate) async fn handle_completion_resolve(
                         resp.documentation = Some(lsp_types::Documentation::MarkupContent(
                             lsp_types::MarkupContent {
                                 kind: lsp_types::MarkupKind::Markdown,
-                                value: detail.as_ref().unwrap().clone(),
+                                value: format!("```\n{}\n```", detail.as_ref().unwrap().clone()),
                             },
                         ))
                     }
