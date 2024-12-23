@@ -1449,20 +1449,15 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
          (startPoint (- marker (length candidate)))
          (insertTextMode (plist-get item :insertTextMode))
          (start (plist-get copilot-item :start))
-         (end (plist-get copilot-item :end))
-         (serverName (plist-get copilot-item :language_server_name)))
+         (end (plist-get copilot-item :end)))
     (cond (textEdit
            (let* ((range (plist-get textEdit :range))
                   (replaceStart (lsp-copilot--position-point (plist-get range :start)))
                   (replaceEnd (lsp-copilot--position-point (plist-get range :end)))
                   (newText (plist-get textEdit :newText))
                   (insertText (s-replace "\r" "" (or newText ""))))
-             ;; 支持 vscode 的 JSDoc 补传
-             (if (and (equal serverName "vtsls") (equal label "/** */"))
-                 (progn
-                   (delete-region start end)
-                   (delete-region replaceStart replaceEnd))
-               (delete-region replaceStart end))
+             (delete-region start end)
+             (delete-region replaceStart replaceEnd)
              (insert insertText)))
           ;; (snippet-fn
           ;; A snippet should be inserted, but using plain
