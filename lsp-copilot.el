@@ -55,6 +55,11 @@
 (defvar flycheck-checker)
 (defvar flycheck-checkers)
 
+(defgroup lsp-copilot nil
+  "Interaction with Lsp Copilot Server."
+  :prefix "lsp-copilot-"
+  :group 'tools)
+
 (defcustom lsp-copilot-user-languages-config (expand-file-name (concat user-emacs-directory (file-name-as-directory "lsp-copilot") "languages.toml"))
   "The user config file to store custom language config."
   :type 'string
