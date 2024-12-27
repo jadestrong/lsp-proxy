@@ -1,12 +1,12 @@
-use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
-use lsp::Diagnostic;
-use lsp_types::{self as lsp, Url};
-use serde::{Deserialize, Serialize};
 use crate::{
     client::Client,
     registry::LanguageServerName,
     syntax::{self, LanguageConfiguration, LanguageServerFeature},
 };
+use lsp::Diagnostic;
+use lsp_types::{self as lsp, Url};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DocumentId(pub NonZeroUsize);
@@ -34,7 +34,7 @@ pub struct DiagnosticItem {
 #[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
-    pub uri: Option<Url>,
+    pub uri: Url,
     /// Corresponding language scope name. Usually `source.<lang>`.
     pub language_config: Option<Arc<LanguageConfiguration>>,
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
@@ -46,7 +46,7 @@ impl Document {
     pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>) -> Self {
         let mut doc = Document {
             id: DocumentId::default(),
-            uri: Some(uri.clone()),
+            uri: uri.clone(),
             language_config: None,
             language_servers: HashMap::new(),
             version: 0,
@@ -66,13 +66,13 @@ impl Document {
 
     #[inline]
     /// File url
-    pub fn uri(&self) -> Option<&Url> {
-        self.uri.as_ref()
+    pub fn uri(&self) -> &Url {
+        &self.uri
     }
 
     /// A Url to file path
     pub fn path(&self) -> Option<PathBuf> {
-        Url::to_file_path(self.uri()?).ok()
+        Url::to_file_path(self.uri()).ok()
     }
 
     pub fn get_trigger_characters(&self) -> Vec<String> {
@@ -111,7 +111,8 @@ impl Document {
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
-        let language_config = config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
+        let language_config =
+            config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
         self.language_config = language_config;
     }
 
@@ -157,7 +158,7 @@ impl Document {
 
     #[inline]
     pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
-        lsp::TextDocumentIdentifier::new(self.uri().cloned().unwrap())
+        lsp::TextDocumentIdentifier::new(self.uri.clone())
     }
 
     pub fn get_all_language_servers(&self) -> Vec<Arc<Client>> {

@@ -68,13 +68,11 @@ impl Editor {
     }
 
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
-        self.documents()
-            .find(|doc| doc.uri().map(|u| u == uri).unwrap_or(false))
+        self.documents().find(|doc| doc.uri() == uri)
     }
 
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
-        self.documents_mut()
-            .find(|doc| doc.uri().map(|u| u == uri).unwrap_or(false))
+        self.documents_mut().find(|doc| doc.uri() == uri)
     }
 
     pub fn new_document(&mut self, uri: &Url) -> DocumentId {
