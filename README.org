@@ -45,22 +45,10 @@ The application cannot be opened because it is from an unidentified developer. Y
 (use-package lsp-copilot
   ;; :load-path "/path/to/lsp-copilot"
   :config
-  (add-hook! '(
-               tsx-ts-mode-hook
-               js-ts-mode-hook
-               typescript-mode-hook
-               typescript-ts-mode-hook
-               rjsx-mode-hook
-               less-css-mode-hook
-               web-mode-hook
-               python-ts-mode-hook
-               rust-mode-hook
-               rustic-mode-hook
-               rust-ts-mode-hook
-               toml-ts-mode-hook
-               conf-toml-mode-hook
-               bash-ts-mode-hook
-               ) #'lsp-copilot-mode))
+  (add-hook 'tsx-ts-mode-hook #'lsp-copilot-mode)
+  (add-hook 'js-ts-mode-hook #'lsp-copilot-mode)
+  (add-hook 'typescript-mode-hook #'lsp-copilot-mode)
+  (add-hook 'typescript-ts-mode-hook #'lsp-copilot-mode))
 #+end_src
 
 #+begin_src elisp
