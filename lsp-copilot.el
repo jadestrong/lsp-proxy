@@ -797,7 +797,7 @@ LSP server result."
                                          (insert-file-contents-literally filepath)
                                          (funcall collect)))
                                       (t (lsp-copilot--warn "Failed  to process xref entry for file %s" filepath)))))
-                                 locations)))
+                                 (if (vectorp locations) locations (vector locations)))))
       (lsp-copilot-show-xrefs locs nil nil))))
 
 ;;
