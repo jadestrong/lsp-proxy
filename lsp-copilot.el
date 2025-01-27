@@ -507,14 +507,24 @@ FORMAT and ARGS is the same as for `messsage'."
    (t
     (concat "file://" (url-encode-url buffer-file-name)))))
 
+(declare-function w32-long-file-name "w32proc.c" (fn))
 (defun lsp-copilot--uri-to-path (uri)
-  "Convert URI to a file path."
-  (when (keywordp uri)
-    (setq uri (substring (symbol-name uri) 1)))
-  (let ((retval (url-unhex-string (url-filename (url-generic-parse-url uri)))))
-    (if (eq system-type 'windows-nt)
-        (substring retval 1)
-      retval)))
+  "Convert URI to file path."
+  (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
+  (let* ((remote-prefix (and lsp-copilot--cur-project-root (file-remote-p lsp-copilot--cur-project-root)))
+         (url (url-generic-parse-url uri)))
+    ;; Only parse file:// URIs, leave other URI untouched as
+    ;; `file-name-handler-alist' should know how to handle them
+    ;; (bug#58790).
+    (if (string= "file" (url-type url))
+        (let* ((retval (url-unhex-string (url-filename url)))
+               (normalized (if (and (not remote-prefix)
+                                    (eq system-type 'windows-nt)
+                                    (cl-plusp (length retval)))
+                               (w32-long-file-name (substring retval 1))
+                             retval)))
+          (concat remote-prefix normalized))
+      uri)))
 
 (defun lsp-copilot--get-source ()
   "Get source code from current buffer."
@@ -2587,6 +2597,7 @@ textDocument/didOpen for the new file."
    'emacs/workspaceRestart
    (lsp-copilot--request-or-notify-params nil)
    :success-fn (lambda (data)
+                 ;; 清理所有已经打开的该项目下的文件
                  (let ((paths (seq-into data 'list)))
                    (setq lsp-copilot--opened-buffers
                          (cl-remove-if
@@ -2596,7 +2607,8 @@ textDocument/didOpen for the new file."
                  ;; 清理所有 buffer 存在的 diagnostic 信息
                  (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map)
                  ;; 清理记录的当前项目的 progress 信息
-                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--project-hashmap))))
+                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--project-hashmap)
+                 (revert-buffer))))
 
 (defvar lsp-copilot-mode-map
   (let ((map (make-sparse-keymap)))
