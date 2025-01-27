@@ -154,7 +154,7 @@ language-servers = [
  - lsp-copilot-open-log-file
  - lsp-copilot-open-config-file
  - lsp-copilot-restart: Restart the server
- - lsp-copilot-restart-workspace: Restart the LSP server for the current project
+ - lsp-copilot-workspace-restart: Restart the LSP server for the current project
 
 * Customization
 | Variable                          | Default                                           | Description                                            |

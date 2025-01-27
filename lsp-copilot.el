@@ -2587,6 +2587,7 @@ textDocument/didOpen for the new file."
    'emacs/workspaceRestart
    (lsp-copilot--request-or-notify-params nil)
    :success-fn (lambda (data)
+                 ;; 清理所有已经打开的该项目下的文件
                  (let ((paths (seq-into data 'list)))
                    (setq lsp-copilot--opened-buffers
                          (cl-remove-if
@@ -2596,7 +2597,8 @@ textDocument/didOpen for the new file."
                  ;; 清理所有 buffer 存在的 diagnostic 信息
                  (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map)
                  ;; 清理记录的当前项目的 progress 信息
-                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--project-hashmap))))
+                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--project-hashmap)
+                 (revert-buffer))))
 
 (defvar lsp-copilot-mode-map
   (let ((map (make-sparse-keymap)))
