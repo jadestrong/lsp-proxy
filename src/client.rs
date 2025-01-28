@@ -782,7 +782,19 @@ impl Client {
     }
 
     pub fn text_document_will_save(&self, params: lsp::WillSaveTextDocumentParams) -> Result<()> {
-        self.notify::<lsp::notification::WillSaveTextDocument>(params)
+        let capabilities = self.capabilities.get().unwrap();
+        let supported_will_save = match capabilities.text_document_sync.as_ref().unwrap() {
+            lsp_types::TextDocumentSyncCapability::Options(lsp::TextDocumentSyncOptions {
+                will_save: options,
+                ..
+            }) => options.map_or(false, |value| value),
+            _ => false,
+        };
+        if supported_will_save {
+            self.notify::<lsp::notification::WillSaveTextDocument>(params)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn text_document_did_save(&self, params: lsp::DidSaveTextDocumentParams) -> Result<()> {
