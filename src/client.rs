@@ -783,13 +783,15 @@ impl Client {
 
     pub fn text_document_will_save(&self, params: lsp::WillSaveTextDocumentParams) -> Result<()> {
         let capabilities = self.capabilities.get().unwrap();
-        let supported_will_save = match capabilities.text_document_sync.as_ref().unwrap() {
-            lsp_types::TextDocumentSyncCapability::Options(lsp::TextDocumentSyncOptions {
-                will_save: options,
-                ..
-            }) => options.map_or(false, |value| value),
-            _ => false,
-        };
+        let supported_will_save =
+            if let Some(lsp_types::TextDocumentSyncCapability::Options(options)) =
+                capabilities.text_document_sync.as_ref()
+            {
+                options.will_save.unwrap_or(false)
+            } else {
+                false
+            };
+
         if supported_will_save {
             self.notify::<lsp::notification::WillSaveTextDocument>(params)
         } else {
@@ -798,7 +800,27 @@ impl Client {
     }
 
     pub fn text_document_did_save(&self, params: lsp::DidSaveTextDocumentParams) -> Result<()> {
-        self.notify::<lsp::notification::DidSaveTextDocument>(params)
+        let capabilities = self.capabilities.get().unwrap();
+        let supported_save = match &capabilities.text_document_sync.as_ref() {
+            Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => {
+                matches!(*kind, lsp_types::TextDocumentSyncKind::INCREMENTAL | lsp_types::TextDocumentSyncKind::FULL)
+            }
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
+                options
+                    .save
+                    .as_ref()
+                    .map_or(false, |save_options| match save_options {
+                        lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
+                        lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
+                    })
+            }
+            _ => false
+        };
+        if supported_save {
+            self.notify::<lsp::notification::DidSaveTextDocument>(params)
+        } else {
+            Ok(())
+        }
     }
 
     pub fn cancel(&self, params: lsp::CancelParams) -> Result<()> {
