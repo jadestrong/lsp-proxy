@@ -34,7 +34,6 @@
 (require 'posframe)
 (require 'yasnippet)
 
-(declare-function projectile-project-root "ext:projectile")
 (declare-function yas-expand-snippet "ext:yasnippet")
 
 (declare-function flycheck-buffer "ext:flycheck")
@@ -439,9 +438,7 @@ FORMAT and ARGS is the same as for `messsage'."
   "Return the project root of current project."
   (if lsp-copilot--cur-project-root
       lsp-copilot--cur-project-root
-    ;; TODO make an customizable option
-    (let* ((root (or (and (fboundp 'projectile-project-root) (projectile-project-root))
-                     (project-root (project-current))))
+    (let* ((root (project-root (project-current)))
            (root-path (and root (directory-file-name root))))
       (setq lsp-copilot--cur-project-root root-path)
       root-path)))
