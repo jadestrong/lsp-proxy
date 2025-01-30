@@ -24,7 +24,7 @@ use crate::{
 use anyhow::{Error, Result};
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -286,10 +286,14 @@ impl Application {
             Call::Notification(jsonrpc::Notification { method, params, .. }) => {
                 let notification = match NotificationFromServer::parse(&method, params) {
                     Ok(notification) => notification,
+                    Err(crate::registry::Error::Unhandled) => {
+                        info!("Ignoring unhandled notification from Language Server");
+                        return;
+                    }
                     Err(err) => {
                         error!(
-                            "received malformed notification {} from Language Server: {}",
-                            method, err
+                            "Ignoring unknown notification from Language Server: {}",
+                            err
                         );
                         return;
                     }

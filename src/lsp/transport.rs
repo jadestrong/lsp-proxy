@@ -1,3 +1,5 @@
+use super::{jsonrpc, Error, Result};
+use crate::msg::RequestId;
 use anyhow::Context;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
@@ -11,8 +13,6 @@ use tokio::{
         Mutex, Notify,
     },
 };
-use crate::msg::RequestId;
-use super::{jsonrpc, Error, Result};
 
 #[derive(Debug)]
 pub enum Payload {
@@ -103,7 +103,13 @@ impl Transport {
                         }
                     };
                 }
-                Err(Error::StreamClosed) => {
+                Err(err) => {
+                    if !matches!(err, Error::StreamClosed) {
+                        error!(
+                            "Exiting {} after unexpected error: {err:?}",
+                            &transport.name
+                        );
+                    }
                     // Close any outstanding requests.
                     for (id, tx) in transport.pending_requests.lock().await.drain() {
                         match tx.send(Err(Error::StreamClosed)).await {
@@ -130,10 +136,6 @@ impl Transport {
                             error!("stream closed err: <- {:?}", err);
                         }
                     }
-                    break;
-                }
-                Err(err) => {
-                    error!("unknown {} err: <- {err:?}", transport.name);
                     break;
                 }
             }
