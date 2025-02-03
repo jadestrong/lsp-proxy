@@ -31,7 +31,7 @@ impl Args {
                 "--log" => match argv.next().as_deref() {
                     Some(path) => args.log_file = Some(path.into()),
                     None => anyhow::bail!("--log must specify path to write"),
-                }
+                },
                 _ => break,
             }
         }

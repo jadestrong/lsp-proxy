@@ -1,7 +1,6 @@
 use crate::msg::RequestId;
 use lsp_types::{
-    notification::Notification, request::Request, DidCloseTextDocumentParams,
-    ProgressParams, Url,
+    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams, Url,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -25,6 +24,7 @@ pub struct DidRecordTriggerCharactersParams {
     pub trigger_characters: Vec<String>,
     pub signature_trigger_characters: Vec<String>,
     pub support_inlay_hints: bool,
+    pub support_document_highlight: bool,
 }
 
 impl Notification for DidRecordTriggerCharacters {

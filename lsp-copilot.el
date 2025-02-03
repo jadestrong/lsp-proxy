@@ -9,7 +9,7 @@
 ;; Version: 0.0.1
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
 ;; Homepage: https://github.com/bytedance/lsp-copilot
-;; Package-Requires: ((emacs "29.1") (s "1.13.1") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
+;; Package-Requires: ((emacs "29.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -164,6 +164,19 @@ the buffer when it becomes large."
     (const :tag "Prefer flycheck" nil))
   :group 'lsp-copilot)
 
+(defcustom lsp-copilot-inlay-hints-mode-config nil
+  "Configuration for enabling inlay hints mode in specific contexts.
+The value can be:
+- nil: Inlay hints mode is disabled.
+- t: Inlay hints mode is enabled for all buffers.
+- A list of major modes (e.g., '(emacs-lisp-mode python-mode)): Inlay hints mode is enabled only for these modes."
+  :type
+  '(choice
+    (const :tag "Disabled" nil)
+    (const :tag "Enabled for all buffers" t)
+    (repeat :tag "Enabled only for specific modes" symbol))
+  :group 'lsp-copilot)
+
 (defvar lsp-copilot--exec-file (expand-file-name (if (eq system-type 'windows-nt)
                                                      "./lsp-copilot.exe"
                                                    "./lsp-copilot")
@@ -217,6 +230,9 @@ from language server.")
 
 (defvar-local lsp-copilot--support-inlay-hints nil
   "Is there any server associated with this buffer that support `textDocument/inlayHint' request.")
+
+(defvar-local lsp-copilot--support-document-highlight nil
+  "Is there any server associated with this buffer that support `textDocument/documentHighlight' request.")
 
 (defvar lsp-copilot--show-message t
   "If non-nil, show debug message from `lsp-copilot-mode'.")
@@ -1145,13 +1161,20 @@ Only works when mode is `tick or `alive."
     (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
       (lsp-copilot--info "%s" (lsp-copilot--propertize message type))))
   (when (eql method 'emacs/triggerCharacters)
-    (lsp-copilot--dbind (:uri uri :triggerCharacters trigger-characters :signatureTriggerCharacters signature-trigger-characters :supportInlayHints support-inlay-hints) (plist-get msg :params)
+    (lsp-copilot--dbind (:uri uri
+                         :triggerCharacters trigger-characters
+                         :signatureTriggerCharacters signature-trigger-characters
+                         :supportInlayHints support-inlay-hints
+                         :supportDocumentHighlight support-document-highlight)
+        (plist-get msg :params)
       (let* ((filepath (lsp-copilot--uri-to-path uri)))
         (when (f-exists? filepath)
           (with-current-buffer (find-file-noselect filepath)
             (setq-local lsp-copilot--completion-trigger-characters trigger-characters)
             (setq-local lsp-copilot--signature-trigger-characters signature-trigger-characters)
             (setq-local lsp-copilot--support-inlay-hints support-inlay-hints)
+            (setq-local lsp-copilot--support-document-highlight support-document-highlight)
+            (lsp-copilot-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
   (when (eql method '$/progress)
@@ -1300,6 +1323,48 @@ Only works when mode is `tick or `alive."
                        (run-mode-hooks))
                    (lsp-copilot--info "%s" "No content at point.")))))
 
+(defvar lsp-copilot--highlights nil "Overlays for textDocument/documentHighlight.")
+
+(defun lsp-copilot-hover-eldoc-function (_cb)
+  "A member of `eldoc-documentation-function', for hover."
+  ;; (let ((buf (current-buffer)))
+  ;;   (lsp-copilot--async-request
+  ;;    'textDocument/hover
+  ;;    (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
+  ;;    :success-fn (lambda (hover-help)
+  ;;                  (lsp-copilot--when-buffer-window buf
+  ;;                    (let* ((info (lsp-copilot--format-markup hover-help))
+  ;;                           (info-lines (split-string info "\n")))
+  ;;                      (funcall cb info
+  ;;                               :echo info))))
+  ;;    :deferred :textDocument/hover))
+  (when lsp-copilot--support-document-highlight
+    (let ((buf (current-buffer)))
+      (lsp-copilot--async-request
+       'textDocument/documentHighlight
+       (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
+       :success-fn
+       (lambda (highlights)
+         (mapc #'delete-overlay lsp-copilot--highlights)
+         (setq lsp-copilot--highlights
+               (lsp-copilot--when-buffer-window buf
+                 (mapcar (lambda (highlight)
+                           (let* ((range (plist-get highlight :range)))
+                             (pcase-let ((`(,beg . ,end)
+                                          (lsp-copilot--range-region range)))
+                               (let ((ov (make-overlay beg end)))
+                                 (overlay-put ov 'face 'lsp-copilot-highlight-symbol-face)
+                                 (overlay-put ov 'modification-hooks
+                                              `(,(lambda (o &rest _) (delete-overlay o))))
+                                 ov))))
+                         highlights))))
+       :deferred 'textDocument/documentHighlight)
+      nil))
+  t)
+
+;;
+;; format
+;;
 (defun lsp-copilot--get-indent-width (mode)
   "Get indentation offset for MODE."
   (or (alist-get mode lsp-copilot--formatting-indent-alist)
@@ -2200,6 +2265,10 @@ Request codeAction/resolve for more info if server supports."
 (defface lsp-copilot-parameter-hint-face '((t (:inherit lsp-copilot-inlay-hint-face)))
   "Face used for parameter inlay hint overlays." :group 'lsp-copilot-mode)
 
+(defface lsp-copilot-highlight-symbol-face
+  '((t (:inherit bold)))
+  "Face used to highlight the symbol at point." :group 'lsp-copilot-mode)
+
 (defvar-local lsp-copilot--outstanding-inlay-hints-region (cons nil nil)
   "Jit-lock-calculated (FROM . TO) region with potentially outdated hints.")
 
@@ -2211,45 +2280,46 @@ Request codeAction/resolve for more info if server supports."
 (defun lsp-copilot--update-inlay-hints (from to)
   "Jit-lock function for lsp-copilot inlay hints.
 Update the range of `(FROM TO)'."
-  (cl-symbol-macrolet ((region lsp-copilot--outstanding-inlay-hints-region)
-                       (last-region lsp-copilot--outstanding-inlay-hints-last-region)
-                       (timer lsp-copilot--outstanding-inlay-regions-timer))
-    (setcar region (min (or (car region) (point-max)) from))
-    (setcdr region (max (or (cdr region) (point-min)) to))
-    ;; HACK: We're relying on knowledge of jit-lock internals here.  The
-    ;; condition comparing `jit-lock-context-unfontify-pos' to
-    ;; `point-max' is a heuristic for telling whether this call to
-    ;; `jit-lock-functions' happens after `jit-lock-context-timer' has
-    ;; just run.  Only after this delay should we start the smoothing
-    ;; timer that will eventually call `lsp-copilot--update-hints-1' with the
-    ;; coalesced region.  I wish we didn't need the timer, but sometimes
-    ;; a lot of "non-contextual" calls come in all at once and do verify
-    ;; the condition.  Notice it is a 0 second timer though, so we're
-    ;; not introducing any more delay over jit-lock's timers.
-    (when (= jit-lock-context-unfontify-pos (point-max))
-      (if timer (cancel-timer timer))
-      (let ((buf (current-buffer)))
-        (setq timer (run-at-time
-                     0 nil
-                     (lambda ()
-                       (lsp-copilot--when-live-buffer buf
-                         ;; HACK: In some pathological situations
-                         ;; (Emacs's own coding.c, for example),
-                         ;; jit-lock is calling `lsp-copilot--update-hints'
-                         ;; repeatedly with same sequence of
-                         ;; arguments, which leads to
-                         ;; `lsp-copilot--update-hints-1' being called with
-                         ;; the same region repeatedly.  This happens
-                         ;; even if the hint-painting code does
-                         ;; nothing else other than widen, narrow,
-                         ;; move point then restore these things.
-                         ;; Possible Emacs bug, but this fixes it.
-                         (unless (equal last-region region)
-                           (lsp-copilot--update-hints-1 (max (car region) (point-min))
-                                                        (min (cdr region) (point-max)))
-                           (setq last-region region))
-                         (setq region (cons nil nil)
-                               timer nil)))))))))
+  (when lsp-copilot--support-inlay-hints
+    (cl-symbol-macrolet ((region lsp-copilot--outstanding-inlay-hints-region)
+                         (last-region lsp-copilot--outstanding-inlay-hints-last-region)
+                         (timer lsp-copilot--outstanding-inlay-regions-timer))
+      (setcar region (min (or (car region) (point-max)) from))
+      (setcdr region (max (or (cdr region) (point-min)) to))
+      ;; HACK: We're relying on knowledge of jit-lock internals here.  The
+      ;; condition comparing `jit-lock-context-unfontify-pos' to
+      ;; `point-max' is a heuristic for telling whether this call to
+      ;; `jit-lock-functions' happens after `jit-lock-context-timer' has
+      ;; just run.  Only after this delay should we start the smoothing
+      ;; timer that will eventually call `lsp-copilot--update-hints-1' with the
+      ;; coalesced region.  I wish we didn't need the timer, but sometimes
+      ;; a lot of "non-contextual" calls come in all at once and do verify
+      ;; the condition.  Notice it is a 0 second timer though, so we're
+      ;; not introducing any more delay over jit-lock's timers.
+      (when (= jit-lock-context-unfontify-pos (point-max))
+        (if timer (cancel-timer timer))
+        (let ((buf (current-buffer)))
+          (setq timer (run-at-time
+                       0 nil
+                       (lambda ()
+                         (lsp-copilot--when-live-buffer buf
+                           ;; HACK: In some pathological situations
+                           ;; (Emacs's own coding.c, for example),
+                           ;; jit-lock is calling `lsp-copilot--update-hints'
+                           ;; repeatedly with same sequence of
+                           ;; arguments, which leads to
+                           ;; `lsp-copilot--update-hints-1' being called with
+                           ;; the same region repeatedly.  This happens
+                           ;; even if the hint-painting code does
+                           ;; nothing else other than widen, narrow,
+                           ;; move point then restore these things.
+                           ;; Possible Emacs bug, but this fixes it.
+                           (unless (equal last-region region)
+                             (lsp-copilot--update-hints-1 (max (car region) (point-min))
+                                                          (min (cdr region) (point-max)))
+                             (setq last-region region))
+                           (setq region (cons nil nil)
+                                 timer nil))))))))))
 
 (defun lsp-copilot--update-hints-1 (from to)
   "Do most work for `lsp-copilot--update-hints', including LSP request."
@@ -2330,11 +2400,21 @@ Update the range of `(FROM TO)'."
                          (mapc paint-hint hints)))))
      :deferred 'lsp-copilot--update-hints-1)))
 
+(defun lsp-copilot-activate-inlay-hints-mode ()
+  "Activate `lsp-copilot-inlay-hints-mode` for the current buffer
+if `lsp-copilot-inlay-hints-mode-config` allows it."
+  (when (and lsp-copilot--support-inlay-hints
+             (boundp 'lsp-copilot-inlay-hints-mode-config)
+             (or (eq lsp-copilot-inlay-hints-mode-config t)
+                 (and (listp lsp-copilot-inlay-hints-mode-config)
+                      (member major-mode lsp-copilot-inlay-hints-mode-config))))
+    (lsp-copilot-inlay-hints-mode 1)))
+
 (define-minor-mode lsp-copilot-inlay-hints-mode
   "Mode for displaying inlay hint."
   :lighter nil
   (cond
-   ((and lsp-copilot-inlay-hints-mode lsp-copilot-mode)
+   (lsp-copilot-inlay-hints-mode
     (jit-lock-register #'lsp-copilot--update-inlay-hints 'contextual))
    (t
     (jit-lock-unregister #'lsp-copilot--update-inlay-hints)
@@ -2477,6 +2557,9 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
   (when buffer-file-name
     (dolist (hook lsp-copilot--internal-hooks)
       (add-hook (car hook) (cdr hook) nil t))
+    (setq eldoc-documentation-strategy #'eldoc-documentation-compose)
+    (add-hook 'eldoc-documentation-functions #'lsp-copilot-hover-eldoc-function nil t)
+    (eldoc-mode 1)
     ;; Ensure that `lsp-copilot-completion-at-point' the first CAPF to be tried,
     ;; unless user has put it elsewhere in the list by their own
     (add-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point -50 t)
@@ -2524,12 +2607,18 @@ Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
   (remove-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point 'local)
   (remove-hook 'window-selection-change-functions #'lsp-copilot--on-doc-focus 'local)
   (remove-hook 'window-buffer-change-functions #'lsp-copilot--on-doc-focus 'local)
+  (remove-hook 'eldoc-documentation-functions #'lsp-copilot-hover-eldoc-function 'local)
   (setq-local completion-category-defaults
               (cl-remove 'lsp-copilot-capf completion-category-defaults :key #'cl-first))
   (setq-local completion-styles-alist
               (cl-remove 'lsp-copilot-passthrough completion-styles-alist :key #'cl-first))
   (lsp-copilot-diagnostics-flycheck-disable)
   (lsp-copilot-diagnostics-flymake-disable)
+  (when lsp-copilot--highlights
+    (mapc #'delete-overlay lsp-copilot--highlights))
+  (if lsp-copilot-inlay-hints-mode
+      (lsp-copilot-inlay-hints-mode -1))
+
   ;; Send the close event for the active buffer since activating the mode will open it again.
   (lsp-copilot--on-doc-close))
 
@@ -2558,6 +2647,11 @@ textDocument/didOpen for the new file."
   (clrhash lsp-copilot--project-hashmap)
   ;; diagnostics
   (clrhash lsp-copilot--diagnostics-map)
+  ;; document highlights
+  (when lsp-copilot--highlights
+    (mapc #'delete-overlay lsp-copilot--highlights))
+  ;; inlay hints
+  (remove-overlays nil nil 'lsp-copilot--inlay-hint t)
   (lsp-copilot--on-doc-focus (selected-window))
   (message "[LSP-COPILOT] Process restarted."))
 

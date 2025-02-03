@@ -449,27 +449,27 @@ pub(crate) async fn handle_completion_resolve(
                 && detail.as_ref().unwrap() != params_detail.as_ref().unwrap_or(&"".to_string())
             {
                 match documentation {
-                    Some(documentation) => {
-                        match documentation {
-                            lsp_types::Documentation::String(str_doc) => {
-                                resp.documentation = Some(lsp_types::Documentation::String(
-                                    format!("```\n{}\n```\n\n{}", detail.as_ref().unwrap().clone(), str_doc),
-                                ))
-                            }
-                            lsp_types::Documentation::MarkupContent(markdown_doc) => {
-                                resp.documentation = Some(lsp_types::Documentation::MarkupContent(
-                                    lsp_types::MarkupContent {
-                                        kind: markdown_doc.kind.clone(),
-                                        value: format!(
-                                            "```\n{}\n```\n\n{}",
-                                            detail.as_ref().unwrap().clone(),
-                                            markdown_doc.value
-                                        ),
-                                    },
-                                ))
-                            }
+                    Some(documentation) => match documentation {
+                        lsp_types::Documentation::String(str_doc) => {
+                            resp.documentation = Some(lsp_types::Documentation::String(format!(
+                                "```\n{}\n```\n\n{}",
+                                detail.as_ref().unwrap().clone(),
+                                str_doc
+                            )))
                         }
-                    }
+                        lsp_types::Documentation::MarkupContent(markdown_doc) => {
+                            resp.documentation = Some(lsp_types::Documentation::MarkupContent(
+                                lsp_types::MarkupContent {
+                                    kind: markdown_doc.kind.clone(),
+                                    value: format!(
+                                        "```\n{}\n```\n\n{}",
+                                        detail.as_ref().unwrap().clone(),
+                                        markdown_doc.value
+                                    ),
+                                },
+                            ))
+                        }
+                    },
                     None => {
                         resp.documentation = Some(lsp_types::Documentation::MarkupContent(
                             lsp_types::MarkupContent {
@@ -882,6 +882,22 @@ pub(crate) async fn handle_inlay_hints(
         params,
         &language_servers,
         Some(LanguageServerFeature::InlayHints),
+        None,
+    )
+    .await
+    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+}
+
+pub(crate) async fn handle_document_highlight(
+    req: msg::Request,
+    params: lsp_types::DocumentHighlightParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    call_single_language_server::<lsp_types::request::DocumentHighlightRequest>(
+        &req,
+        params,
+        &language_servers,
+        Some(LanguageServerFeature::DocumentHighlight),
         None,
     )
     .await

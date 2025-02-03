@@ -325,6 +325,7 @@ impl Application {
                                         signature_trigger_characters: doc
                                             .get_signature_trigger_characters(),
                                         support_inlay_hints: doc.is_has_inlay_hints_support(),
+                                        support_document_highlight: doc.is_document_highlight_support(),
                                     },
                                 )
                             });
@@ -499,6 +500,9 @@ impl Application {
             .on::<lsp_ext::GetCommands, _, _>(handlers::request::handle_get_commands)
             .on::<lsp_ext::ViewFileText, _, _>(handlers::request::handle_view_file_text)
             .on::<lsp_types::request::InlayHintRequest, _, _>(handlers::request::handle_inlay_hints)
+            .on::<lsp_types::request::DocumentHighlightRequest, _, _>(
+                handlers::request::handle_document_highlight,
+            )
             .finish();
     }
 

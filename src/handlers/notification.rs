@@ -42,6 +42,7 @@ pub(crate) fn handle_did_open_text_document(
                             trigger_characters: doc.get_trigger_characters(),
                             signature_trigger_characters: doc.get_signature_trigger_characters(),
                             support_inlay_hints: doc.is_has_inlay_hints_support(),
+                            support_document_highlight: doc.is_document_highlight_support(),
                         },
                     );
                 }

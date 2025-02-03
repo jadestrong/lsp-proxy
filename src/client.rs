@@ -773,10 +773,6 @@ impl Client {
         })
     }
 
-    pub fn text_document_did_change(&self, params: lsp::DidChangeTextDocumentParams) -> Result<()> {
-        self.notify::<lsp::notification::DidChangeTextDocument>(params)
-    }
-
     pub fn text_document_did_close(&self, params: lsp::DidCloseTextDocumentParams) -> Result<()> {
         self.notify::<lsp::notification::DidCloseTextDocument>(params)
     }
@@ -825,23 +821,6 @@ impl Client {
 
     pub fn cancel(&self, params: lsp::CancelParams) -> Result<()> {
         self.notify::<lsp::notification::Cancel>(params)
-    }
-
-    pub fn text_document_hover(
-        &self,
-        req_id: RequestId,
-        params: lsp::HoverParams,
-    ) -> Option<impl Future<Output = Result<Value>>> {
-        let capabilities = self.capabilities.get().unwrap();
-        match capabilities.hover_provider {
-            Some(
-                lsp::HoverProviderCapability::Simple(true)
-                | lsp::HoverProviderCapability::Options(_),
-            ) => (),
-            _ => return None,
-        }
-
-        Some(self.call::<lsp::request::HoverRequest>(req_id, params))
     }
 
     pub fn did_change_watched_files(

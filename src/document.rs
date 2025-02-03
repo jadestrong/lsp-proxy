@@ -110,6 +110,11 @@ impl Document {
             .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
     }
 
+    pub fn is_document_highlight_support(&self) -> bool {
+        self.language_servers()
+            .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
+    }
+
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
         let language_config =
             config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
