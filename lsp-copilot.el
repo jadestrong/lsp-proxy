@@ -177,6 +177,11 @@ The value can be:
     (repeat :tag "Enabled only for specific modes" symbol))
   :group 'lsp-copilot)
 
+(defcustom lsp-copilot-enable-symbol-highlighting t
+  "Highlight references of the symbol at point."
+  :type 'boolean
+  :group 'lsp-copilot)
+
 (defvar lsp-copilot--exec-file (expand-file-name (if (eq system-type 'windows-nt)
                                                      "./lsp-copilot.exe"
                                                    "./lsp-copilot")
@@ -347,6 +352,11 @@ from language server.")
     (if project
         (remhash token project)
       (error "Project not found: %s" project-root-path))))
+
+(defun lsp-copilot--progressing-p (project-root-path)
+  "Check if the server at PROJECT-ROOT-PATH is in progress."
+  (let ((project (gethash project-root-path lsp-copilot--project-hashmap)))
+    (and project (not (hash-table-empty-p project)))))
 
 ;; diagnostics map
 (defvar lsp-copilot--diagnostics-map (make-hash-table :test 'equal))
@@ -1327,18 +1337,7 @@ Only works when mode is `tick or `alive."
 
 (defun lsp-copilot-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
-  ;; (let ((buf (current-buffer)))
-  ;;   (lsp-copilot--async-request
-  ;;    'textDocument/hover
-  ;;    (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
-  ;;    :success-fn (lambda (hover-help)
-  ;;                  (lsp-copilot--when-buffer-window buf
-  ;;                    (let* ((info (lsp-copilot--format-markup hover-help))
-  ;;                           (info-lines (split-string info "\n")))
-  ;;                      (funcall cb info
-  ;;                               :echo info))))
-  ;;    :deferred :textDocument/hover))
-  (when lsp-copilot--support-document-highlight
+  (when (and lsp-copilot--support-document-highlight (not (lsp-copilot--progressing-p (lsp-copilot-project-root))))
     (let ((buf (current-buffer)))
       (lsp-copilot--async-request
        'textDocument/documentHighlight

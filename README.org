@@ -13,6 +13,7 @@ The features it supports are:
 - format buffer (triggered by ~lsp-copilot-format-buffer~)
 - workspace command, such as ~typescript.restartTsServer(vtsls)~ 、 ~reloadWorkspace(rust-analyzer)~ (triggered by ~lsp-copilot-execute-command~)
 - signature/inlay hints (triggered by ~lsp-copilot-signature-mode~ 、 ~lsp-copilot-inlay-hints-mode~), there might be bugs and usability issues, as it is used relatively infrequently.
+- documentHighlight
 
 [[file:images/show.gif]]
 
