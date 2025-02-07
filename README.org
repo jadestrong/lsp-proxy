@@ -126,7 +126,7 @@ language-servers = [
 ]
 #+end_src
 
-- ~except-features~ can disable server's feature, view the [[https://github.com/jadestrong/lsp-copilot/blob/2ffc7cf0d5e42f66076feabee4c099a36f70997f/src/syntax.rs#L153][supported features]].
+- ~except-features~ can disable server's feature, view the [[https://github.com/jadestrong/lsp-copilot/blob/c3d314d9bc1778b35c6ad2a046fa8b76cad94db4/src/syntax.rs#L150-L168][supported features]].
 
 * Debug
 ** Server bug

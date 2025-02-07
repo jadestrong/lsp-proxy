@@ -563,7 +563,7 @@ FORMAT and ARGS is the same as for `messsage'."
     (lsp-copilot--position)))
 
 (defun lsp-copilot--position-point (pos)
-  "Convert `Position' object POS to a point"
+  "Convert `Position' object POS to a point."
   (let* ((line (plist-get pos :line))
          (character (plist-get pos :character)))
     (lsp-copilot--line-character-to-point line character)))
@@ -604,7 +604,7 @@ If optional MARKERS, make markers."
     (cons beg end)))
 
 (defun lsp-copilot--region-range (start end)
-  "Make Range object for the current region."
+  "Make Range object for the current region START and END."
   (list :start (lsp-copilot--point-position start)
         :end (lsp-copilot--point-position end)))
 
