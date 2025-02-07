@@ -380,8 +380,17 @@ pub(crate) async fn handle_completion(
         let future = async move {
             let items_future = async move {
                 let mut items = Vec::new();
-                while let Some(mut lsp_items) = futures.try_next().await? {
-                    items.append(&mut lsp_items);
+                loop {
+                    match futures.try_next().await {
+                        Ok(Some(mut lsp_items)) => {
+                            items.append(&mut lsp_items);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            error!("Future Error: {}", e);
+                            continue;
+                        }
+                    }
                 }
 
                 // cache items with pretext\uri\bounds_start
