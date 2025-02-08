@@ -4,7 +4,7 @@ taplo = { command = "taplo", args = ["lsp", "stdio"] }
 bash-language-server = { command = "bash-language-server", args = ["start"] }
 vscode-json-language-server = { command = "vscode-json-language-server", args = ["--stdio"], config = { provideFormatter = true, json = { validate = { enable = true } } } }
 jdtls = { command = "jdtls" }
-dart = { command = "dart", args = ["language-server", "--client-id=emacs.lsp-copilot"] }
+dart = { command = "dart", args = ["language-server", "--client-id=emacs.lsp-proxy"] }
 clangd = { command = "clangd" }
 solargraph = { command = "solargraph", args = ["stdio"] }
 

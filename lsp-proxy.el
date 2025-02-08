@@ -1,4 +1,4 @@
-;;; lsp-copilot.el --- Description -*- lexical-binding: t; -*-
+;;; lsp-proxy.el --- Description -*- lexical-binding: t; -*-
 ;;
 ;; Copyright (C) 2023 JadeStrong
 ;;
@@ -8,7 +8,7 @@
 ;; Modified: December 15, 2023
 ;; Version: 0.0.1
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
-;; Homepage: https://github.com/bytedance/lsp-copilot
+;; Homepage: https://github.com/jadestrong/lsp-proxy
 ;; Package-Requires: ((emacs "29.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
 ;;
 ;; This file is not part of GNU Emacs.
@@ -54,105 +54,105 @@
 (defvar flycheck-checker)
 (defvar flycheck-checkers)
 
-(defgroup lsp-copilot nil
-  "Interaction with Lsp Copilot Server."
-  :prefix "lsp-copilot-"
+(defgroup lsp-proxy nil
+  "Interaction with Lsp Proxy Server."
+  :prefix "lsp-proxy-"
   :group 'tools)
 
-(defcustom lsp-copilot-user-languages-config (expand-file-name (concat user-emacs-directory (file-name-as-directory "lsp-copilot") "languages.toml"))
+(defcustom lsp-proxy-user-languages-config (expand-file-name (concat user-emacs-directory (file-name-as-directory "lsp-proxy") "languages.toml"))
   "The user config file to store custom language config."
   :type 'string
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-log-file-directory temporary-file-directory
-  "The directory for `lsp-copilot` server to generate log file."
+(defcustom lsp-proxy-log-file-directory temporary-file-directory
+  "The directory for `lsp-proxy` server to generate log file."
   :type 'string
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-log-max 0
+(defcustom lsp-proxy-log-max 0
   "Max size of events buffer. 0 disables, nil means infinite.
 Enabling event logging may slightly affect performance."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'integer)
 
-(defcustom lsp-copilot-log-buffer-max message-log-max
+(defcustom lsp-proxy-log-buffer-max message-log-max
   "Maximum number of lines to keep in th elog buffer.
 If nil, disable message logging.  If t, log messages but don’t truncate
 the buffer when it becomes large."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type '(choice (const :tag "Disable" nil)
           (integer :tag "lines")
           (const :tag "Unlimited" t)))
 
-(defcustom lsp-copilot--send-changes-idle-time 0
+(defcustom lsp-proxy--send-changes-idle-time 0
   "Don't tell server of changes before Emacs's been idle for this many seconds."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'number)
 
-(defcustom lsp-copilot-idle-delay 0.500
+(defcustom lsp-proxy-idle-delay 0.500
   "Debounce interval for `after-change-functions'."
   :type 'number
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-on-idle-hook nil
-  "Hooks to run after `lsp-copilot-idle-delay'."
+(defcustom lsp-proxy-on-idle-hook nil
+  "Hooks to run after `lsp-proxy-idle-delay'."
   :type 'hook
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-hover-buffer "*lsp-copilot-help*"
+(defcustom lsp-proxy-hover-buffer "*lsp-proxy-help*"
   "Buffer for display hover info."
   :type 'string
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-diagnostics-buffer "*lsp-copilot-diagnostics*"
+(defcustom lsp-proxy-diagnostics-buffer "*lsp-proxy-diagnostics*"
   "Buffer for display diagnostics."
   :type 'string
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-signature-buffer " *lsp-copilot-signature*"
+(defcustom lsp-proxy-signature-buffer " *lsp-proxy-signature*"
   "Buffer for display signature help info."
   :type 'string
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-signature-auto-active nil
+(defcustom lsp-proxy-signature-auto-active nil
   "If auto active signature help."
   :type 'boolean
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-trim-trailing-whitespace t
+(defcustom lsp-proxy-trim-trailing-whitespace t
   "Trim trailing whitespace on a line."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'boolean)
 
-(defcustom lsp-copilot-insert-final-newline t
+(defcustom lsp-proxy-insert-final-newline t
   "Insert a newline character at the end of the file if one does not exist."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'boolean)
 
-(defcustom lsp-copilot-trim-final-newlines t
+(defcustom lsp-proxy-trim-final-newlines t
   "Trim all newlines after the final newline at the end of the file."
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'boolean)
 
-(defcustom lsp-copilot-log-level 1
+(defcustom lsp-proxy-log-level 1
   "A number indicating the log level. Defaults to 1."
   :type '(choice (const :tag "Warn" 0)
           (const :tag "Info" 1)
           (const :tag "Debug" 2)
           (const :tag "Trace" 3))
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defface lsp-copilot-hover-posframe
+(defface lsp-proxy-hover-posframe
   '((t :inherit tooltip))
-  "Background and foreground for `lsp-copilot-hover-posframe'."
-  :group 'lsp-copilot)
+  "Background and foreground for `lsp-proxy-hover-posframe'."
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-signature-retrigger-keys '(return)
+(defcustom lsp-proxy-signature-retrigger-keys '(return)
   "Character strings used to retrigger a new textDocument/signatureHelp request."
   :type 'list
-  :group 'lsp-copilot-mode)
+  :group 'lsp-proxy-mode)
 
-(defcustom lsp-copilot-diagnostics-provider :auto
+(defcustom lsp-proxy-diagnostics-provider :auto
   "The checker backend provider."
   :type
   '(choice
@@ -162,9 +162,9 @@ the buffer when it becomes large."
     (const :tag "Use neither flymake nor lsp" :none)
     (const :tag "Prefer flymake" t)
     (const :tag "Prefer flycheck" nil))
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-inlay-hints-mode-config nil
+(defcustom lsp-proxy-inlay-hints-mode-config nil
   "Configuration for enabling inlay hints mode in specific contexts.
 The value can be:
 - nil: Inlay hints mode is disabled.
@@ -175,74 +175,74 @@ The value can be:
     (const :tag "Disabled" nil)
     (const :tag "Enabled for all buffers" t)
     (repeat :tag "Enabled only for specific modes" symbol))
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defcustom lsp-copilot-enable-symbol-highlighting t
+(defcustom lsp-proxy-enable-symbol-highlighting t
   "Highlight references of the symbol at point."
   :type 'boolean
-  :group 'lsp-copilot)
+  :group 'lsp-proxy)
 
-(defvar lsp-copilot--exec-file (expand-file-name (if (eq system-type 'windows-nt)
-                                                     "./lsp-copilot.exe"
-                                                   "./lsp-copilot")
+(defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
+                                                     "./lsp-proxy.exe"
+                                                   "./lsp-proxy")
                                                  (if load-file-name
                                                      (file-name-directory load-file-name)
                                                    default-directory)))
-(defvar-local lsp-copilot--on-idle-timer nil)
+(defvar-local lsp-proxy--on-idle-timer nil)
 
-(defvar lsp-copilot--log-file nil
+(defvar lsp-proxy--log-file nil
   "The log file name.")
 
-(defvar lsp-copilot--connection nil
-  "Lsp Copilot agent jsonrcp connection instnace.")
+(defvar lsp-proxy--connection nil
+  "Lsp Proxy agent jsonrcp connection instnace.")
 
-(defvar lsp-copilot--opened-buffers nil
-  "List of buffers that have been opened in Lsp Copilot.")
+(defvar lsp-proxy--opened-buffers nil
+  "List of buffers that have been opened in Lsp Proxy.")
 
-(defvar-local lsp-copilot--doc-version 0
+(defvar-local lsp-proxy--doc-version 0
   "The document version of the current buffer. Incremented after each change.")
 
-(defvar-local lsp-copilot--recent-changes nil
-  "Recent buffer changes as collected by `lsp-copilot--before-change'.")
+(defvar-local lsp-proxy--recent-changes nil
+  "Recent buffer changes as collected by `lsp-proxy--before-change'.")
 
-(defvar-local lsp-copilot--change-idle-timer nil
+(defvar-local lsp-proxy--change-idle-timer nil
   "Idle timer for didChange signals.")
 
-(defvar-local lsp-copilot--completion-trigger-characters nil
+(defvar-local lsp-proxy--completion-trigger-characters nil
   "Completion trigger characters.")
 
-(defvar-local lsp-copilot--signature-trigger-characters nil
+(defvar-local lsp-proxy--signature-trigger-characters nil
   "Signature trigger characters.")
 
-(defvar-local lsp-copilot-enable-relative-indentation nil
+(defvar-local lsp-proxy-enable-relative-indentation nil
   "Enable relative indentation when insert texts, snippets ...
 from language server.")
 
-(defvar-local lsp-copilot-diagnostics--flycheck-enabled nil
-  "True when lsp-copilot diagnostics flycheck integration
+(defvar-local lsp-proxy-diagnostics--flycheck-enabled nil
+  "True when lsp-proxy diagnostics flycheck integration
  has been enabled in this buffer.")
 
-(defvar-local lsp-copilot-diagnostics--flymake-enabled nil
-  "True when lsp-copilot diagnostics flymake integration
+(defvar-local lsp-proxy-diagnostics--flymake-enabled nil
+  "True when lsp-proxy diagnostics flymake integration
  has been enabled in this buffer.")
 
-(defvar-local lsp-copilot-diagnostics--flycheck-checker nil
-  "The value of flycheck-checker before lsp-copilot diagnostics was activated.")
+(defvar-local lsp-proxy-diagnostics--flycheck-checker nil
+  "The value of flycheck-checker before lsp-proxy diagnostics was activated.")
 
-(defvar-local lsp-copilot--signature-last nil)
-(defvar-local lsp-copilot--signature-last-index nil)
-(defvar lsp-copilot--signature-last-buffer nil)
+(defvar-local lsp-proxy--signature-last nil)
+(defvar-local lsp-proxy--signature-last-index nil)
+(defvar lsp-proxy--signature-last-buffer nil)
 
-(defvar-local lsp-copilot--support-inlay-hints nil
+(defvar-local lsp-proxy--support-inlay-hints nil
   "Is there any server associated with this buffer that support `textDocument/inlayHint' request.")
 
-(defvar-local lsp-copilot--support-document-highlight nil
+(defvar-local lsp-proxy--support-document-highlight nil
   "Is there any server associated with this buffer that support `textDocument/documentHighlight' request.")
 
-(defvar lsp-copilot--show-message t
-  "If non-nil, show debug message from `lsp-copilot-mode'.")
+(defvar lsp-proxy--show-message t
+  "If non-nil, show debug message from `lsp-proxy-mode'.")
 
-(defvar lsp-copilot--formatting-indent-alist
+(defvar lsp-proxy--formatting-indent-alist
   ;; Taken from `dtrt-indent-mode'
   '(
     (ada-mode                   . ada-indent)                       ; Ada
@@ -293,7 +293,7 @@ from language server.")
     (default                    . standard-indent))                 ; default fallback
   "A mapping from `major-mode' to its indent variable.")
 
-(defconst lsp-copilot--kind->symbol
+(defconst lsp-proxy--kind->symbol
   '((1 . text)
     (2 . method)
     (3 . function)
@@ -320,68 +320,68 @@ from language server.")
     (24 . operator)
     (25 . type-parameter)))
 
-(defconst lsp-copilot--message-type-face
+(defconst lsp-proxy--message-type-face
   `((1 . ,compilation-error-face)
     (2 . ,compilation-warning-face)
     (3 . ,compilation-message-face)
     (4 . ,compilation-info-face)))
 
 ;; progress token map
-(defvar lsp-copilot--project-hashmap (make-hash-table :test 'equal))
+(defvar lsp-proxy--project-hashmap (make-hash-table :test 'equal))
 
-(defun lsp-copilot--add-project (project-root-path project-map)
+(defun lsp-proxy--add-project (project-root-path project-map)
   (puthash project-root-path (make-hash-table :test 'equal) project-map))
 
-(defun lsp-copilot--remove-project (project-root-path project-map)
+(defun lsp-proxy--remove-project (project-root-path project-map)
   (if project-root-path
       (remhash project-root-path project-map)))
 
-(defun lsp-copilot--get-or-create-project (project-root-path project-map)
+(defun lsp-proxy--get-or-create-project (project-root-path project-map)
   (or (gethash project-root-path project-map)
-      (lsp-copilot--add-project project-root-path project-map)
+      (lsp-proxy--add-project project-root-path project-map)
       (gethash project-root-path project-map)))
 
-(defun lsp-copilot--set-work-done-token (project-root-path token value)
-  (let ((project (lsp-copilot--get-or-create-project project-root-path lsp-copilot--project-hashmap)))
+(defun lsp-proxy--set-work-done-token (project-root-path token value)
+  (let ((project (lsp-proxy--get-or-create-project project-root-path lsp-proxy--project-hashmap)))
     (if project
         (puthash token value project)
       (error "Project not found: %s" project-root-path))))
 
-(defun lsp-copilot--rem-work-done-token (project-root-path token)
-  (let ((project (gethash project-root-path lsp-copilot--project-hashmap)))
+(defun lsp-proxy--rem-work-done-token (project-root-path token)
+  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
     (if project
         (remhash token project)
       (error "Project not found: %s" project-root-path))))
 
-(defun lsp-copilot--progressing-p (project-root-path)
+(defun lsp-proxy--progressing-p (project-root-path)
   "Check if the server at PROJECT-ROOT-PATH is in progress."
-  (let ((project (gethash project-root-path lsp-copilot--project-hashmap)))
+  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
     (and project (not (hash-table-empty-p project)))))
 
 ;; diagnostics map
-(defvar lsp-copilot--diagnostics-map (make-hash-table :test 'equal))
+(defvar lsp-proxy--diagnostics-map (make-hash-table :test 'equal))
 
 ;;
 ;; schedule
 ;;
-(defun lsp-copilot--idle-reschedule (buffer)
-  "LSP copilot idle schedule on current BUFFER."
-  (when lsp-copilot--on-idle-timer
-    (cancel-timer lsp-copilot--on-idle-timer))
-  (setq-local lsp-copilot--on-idle-timer (run-with-idle-timer
-                                          lsp-copilot-idle-delay
+(defun lsp-proxy--idle-reschedule (buffer)
+  "LSP proxy idle schedule on current BUFFER."
+  (when lsp-proxy--on-idle-timer
+    (cancel-timer lsp-proxy--on-idle-timer))
+  (setq-local lsp-proxy--on-idle-timer (run-with-idle-timer
+                                          lsp-proxy-idle-delay
                                           nil
-                                          #'lsp-copilot--on-idle
+                                          #'lsp-proxy--on-idle
                                           buffer)))
-(defun lsp-copilot--on-idle (buffer)
+(defun lsp-proxy--on-idle (buffer)
   "Start post command loop on current BUFFER."
   (when (and (buffer-live-p buffer)
              (equal buffer (current-buffer))
-             lsp-copilot-mode)
-    (run-hooks 'lsp-copilot-on-idle-hook)))
+             lsp-proxy-mode)
+    (run-hooks 'lsp-proxy-on-idle-hook)))
 
 ;; log message
-(defun lsp-copilot--message  (format &rest args)
+(defun lsp-proxy--message  (format &rest args)
   "Wrapper for `message'
 
 We `inhibit-message' the message when the cursor is in the
@@ -392,42 +392,42 @@ minibuffer prompt. The issue with async messages is already fixed
 in emacs 27.
 
 See #2049"
-  (when lsp-copilot--show-message
+  (when lsp-proxy--show-message
     (let ((inhibit-message (or inhibit-message
                                (and (minibufferp)
                                     (version< emacs-version "27.0")))))
       (apply #'message format args))))
 
-(defun lsp-copilot--info (format &rest args)
+(defun lsp-proxy--info (format &rest args)
   "Display lsp info message with FORMAT with ARGS."
-  (lsp-copilot--message "%s :: %s" (propertize "LSP-COPILOT" 'face 'success) (apply #'format format args)))
+  (lsp-proxy--message "%s :: %s" (propertize "LSP-PROXY" 'face 'success) (apply #'format format args)))
 
-(defun lsp-copilot--warn (format &rest args)
+(defun lsp-proxy--warn (format &rest args)
   "Display lsp warn message with FORMAT with ARGS."
-  (lsp-copilot--message "%s :: %s" (propertize "LSP-COPILOT" 'face 'warning) (apply #'format format args)))
+  (lsp-proxy--message "%s :: %s" (propertize "LSP-PROXY" 'face 'warning) (apply #'format format args)))
 
-(defun lsp-copilot--error (format &rest args)
+(defun lsp-proxy--error (format &rest args)
   "Display lsp error message with FORMAT with ARGS."
-  (lsp-copilot--message "%s :: %s" (propertize "LSP-COPILOT" 'face 'error) (apply #'format format args)))
+  (lsp-proxy--message "%s :: %s" (propertize "LSP-PROXY" 'face 'error) (apply #'format format args)))
 
-(defun lsp-copilot--propertize (str type)
+(defun lsp-proxy--propertize (str type)
   "Propertize STR as per TYPE."
-  (propertize str 'face (alist-get type lsp-copilot--message-type-face)))
+  (propertize str 'face (alist-get type lsp-proxy--message-type-face)))
 
 ;; Buffer local variable for storing number of lines.
-(defvar lsp-copilot--log-lines)
-(defun lsp-copilot-log (format &rest args)
-  "Log message to the *lsp-copilot-log* buffer.
+(defvar lsp-proxy--log-lines)
+(defun lsp-proxy-log (format &rest args)
+  "Log message to the *lsp-proxy-log* buffer.
 FORMAT and ARGS is the same as for `messsage'."
-  (when lsp-copilot-log-buffer-max
-    (let ((log-buffer (get-buffer "*lsp-copilot-log*"))
+  (when lsp-proxy-log-buffer-max
+    (let ((log-buffer (get-buffer "*lsp-proxy-log*"))
           (inhibit-read-only t))
       (unless log-buffer
-        (setq log-buffer (get-buffer-create "*lsp-copilot-log*"))
+        (setq log-buffer (get-buffer-create "*lsp-proxy-log*"))
         (with-current-buffer log-buffer
           (buffer-disable-undo)
           (view-mode 1)
-          (set (make-local-variable 'lsp-copilot--log-lines) 0)))
+          (set (make-local-variable 'lsp-proxy--log-lines) 0)))
       (with-current-buffer log-buffer
         (save-excursion
           (let* ((message (apply 'format format args))
@@ -449,60 +449,60 @@ FORMAT and ARGS is the same as for `messsage'."
               (insert "\n"))
             (insert message)
 
-            (setq lsp-copilot--log-lines (+ lsp-copilot--log-lines newlines))
+            (setq lsp-proxy--log-lines (+ lsp-proxy--log-lines newlines))
 
-            (when (and (integerp lsp-copilot-log-buffer-max) (> lsp-copilot--log-lines lsp-copilot-log-buffer-max))
-              (let ((to-delete (- lsp-copilot--log-lines lsp-copilot-log-buffer-max)))
+            (when (and (integerp lsp-proxy-log-buffer-max) (> lsp-proxy--log-lines lsp-proxy-log-buffer-max))
+              (let ((to-delete (- lsp-proxy--log-lines lsp-proxy-log-buffer-max)))
                 (goto-char (point-min))
                 (forward-line to-delete)
                 (delete-region (point-min) (point))
-                (setq lsp-copilot--log-lines lsp-copilot-log-buffer-max)))))))))
+                (setq lsp-proxy--log-lines lsp-proxy-log-buffer-max)))))))))
 
 ;; project root
-(defvar-local lsp-copilot--cur-project-root nil)
-(defun lsp-copilot-project-root ()
+(defvar-local lsp-proxy--cur-project-root nil)
+(defun lsp-proxy-project-root ()
   "Return the project root of current project."
-  (if lsp-copilot--cur-project-root
-      lsp-copilot--cur-project-root
+  (if lsp-proxy--cur-project-root
+      lsp-proxy--cur-project-root
     (let* ((root (project-root (project-current)))
            (root-path (and root (directory-file-name root))))
-      (setq lsp-copilot--cur-project-root root-path)
+      (setq lsp-proxy--cur-project-root root-path)
       root-path)))
 ;;
 ;; utils
 ;;
 (eval-and-compile
-  (defun lsp-copilot--transform-pattern (pattern)
+  (defun lsp-proxy--transform-pattern (pattern)
     "Transform PATTERN to (&plist PATTERN) recursively."
     (cons '&plist
           (mapcar (lambda (p)
                     (if (listp p)
-                        (lsp-copilot--transform-pattern p)
+                        (lsp-proxy--transform-pattern p)
                       p))
                   pattern))))
 
-(defmacro lsp-copilot--dbind (pattern source &rest body)
+(defmacro lsp-proxy--dbind (pattern source &rest body)
   "Destructure SOURCE against plist PATTERN and eval BODY."
   (declare (indent 2))
-  `(-let ((,(lsp-copilot--transform-pattern pattern) ,source))
+  `(-let ((,(lsp-proxy--transform-pattern pattern) ,source))
      ,@body))
 
-(defvar lsp-copilot--already-widened nil)
-(defmacro lsp-copilot--save-restriction-and-excursion (&rest form)
+(defvar lsp-proxy--already-widened nil)
+(defmacro lsp-proxy--save-restriction-and-excursion (&rest form)
   (declare (indent 0) (debug t))
-  `(if lsp-copilot--already-widened
+  `(if lsp-proxy--already-widened
        (save-excursion ,@form)
-     (let* ((lsp-copilot--already-widened t))
+     (let* ((lsp-proxy--already-widened t))
        (save-restriction
          (widen)
          (save-excursion ,@form)))))
 
-(cl-defmacro lsp-copilot--when-live-buffer (buf &rest body)
+(cl-defmacro lsp-proxy--when-live-buffer (buf &rest body)
   "Check BUF live, then do BODY in it." (declare (indent 1) (debug t))
   (let ((b (cl-gensym)))
     `(let ((,b ,buf)) (if (buffer-live-p ,b) (with-current-buffer ,b ,@body)))))
 
-(cl-defmacro lsp-copilot--when-buffer-window (buf &body body)
+(cl-defmacro lsp-proxy--when-buffer-window (buf &body body)
   "Check BUF showing somewhere, then do BODY in it." (declare (indent 1) (debug t))
   (let ((b (cl-gensym)))
     `(let ((,b ,buf))
@@ -510,7 +510,7 @@ FORMAT and ARGS is the same as for `messsage'."
        (when (or (get-buffer-window ,b) (ert-running-test))
          (with-current-buffer ,b ,@body)))))
 
-(defun lsp-copilot--calculate-column ()
+(defun lsp-proxy--calculate-column ()
   "Calculate character offset of cursor in current line."
   (/ (- (length
          (encode-coding-region
@@ -519,7 +519,7 @@ FORMAT and ARGS is the same as for `messsage'."
         2)
      2))
 
-(defun lsp-copilot--get-uri ()
+(defun lsp-proxy--get-uri ()
   "Get URI of current buffer."
   (cond
    ((not buffer-file-name)
@@ -531,10 +531,10 @@ FORMAT and ARGS is the same as for `messsage'."
     (concat "file://" (url-encode-url buffer-file-name)))))
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
-(defun lsp-copilot--uri-to-path (uri)
+(defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-copilot--cur-project-root (file-remote-p lsp-copilot--cur-project-root)))
+  (let* ((remote-prefix (and lsp-proxy--cur-project-root (file-remote-p lsp-proxy--cur-project-root)))
          (url (url-generic-parse-url uri)))
     ;; Only parse file:// URIs, leave other URI untouched as
     ;; `file-name-handler-alist' should know how to handle them
@@ -549,29 +549,29 @@ FORMAT and ARGS is the same as for `messsage'."
           (concat remote-prefix normalized))
       uri)))
 
-(defun lsp-copilot--get-source ()
+(defun lsp-proxy--get-source ()
   "Get source code from current buffer."
   (buffer-substring-no-properties (point-min) (point-max)))
 
-(defun lsp-copilot--position ()
-  (list :line (1- (line-number-at-pos)) :character (lsp-copilot--calculate-column)))
+(defun lsp-proxy--position ()
+  (list :line (1- (line-number-at-pos)) :character (lsp-proxy--calculate-column)))
 
-(defun lsp-copilot--point-position (point)
+(defun lsp-proxy--point-position (point)
   "Get position of the POINT."
-  (lsp-copilot--save-restriction-and-excursion
+  (lsp-proxy--save-restriction-and-excursion
     (goto-char point)
-    (lsp-copilot--position)))
+    (lsp-proxy--position)))
 
-(defun lsp-copilot--position-point (pos)
+(defun lsp-proxy--position-point (pos)
   "Convert `Position' object POS to a point."
   (let* ((line (plist-get pos :line))
          (character (plist-get pos :character)))
-    (lsp-copilot--line-character-to-point line character)))
+    (lsp-proxy--line-character-to-point line character)))
 
-(defun lsp-copilot--line-character-to-point (line character)
+(defun lsp-proxy--line-character-to-point (line character)
   "Return the point for character CHARACTER on line LINE."
   (let ((inhibit-field-text-motion t))
-    (lsp-copilot--save-restriction-and-excursion
+    (lsp-proxy--save-restriction-and-excursion
       (goto-char (point-min))
       (forward-line line)
       ;; server may send character position beyond the current line and we
@@ -582,12 +582,12 @@ FORMAT and ARGS is the same as for `messsage'."
           (forward-char character)
           (point))))))
 
-(defun lsp-copilot--position-equal (pos-a pos-b)
+(defun lsp-proxy--position-equal (pos-a pos-b)
   "Return whether POS-A and POS-B positions are equal."
   (and (= (plist-get pos-a :line) (plist-get pos-b :line))
        (= (plist-get pos-a :character) (plist-get pos-b :character))))
 
-(defun lsp-copilot--position-compare (pos-a pos-b)
+(defun lsp-proxy--position-compare (pos-a pos-b)
   "Return t if POS-A if greater thatn POS-B."
   (let* ((line-a (plist-get pos-a :line))
          (line-b (plist-get pos-b :line)))
@@ -596,25 +596,25 @@ FORMAT and ARGS is the same as for `messsage'."
       (> line-a line-b))))
 
 ;; TODO fix point if the line or charactor is -1
-(defun lsp-copilot--range-region (range)
+(defun lsp-proxy--range-region (range)
   "Return region (BEG . END) that represents LSP RANGE.
 If optional MARKERS, make markers."
-  (let ((beg (lsp-copilot--position-point (plist-get range :start)))
-        (end (lsp-copilot--position-point (plist-get range :end))))
+  (let ((beg (lsp-proxy--position-point (plist-get range :start)))
+        (end (lsp-proxy--position-point (plist-get range :end))))
     (cons beg end)))
 
-(defun lsp-copilot--region-range (start end)
+(defun lsp-proxy--region-range (start end)
   "Make Range object for the current region START and END."
-  (list :start (lsp-copilot--point-position start)
-        :end (lsp-copilot--point-position end)))
+  (list :start (lsp-proxy--point-position start)
+        :end (lsp-proxy--point-position end)))
 
-(defun lsp-copilot--region-or-line ()
+(defun lsp-proxy--region-or-line ()
   "The active region or the current line."
   (if (use-region-p)
-      (lsp-copilot--region-range (region-beginning) (region-end))
-    (lsp-copilot--region-range (line-beginning-position) (line-end-position))))
+      (lsp-proxy--region-range (region-beginning) (region-end))
+    (lsp-proxy--region-range (line-beginning-position) (line-end-position))))
 
-(defun lsp-copilot--format-markup (markup)
+(defun lsp-proxy--format-markup (markup)
   "Format MARKUP according to LSP's spec."
   (pcase-let ((`(,string ,mode)
                (if (stringp markup) (list markup 'gfm-view-mode)
@@ -632,11 +632,11 @@ If optional MARKERS, make markers."
       (font-lock-ensure)
       (string-trim (buffer-string)))))
 
-(defun lsp-copilot--markdown-render ()
+(defun lsp-proxy--markdown-render ()
   (when (fboundp 'gfm-view-mode)
     (let ((inhibit-message t))
       (setq-local markdown-fontify-code-blocks-natively t)
-      (set-face-background 'markdown-code-face (face-attribute 'lsp-copilot-hover-posframe :background nil t))
+      (set-face-background 'markdown-code-face (face-attribute 'lsp-proxy-hover-posframe :background nil t))
       ;; (set-face-attribute 'markdown-code-face nil :height 230)
       (gfm-view-mode)))
   (read-only-mode 0)
@@ -646,7 +646,7 @@ If optional MARKERS, make markers."
 
   (setq-local mode-line-format nil))
 
-(defun lsp-copilot--expand-snippet (snippet &optional start end expand-env)
+(defun lsp-proxy--expand-snippet (snippet &optional start end expand-env)
   "Wrapper of `yas-expand-snippet' with all of it arguments.
 The snippet will be convert to LSP style and indent according to
 LSP server according to
@@ -657,7 +657,7 @@ LSP server result."
          (yas-also-auto-indent-first-line nil))
     (yas-expand-snippet snippet start end expand-env)))
 
-(defun lsp-copilot--indent-lines (start end &optional insert-text-mode?)
+(defun lsp-proxy--indent-lines (start end &optional insert-text-mode?)
   "Indent from START to END based on INSERT-TEXT-MODE? value.
 - When INSERT-TEXT-MODE? is provided
   - if it's `lsp/insert-text-mode-as-it', do no editor indentation.
@@ -674,7 +674,7 @@ LSP server result."
             (cond ((eql insert-text-mode? 1)
                    #'ignore)
                   ((or (equal insert-text-mode? 2)
-                       lsp-copilot-enable-relative-indentation
+                       lsp-proxy-enable-relative-indentation
                        ;; Indenting snippets is extremely slow in `org-mode' buffers
                        ;; since it has to calculate indentation based on SRC block
                        ;; position.  Thus we use relative indentation as default.
@@ -690,7 +690,7 @@ LSP server result."
         (funcall indent-line-function)
         (forward-line)))))
 
-(defun lsp-copilot--get-file-contents-from-list (paths)
+(defun lsp-proxy--get-file-contents-from-list (paths)
   "Get all file content of PATHS list."
   (apply #'vector
          (mapcar
@@ -699,22 +699,22 @@ LSP server result."
               (with-current-buffer buffer
                 (list :path path :content (buffer-substring-no-properties (point-min) (point-max)))))) paths)))
 
-(defun lsp-copilot--TextDocumentIdentifier ()
+(defun lsp-proxy--TextDocumentIdentifier ()
   "Make a TextDocumentIdentifier object."
   `(:textDocument
-    (:uri ,(lsp-copilot--get-uri))))
+    (:uri ,(lsp-proxy--get-uri))))
 
-(defun lsp-copilot--TextDocumentPosition ()
+(defun lsp-proxy--TextDocumentPosition ()
   "Make a TextDocumentPosition object."
-  (append `(:position ,(lsp-copilot--position))
-          (lsp-copilot--TextDocumentIdentifier)))
+  (append `(:position ,(lsp-proxy--position))
+          (lsp-proxy--TextDocumentIdentifier)))
 
-(defun lsp-copilot--request-or-notify-params (params &rest args)
+(defun lsp-proxy--request-or-notify-params (params &rest args)
   "Wrap request or notify params base PARAMS and add extra ARGS."
   (let ((rest (apply 'append args)))
-    (append (list :uri (lsp-copilot--get-uri) :params params) rest)))
+    (append (list :uri (lsp-proxy--get-uri) :params params) rest)))
 
-(defun lsp-copilot--advice-json-parse (old-fn &rest args)
+(defun lsp-proxy--advice-json-parse (old-fn &rest args)
   "Try to parse bytecode instead of json."
   (or
    (when (equal (following-char) ?#)
@@ -728,47 +728,47 @@ LSP server result."
                 'json-parse-buffer
               'json-read)
             :around
-            #'lsp-copilot--advice-json-parse)
+            #'lsp-proxy--advice-json-parse)
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; xref integration ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defun lsp-copilot--xref-backend () "lsp-copilot xref backend." 'xref-lsp-copilot)
+(defun lsp-proxy--xref-backend () "lsp-proxy xref backend." 'xref-lsp-proxy)
 
-(cl-defmethod xref-backend-identifier-at-point ((_backend (eql xref-lsp-copilot)))
+(cl-defmethod xref-backend-identifier-at-point ((_backend (eql xref-lsp-proxy)))
   (propertize (or (thing-at-point 'symbol) "")
               'identifier-at-point t))
 
-(cl-defmethod xref-backend-identifier-completion-table ((_backend (eql xref-lsp-copilot)))
+(cl-defmethod xref-backend-identifier-completion-table ((_backend (eql xref-lsp-proxy)))
   (list (propertize (or (thing-at-point 'symbol) "")
                     'identifier-at-point t)))
 
-(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-copilot)) _identifier)
+(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-copilot-find-definition)))
+    (lsp-proxy-find-definition)))
 
-(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-copilot)) _identifier)
+(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-copilot-find-references)))
+    (lsp-proxy-find-references)))
 
-(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-copilot)) _identifier)
+(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-copilot-find-implementations)))
+    (lsp-proxy-find-implementations)))
 
-(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-copilot)) _identifier)
+(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-copilot-find-type-definition)))
+    (lsp-proxy-find-type-definition)))
 
 
-(defcustom lsp-copilot-xref-force-references nil
+(defcustom lsp-proxy-xref-force-references nil
   "If non-nil threat everything as references(e. g. jump if only one item.)"
-  :group 'lsp-copilot
+  :group 'lsp-proxy
   :type 'boolean)
 
-(defcustom lsp-copilot-progress-prefix "⌛ "
+(defcustom lsp-proxy-progress-prefix "⌛ "
   "Progress prefix."
-  :group 'lsp-copilot-mode
+  :group 'lsp-proxy-mode
   :type 'string)
 
-(defun lsp-copilot-show-xrefs (xrefs display-action references?)
+(defun lsp-proxy-show-xrefs (xrefs display-action references?)
   (unless (region-active-p) (push-mark nil t))
   (if (boundp 'xref-show-definitions-function)
       (with-no-warnings
@@ -784,13 +784,13 @@ LSP server result."
                       `(auto-jump . ,xref-auto-jump-to-first-definition)))))
     (xref--show-xrefs xrefs display-action)))
 
-(defun lsp-copilot--process-locations (locations)
+(defun lsp-proxy--process-locations (locations)
   "Process LOCATIONS and show xrefs."
   (if (seq-empty-p locations)
-      (lsp-copilot--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
+      (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
     (when-let* ((locs (cl-mapcar (lambda (it)
                                    (let* ((uri (plist-get it :uri))
-                                          (filepath (lsp-copilot--uri-to-path uri))
+                                          (filepath (lsp-proxy--uri-to-path uri))
                                           (visiting (find-buffer-visiting filepath))
                                           (range (plist-get it :range))
                                           (start (plist-get range :start))
@@ -803,8 +803,8 @@ LSP server result."
                                                      (save-excursion
                                                        (save-restriction
                                                          (widen)
-                                                         (let* ((beg (lsp-copilot--position-point start))
-                                                                (end (lsp-copilot--position-point end))
+                                                         (let* ((beg (lsp-proxy--position-point start))
+                                                                (end (lsp-proxy--position-point end))
                                                                 (bol (progn (goto-char beg) (line-beginning-position)))
                                                                 (summary (buffer-substring bol (line-end-position)))
                                                                 (hi-beg (- beg bol))
@@ -819,14 +819,14 @@ LSP server result."
                                        (with-temp-buffer
                                          (insert-file-contents-literally filepath)
                                          (funcall collect)))
-                                      (t (lsp-copilot--warn "Failed  to process xref entry for file %s" filepath)))))
+                                      (t (lsp-proxy--warn "Failed  to process xref entry for file %s" filepath)))))
                                  (if (vectorp locations) locations (vector locations)))))
-      (lsp-copilot-show-xrefs locs nil nil))))
+      (lsp-proxy-show-xrefs locs nil nil))))
 
 ;;
 ;; text-edit
 ;;
-(defun lsp-copilot--apply-text-document-edit (change)
+(defun lsp-proxy--apply-text-document-edit (change)
   "Apply CHANGE."
   (let* ((kind (gethash "kind" change))
          (options (gethash "options" change))
@@ -837,7 +837,7 @@ LSP server result."
     (cond
      ((equal kind "create")
       (setq uri (gethash "uri" change))
-      (setq filename (lsp-copilot--uri-to-path uri))
+      (setq filename (lsp-proxy--uri-to-path uri))
       (when options
         (setq overwrite (gethash "overwrite" options)
               ignoreIfExists (gethash "ignoreIfExists" options)))
@@ -852,7 +852,7 @@ LSP server result."
                 (delete-file filename t)
                 (with-current-buffer (find-file-noselect filename)
                   (save-buffer)))
-            (lsp-copilot--warn "Cannot create file %s." filename))
+            (lsp-proxy--warn "Cannot create file %s." filename))
         (when (find-buffer-visiting filename)
           (with-current-buffer (find-buffer-visiting filename)
             (save-buffer)
@@ -862,9 +862,9 @@ LSP server result."
           (save-buffer))))
      ((equal kind "rename")
       (setq uri (gethash "oldUri" change))
-      (setq filename (lsp-copilot--uri-to-path uri))
+      (setq filename (lsp-proxy--uri-to-path uri))
       (setq new-uri (gethash "newUri" change))
-      (setq new-filename (lsp-copilot--uri-to-path new-uri))
+      (setq new-filename (lsp-proxy--uri-to-path new-uri))
       (when options
         (setq overwrite (gethash "overwrite" options)
               ignoreIfExists (gethash "ignoreIfExists" options)))
@@ -881,7 +881,7 @@ LSP server result."
                     (save-buffer)
                     (kill-buffer)))
                 (rename-file filename new-filename t))
-            (lsp-copilot--warn "Cannot rename %s to %s" filename new-filename))
+            (lsp-proxy--warn "Cannot rename %s to %s" filename new-filename))
         (if (find-buffer-visiting filename) ;; new filename not existing
             (progn
               (with-current-buffer (find-buffer-visiting filename)
@@ -892,7 +892,7 @@ LSP server result."
           (rename-file filename new-filename t))))
      ((equal kind "delete")
       (setq uri (gethash "uri" change))
-      (setq filename (lsp-copilot--uri-to-path uri))
+      (setq filename (lsp-proxy--uri-to-path uri))
       (when options
         (setq recursive (gethash "recursive" options)
               ignoreIfNotExists (gethash "ignoreIfNotExists" options)))
@@ -908,14 +908,14 @@ LSP server result."
                           (save-buffer)
                           (kill-buffer))))
                     (delete-directory filename t t))
-                (lsp-copilot--warn "Cannot delete directory %s" filename)))
+                (lsp-proxy--warn "Cannot delete directory %s" filename)))
           (if (find-buffer-visiting filename)
               (with-current-buffer (find-buffer-visiting filename)
                 (save-buffer)
                 (kill-buffer)))
           (delete-file filename t)))))))
 
-(defun lsp-copilot--sort-edits (edits)
+(defun lsp-proxy--sort-edits (edits)
   (sort edits #'(lambda (edit-a edit-b)
                   (let* ((range-a (plist-get edit-a :range))
                          (range-b (plist-get edit-b :range))
@@ -923,14 +923,14 @@ LSP server result."
                          (start-b (plist-get range-b :start))
                          (end-a (plist-get range-a :end))
                          (end-b (plist-get range-a :end)))
-                    (if (lsp-copilot--position-equal start-a start-b)
-                        (lsp-copilot--position-compare end-a end-b)
-                      (lsp-copilot--position-compare start-a start-b))))))
+                    (if (lsp-proxy--position-equal start-a start-b)
+                        (lsp-proxy--position-compare end-a end-b)
+                      (lsp-proxy--position-compare start-a start-b))))))
 
-(defun lsp-copilot--apply-text-edit (edit)
+(defun lsp-proxy--apply-text-edit (edit)
   "Apply the edits ddescribed in the TextEdit objet in TEXT-EDIT."
-  (let* ((start (lsp-copilot--position-point (plist-get (plist-get edit :range) :start)))
-         (end (lsp-copilot--position-point (plist-get (plist-get edit :range) :end)))
+  (let* ((start (lsp-proxy--position-point (plist-get (plist-get edit :range) :start)))
+         (end (lsp-proxy--position-point (plist-get (plist-get edit :range) :end)))
          (new-text (plist-get edit :newText)))
     (setq new-text (s-replace "\r" "" (or new-text "")))
     (plist-put edit :newText new-text)
@@ -938,13 +938,13 @@ LSP server result."
     (delete-region start end)
     (insert new-text)))
 
-(defun lsp-copilot--apply-text-edit-replace-buffer-contents (edit)
+(defun lsp-proxy--apply-text-edit-replace-buffer-contents (edit)
   "Apply the edits described in the TextEdit object in TEXT-EDIT.
 The method uses `replace-buffer-contents'."
   (let* (
          (source (current-buffer))
          (new-text (plist-get edit :newText))
-         (region (lsp-copilot--range-region (plist-get edit :range)))
+         (region (lsp-proxy--range-region (plist-get edit :range)))
          (beg (car region))
          (end (cdr region))
          ;; ((beg . end) (lsp--range-to-region (lsp-make-range :start (lsp--fix-point start)
@@ -977,7 +977,7 @@ The method uses `replace-buffer-contents'."
                                     beg (+ beg (length new-text))
                                     length)))))))))
 
-(defun lsp-copilot--apply-text-edits (edits &optional version)
+(defun lsp-proxy--apply-text-edits (edits &optional version)
   "Apply the EDITS of VERSION described in the TextEdit[] object."
   (unless (seq-empty-p edits)
     (atomic-change-group
@@ -990,19 +990,19 @@ The method uses `replace-buffer-contents'."
         (unwind-protect
             (mapc (lambda (edit)
                     (progress-reporter-update reporter (cl-incf done))
-                    (lsp-copilot--apply-text-edit-replace-buffer-contents edit)
+                    (lsp-proxy--apply-text-edit-replace-buffer-contents edit)
                     (when-let* ((insert-text-format (plist-get edit :insertTextFormat))
-                                (start (lsp-copilot--position-point (plist-get (plist-get edit :range) :start)))
+                                (start (lsp-proxy--position-point (plist-get (plist-get edit :range) :start)))
                                 (new-text (plist-get edit :newText)))
                       (when (eq insert-text-format 2)
                         ;; No `save-excursion' needed since expand snippet will change point anyway
                         (goto-char (+ start (length new-text)))
-                        (lsp-copilot--indent-lines start (point))
-                        (lsp-copilot--expand-snippet new-text start (point))))) (reverse edits))
+                        (lsp-proxy--indent-lines start (point))
+                        (lsp-proxy--expand-snippet new-text start (point))))) (reverse edits))
           (undo-amalgamate-change-group change-group)
           (progress-reporter-done reporter))))))
 
-(defun lsp-copilot--create-apply-text-edits-handlers ()
+(defun lsp-proxy--create-apply-text-edits-handlers ()
   "Create (handler cleanup-fn) for applying text edits in async request.
 Only works when mode is `tick or `alive."
   (let* (first-edited
@@ -1016,23 +1016,23 @@ Only works when mode is `tick or `alive."
        (if (and first-edited
                 (seq-find (lambda (edit) (let* ((range (plist-get edit :range))
                                                 (end (plist-get range :end))
-                                                (end-point (lsp-copilot--position-point end)))
+                                                (end-point (lsp-proxy--position-point end)))
                                            (message "range %s end %s" range end)
                                            (> end-point first-edited)))
                           edits))
-           (lsp-copilot--warn "%s" "TextEdits will not be applied since document has been modified before of them.")
-         (lsp-copilot--apply-text-edits edits)))
+           (lsp-proxy--warn "%s" "TextEdits will not be applied since document has been modified before of them.")
+         (lsp-proxy--apply-text-edits edits)))
      (lambda ()
        (remove-hook 'before-change-functions func t)))))
 
 ;;
 ;; modeline
 ;;
-(defun lsp-copilot--progress-status ()
+(defun lsp-proxy--progress-status ()
   "Return the status of the progress for the current workspaces."
-  (when lsp-copilot-mode
+  (when lsp-proxy-mode
     (let ((progress-status
-           (when-let* ((tokens (gethash (lsp-copilot-project-root) lsp-copilot--project-hashmap)))
+           (when-let* ((tokens (gethash (lsp-proxy-project-root) lsp-proxy--project-hashmap)))
              (unless (ht-empty? tokens)
                (mapconcat
                 (lambda (value)
@@ -1048,61 +1048,61 @@ Only works when mode is `tick or `alive."
                 (ht-values tokens)
                 "|")))))
       (unless (s-blank? progress-status)
-        (concat lsp-copilot-progress-prefix progress-status " ")))))
+        (concat lsp-proxy-progress-prefix progress-status " ")))))
 ;;
 ;; agent
 ;;
-(defconst lsp-copilot--ignore-response
+(defconst lsp-proxy--ignore-response
   (lambda (_))
   "Simply ignore the response")
 
-(defconst lsp-copilot--show-error
+(defconst lsp-proxy--show-error
   (lambda (err)
-    (lsp-copilot--error "%s" (or (and err (plist-get err :message)) err)))
+    (lsp-proxy--error "%s" (or (and err (plist-get err :message)) err)))
   "Default handler for error message.")
 
-(defconst lsp-copilot--show-timeout
+(defconst lsp-proxy--show-timeout
   (lambda ()
-    (lsp-copilot--error "%s" "Request timeout"))
+    (lsp-proxy--error "%s" "Request timeout"))
   "Default handler for timeout.")
 
-(defsubst lsp-copilot--connection-alivep ()
-  "Non-nil if the `lsp-copilot--connection' is alive."
-  (and lsp-copilot--connection
-       (zerop (process-exit-status (jsonrpc--process lsp-copilot--connection)))))
+(defsubst lsp-proxy--connection-alivep ()
+  "Non-nil if the `lsp-proxy--connection' is alive."
+  (and lsp-proxy--connection
+       (zerop (process-exit-status (jsonrpc--process lsp-proxy--connection)))))
 
-(defmacro lsp-copilot--request (&rest args)
-  "Send a request to the lsp copilot agent with ARGS."
+(defmacro lsp-proxy--request (&rest args)
+  "Send a request to the lsp proxy agent with ARGS."
   `(progn
-     (when lsp-copilot-mode
-       (unless (lsp-copilot--connection-alivep)
-         (lsp-copilot--start-agent))
-       (lsp-copilot--send-did-change)
-       (unless (-contains-p lsp-copilot--opened-buffers (current-buffer))
-         (lsp-copilot--on-doc-open))
-       (jsonrpc-request lsp-copilot--connection ,@args))))
+     (when lsp-proxy-mode
+       (unless (lsp-proxy--connection-alivep)
+         (lsp-proxy--start-agent))
+       (lsp-proxy--send-did-change)
+       (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
+         (lsp-proxy--on-doc-open))
+       (jsonrpc-request lsp-proxy--connection ,@args))))
 
-(defmacro lsp-copilot--notify (method &rest params)
-  "Send a notification to the lsp copilot agent with ARGS."
+(defmacro lsp-proxy--notify (method &rest params)
+  "Send a notification to the lsp proxy agent with ARGS."
   `(progn
-     (unless (lsp-copilot--connection-alivep)
-       (lsp-copilot--start-agent))
-     (if (or (eq ,method 'textDocument/didOpen) (eq ,method 'textDocument/willSave) (eq ,method 'textDocument/didSave) (-contains-p lsp-copilot--opened-buffers (current-buffer)))
-         (let ((new-params (list :uri (lsp-copilot--get-uri) :params ,@params)))
-           (jsonrpc-notify lsp-copilot--connection ,method new-params))
-       (lsp-copilot--on-doc-open))))
+     (unless (lsp-proxy--connection-alivep)
+       (lsp-proxy--start-agent))
+     (if (or (eq ,method 'textDocument/didOpen) (eq ,method 'textDocument/willSave) (eq ,method 'textDocument/didSave) (-contains-p lsp-proxy--opened-buffers (current-buffer)))
+         (let ((new-params (list :uri (lsp-proxy--get-uri) :params ,@params)))
+           (jsonrpc-notify lsp-proxy--connection ,method new-params))
+       (lsp-proxy--on-doc-open))))
 
-(cl-defmacro lsp-copilot--async-request (method params &rest args &key (success-fn #'lsp-copilot--ignore-response) (error-fn #'lsp-copilot--show-error) (timeout-fn #'lsp-copilot--show-timeout) &allow-other-keys)
-  "Send an asynchronous request to the lsp copilot agent."
+(cl-defmacro lsp-proxy--async-request (method params &rest args &key (success-fn #'lsp-proxy--ignore-response) (error-fn #'lsp-proxy--show-error) (timeout-fn #'lsp-proxy--show-timeout) &allow-other-keys)
+  "Send an asynchronous request to the lsp proxy agent."
   `(progn
-     (unless (lsp-copilot--connection-alivep)
-       (lsp-copilot--start-agent))
-     (lsp-copilot--send-did-change)
-     (unless (-contains-p lsp-copilot--opened-buffers (current-buffer))
-       (lsp-copilot--on-doc-open))
+     (unless (lsp-proxy--connection-alivep)
+       (lsp-proxy--start-agent))
+     (lsp-proxy--send-did-change)
+     (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
+       (lsp-proxy--on-doc-open))
      ;; jsonrpc will use temp buffer for callbacks, so we nned to save the current buffer and restore it inside callback
      (let ((buf (current-buffer)))
-       (jsonrpc-async-request lsp-copilot--connection
+       (jsonrpc-async-request lsp-proxy--connection
                               ,method ,params
                               :success-fn (lambda (result)
                                             (with-current-buffer buf
@@ -1114,245 +1114,245 @@ Only works when mode is `tick or `alive."
                                               (funcall ,timeout-fn)))
                               ,@args))))
 
-(defun lsp-copilot--make-connection ()
-  "Establish copilot jsonrpc connection."
+(defun lsp-proxy--make-connection ()
+  "Establish proxy jsonrpc connection."
   (let ((make-fn (apply-partially
                   #'make-instance
                   'jsonrpc-process-connection
-                  :name "lsp copilot"
-                  :notification-dispatcher #'lsp-copilot--handle-notification
-                  :request-dispatcher #'lsp-copilot--handle-request
-                  :process (make-process :name "lsp copilot agent"
-                                         :command (list lsp-copilot--exec-file "--config" lsp-copilot-user-languages-config "--log-level" (number-to-string lsp-copilot-log-level) "--log" lsp-copilot--log-file)
+                  :name "lsp proxy"
+                  :notification-dispatcher #'lsp-proxy--handle-notification
+                  :request-dispatcher #'lsp-proxy--handle-request
+                  :process (make-process :name "lsp proxy agent"
+                                         :command (list lsp-proxy--exec-file "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file)
                                          :coding 'utf-8-emacs-unix
                                          :connection-type 'pipe
-                                         :stderr (get-buffer-create "*lsp copilot stderr*")
+                                         :stderr (get-buffer-create "*lsp proxy stderr*")
                                          :noquery t))))
     (condition-case nil
-        (funcall make-fn :events-buffer-config `(:size ,lsp-copilot-log-max))
+        (funcall make-fn :events-buffer-config `(:size ,lsp-proxy-log-max))
       (invalid-slot-name
        ;; handle older jsonrpc versions
-       (funcall make-fn :events-buffer-scrollback-size lsp-copilot-log-max)))))
+       (funcall make-fn :events-buffer-scrollback-size lsp-proxy-log-max)))))
 
-(defun lsp-copilot--start-agent ()
-  "Start the lsp copilot agent process in local."
+(defun lsp-proxy--start-agent ()
+  "Start the lsp proxy agent process in local."
   (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
          (random-num (random 100000))
-         (filename (format "lsp-copilot-%s-%05d.log" timestamp random-num)))
-    (setq lsp-copilot--log-file (concat lsp-copilot-log-file-directory filename))
-    (if (file-exists-p lsp-copilot--exec-file)
+         (filename (format "lsp-proxy-%s-%05d.log" timestamp random-num)))
+    (setq lsp-proxy--log-file (concat lsp-proxy-log-file-directory filename))
+    (if (file-exists-p lsp-proxy--exec-file)
         (progn
-          (setq lsp-copilot--connection (lsp-copilot--make-connection))
-          (message "Lsp copilot agent started."))
-      (lsp-copilot--error "No lsp-copilot file found, please check your `lsp-copilot--exec-file'"))))
+          (setq lsp-proxy--connection (lsp-proxy--make-connection))
+          (message "Lsp proxy agent started."))
+      (lsp-proxy--error "No lsp-proxy file found, please check your `lsp-proxy--exec-file'"))))
 
-(defun lsp-copilot--handle-notification (_ method msg)
+(defun lsp-proxy--handle-notification (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'textDocument/publishDiagnostics)
-    (lsp-copilot--dbind (:uri uri :diagnostics diagnostics) (plist-get msg :params)
-      (let ((filepath (lsp-copilot--uri-to-path uri)))
+    (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) (plist-get msg :params)
+      (let ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists-p filepath)
           (with-current-buffer (find-file-noselect filepath)
-            (let ((workspace-diagnostics (lsp-copilot--get-or-create-project
-                                          (lsp-copilot-project-root)
-                                          lsp-copilot--diagnostics-map)))
+            (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
+                                          (lsp-proxy-project-root)
+                                          lsp-proxy--diagnostics-map)))
               (if (seq-empty-p diagnostics)
                   (remhash filepath workspace-diagnostics)
                 (puthash filepath (append diagnostics nil) workspace-diagnostics)))
-            (cond (lsp-copilot-diagnostics--flycheck-enabled
-                   (add-hook 'lsp-copilot-on-idle-hook #'lsp-copilot-diagnostics--flycheck-buffer nil t)
-                   (lsp-copilot--idle-reschedule (current-buffer)))
-                  (lsp-copilot-diagnostics--flymake-enabled
-                   (lsp-copilot-diagnostics--flymake-after-diagnostics))))))))
+            (cond (lsp-proxy-diagnostics--flycheck-enabled
+                   (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
+                   (lsp-proxy--idle-reschedule (current-buffer)))
+                  (lsp-proxy-diagnostics--flymake-enabled
+                   (lsp-proxy-diagnostics--flymake-after-diagnostics))))))))
   (when  (eql method 'window/logMessage)
-    (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
-      (lsp-copilot-log "%s" (lsp-copilot--propertize message type))))
+    (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
+      (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
   (when  (eql method 'window/showMessage)
-    (lsp-copilot--dbind (:type type :message message) (plist-get msg :params)
-      (lsp-copilot--info "%s" (lsp-copilot--propertize message type))))
+    (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
+      (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
   (when (eql method 'emacs/triggerCharacters)
-    (lsp-copilot--dbind (:uri uri
+    (lsp-proxy--dbind (:uri uri
                          :triggerCharacters trigger-characters
                          :signatureTriggerCharacters signature-trigger-characters
                          :supportInlayHints support-inlay-hints
                          :supportDocumentHighlight support-document-highlight)
         (plist-get msg :params)
-      (let* ((filepath (lsp-copilot--uri-to-path uri)))
+      (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists? filepath)
           (with-current-buffer (find-file-noselect filepath)
-            (setq-local lsp-copilot--completion-trigger-characters trigger-characters)
-            (setq-local lsp-copilot--signature-trigger-characters signature-trigger-characters)
-            (setq-local lsp-copilot--support-inlay-hints support-inlay-hints)
-            (setq-local lsp-copilot--support-document-highlight support-document-highlight)
-            (lsp-copilot-activate-inlay-hints-mode)
+            (setq-local lsp-proxy--completion-trigger-characters trigger-characters)
+            (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
+            (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
+            (setq-local lsp-proxy--support-document-highlight support-document-highlight)
+            (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
   (when (eql method '$/progress)
-    (add-to-list 'global-mode-string '(t (:eval (lsp-copilot--progress-status))))
-    (lsp-copilot--dbind (:rootPath root-path :params params) (plist-get msg :params)
+    (add-to-list 'global-mode-string '(t (:eval (lsp-proxy--progress-status))))
+    (lsp-proxy--dbind (:rootPath root-path :params params) (plist-get msg :params)
       (let* ((token (plist-get params :token))
              (value (plist-get params :value))
              (kind (plist-get value :kind)))
         (pcase kind
-          ("begin" (lsp-copilot--set-work-done-token root-path token value))
-          ("report" (lsp-copilot--set-work-done-token root-path token value))
-          ("end" (lsp-copilot--rem-work-done-token root-path token)))))))
+          ("begin" (lsp-proxy--set-work-done-token root-path token value))
+          ("report" (lsp-proxy--set-work-done-token root-path token value))
+          ("end" (lsp-proxy--rem-work-done-token root-path token)))))))
 
-(defun lsp-copilot--handle-request (_ method msg)
+(defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'workspace/applyEdit)
-    (lsp-copilot--dbind (:edit edit) (plist-get msg :params)
-      (lsp-copilot--apply-workspace-edit edit)))
+    (lsp-proxy--dbind (:edit edit) (plist-get msg :params)
+      (lsp-proxy--apply-workspace-edit edit)))
   (when (eql method 'eslint/openDoc)
-    (lsp-copilot--dbind (:url url) (plist-get msg :params)
+    (lsp-proxy--dbind (:url url) (plist-get msg :params)
       (browse-url url)))
   (when (eql method 'emacs/getFiles)
-    (lsp-copilot--dbind (:paths paths) (plist-get msg :params)
-      (list :files (lsp-copilot--get-file-contents-from-list (seq-into paths 'list))))))
+    (lsp-proxy--dbind (:paths paths) (plist-get msg :params)
+      (list :files (lsp-proxy--get-file-contents-from-list (seq-into paths 'list))))))
 
 ;;
 ;; lsp request/notification
 ;;
-(defun lsp-copilot--on-doc-focus (window)
+(defun lsp-proxy--on-doc-focus (window)
   "Notify that the document has been focussed or opened."
   ;; When switching windows, this function is called twice, once for the
   ;; window losing and once for the window gaining focus. We only want to
   ;; send a notification for the window gaining focus and only if the buffer has
-  ;; lsp-copilot-mode enabled.
-  (when (and lsp-copilot-mode (eq window (selected-window)))
-    (if (-contains-p lsp-copilot--opened-buffers (current-buffer))
-        (lsp-copilot--notify ':textDocument/didFocus
-                             (list :textDocument (list :uri (lsp-copilot--get-uri))))
-      (lsp-copilot--on-doc-open))))
+  ;; lsp-proxy-mode enabled.
+  (when (and lsp-proxy-mode (eq window (selected-window)))
+    (if (-contains-p lsp-proxy--opened-buffers (current-buffer))
+        (lsp-proxy--notify ':textDocument/didFocus
+                             (list :textDocument (list :uri (lsp-proxy--get-uri))))
+      (lsp-proxy--on-doc-open))))
 
-(defun lsp-copilot--on-doc-open ()
+(defun lsp-proxy--on-doc-open ()
   "On doc open."
-  (setq lsp-copilot--recent-changes nil
-        lsp-copilot--doc-version 0)
+  (setq lsp-proxy--recent-changes nil
+        lsp-proxy--doc-version 0)
   (when buffer-file-name
     (when (not (f-exists? buffer-file-name))
       (save-buffer))
-    (add-to-list 'lsp-copilot--opened-buffers (current-buffer))
-    (lsp-copilot--notify 'textDocument/didOpen
-                         (list :textDocument (list :uri (lsp-copilot--get-uri)
-                                                   :text (lsp-copilot--get-source))))))
+    (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
+    (lsp-proxy--notify 'textDocument/didOpen
+                         (list :textDocument (list :uri (lsp-proxy--get-uri)
+                                                   :text (lsp-proxy--get-source))))))
 
-(defun lsp-copilot--on-doc-close (&rest _args)
+(defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
-  (when (-contains-p lsp-copilot--opened-buffers (current-buffer))
-    (lsp-copilot--notify 'textDocument/didClose
-                         (list :textDocument (list :uri (lsp-copilot--get-uri))))
-    (setq lsp-copilot--opened-buffers (delete (current-buffer) lsp-copilot--opened-buffers))))
+  (when (-contains-p lsp-proxy--opened-buffers (current-buffer))
+    (lsp-proxy--notify 'textDocument/didClose
+                         (list :textDocument (list :uri (lsp-proxy--get-uri))))
+    (setq lsp-proxy--opened-buffers (delete (current-buffer) lsp-proxy--opened-buffers))))
 
 
-(defun lsp-copilot--will-save ()
+(defun lsp-proxy--will-save ()
   "Send textDocument/willSave notification."
-  (lsp-copilot--notify 'textDocument/willSave
+  (lsp-proxy--notify 'textDocument/willSave
                        ;; 1 Manual, 2 AfterDelay, 3 FocusOut
-                       (append '(:reason 1) (lsp-copilot--TextDocumentIdentifier))))
+                       (append '(:reason 1) (lsp-proxy--TextDocumentIdentifier))))
 
-(defun lsp-copilot--did-save ()
+(defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
-  (lsp-copilot--notify 'textDocument/didSave
-                       (lsp-copilot--TextDocumentIdentifier)))
+  (lsp-proxy--notify 'textDocument/didSave
+                       (lsp-proxy--TextDocumentIdentifier)))
 
-(defun lsp-copilot--send-did-change ()
+(defun lsp-proxy--send-did-change ()
   "Send textDocument/didChange to server."
-  (when lsp-copilot--recent-changes
-    (let ((full-sync-p (eq :emacs-messup lsp-copilot--recent-changes)))
-      (lsp-copilot--notify 'textDocument/didChange
+  (when lsp-proxy--recent-changes
+    (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
+      (lsp-proxy--notify 'textDocument/didChange
                            (list :textDocument
-                                 (list :uri (lsp-copilot--get-uri) :version lsp-copilot--doc-version)
+                                 (list :uri (lsp-proxy--get-uri) :version lsp-proxy--doc-version)
                                  :contentChanges
                                  (if full-sync-p
-                                     (vector (list :text (lsp-copilot--save-restriction-and-excursion
+                                     (vector (list :text (lsp-proxy--save-restriction-and-excursion
                                                            (buffer-substring-no-properties (point-min)
                                                                                            (point-max)))))
-                                   (cl-loop for (beg end len text) in (reverse lsp-copilot--recent-changes)
+                                   (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
                                             when (numberp len)
                                             vconcat `[,(list :range `(:start ,beg :end ,end)
                                                              :rangeLength len :text text)]))))
-      (setq lsp-copilot--recent-changes nil))))
+      (setq lsp-proxy--recent-changes nil))))
 
-(defun lsp-copilot-find-definition ()
+(defun lsp-proxy-find-definition ()
   "Find definition."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/definition
-   (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
-   :success-fn #'lsp-copilot--process-locations))
+   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   :success-fn #'lsp-proxy--process-locations))
 
-(defun lsp-copilot-find-references ()
+(defun lsp-proxy-find-references ()
   "Find references."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/references
-   (lsp-copilot--request-or-notify-params (append (lsp-copilot--TextDocumentPosition) `(:context (:includeDeclaration t))))
-   :success-fn #'lsp-copilot--process-locations))
+   (lsp-proxy--request-or-notify-params (append (lsp-proxy--TextDocumentPosition) `(:context (:includeDeclaration t))))
+   :success-fn #'lsp-proxy--process-locations))
 
-(defun lsp-copilot-find-declaration ()
+(defun lsp-proxy-find-declaration ()
   "Find declaration."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/declaration
-   (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
-   :success-fn #'lsp-copilot--process-locations))
+   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   :success-fn #'lsp-proxy--process-locations))
 
-(defun lsp-copilot-find-type-definition ()
+(defun lsp-proxy-find-type-definition ()
   "Find type definition."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/typeDefinition
-   (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
-   :success-fn #'lsp-copilot--process-locations))
+   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   :success-fn #'lsp-proxy--process-locations))
 
-(defun lsp-copilot-find-implementations ()
+(defun lsp-proxy-find-implementations ()
   "Find definition."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/implementation
-   (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
-   :success-fn #'lsp-copilot--process-locations))
+   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   :success-fn #'lsp-proxy--process-locations))
 
-(define-derived-mode lsp-copilot-help-mode help-mode "LspCopilotHelp"
+(define-derived-mode lsp-proxy-help-mode help-mode "LspProxyHelp"
   "Major mode for displaying lsp help.")
 
-(defun lsp-copilot-describe-thing-at-point ()
+(defun lsp-proxy-describe-thing-at-point ()
   "Display the type signature and documentation of the thing at point."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/hover
-   (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
    :success-fn (lambda (hover-help)
                  (if (and hover-help (not (equal hover-help "")))
-                     (with-current-buffer (get-buffer-create lsp-copilot-hover-buffer)
+                     (with-current-buffer (get-buffer-create lsp-proxy-hover-buffer)
                        (let ((delay-mode-hooks t))
-                         (lsp-copilot-help-mode)
-                         (with-help-window lsp-copilot-hover-buffer
-                           (insert (lsp-copilot--format-markup hover-help))))
+                         (lsp-proxy-help-mode)
+                         (with-help-window lsp-proxy-hover-buffer
+                           (insert (lsp-proxy--format-markup hover-help))))
                        (run-mode-hooks))
-                   (lsp-copilot--info "%s" "No content at point.")))))
+                   (lsp-proxy--info "%s" "No content at point.")))))
 
-(defvar lsp-copilot--highlights nil "Overlays for textDocument/documentHighlight.")
+(defvar lsp-proxy--highlights nil "Overlays for textDocument/documentHighlight.")
 
-(defun lsp-copilot-hover-eldoc-function (_cb)
+(defun lsp-proxy-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
-  (when (and lsp-copilot--support-document-highlight (not (lsp-copilot--progressing-p (lsp-copilot-project-root))))
+  (when (and lsp-proxy--support-document-highlight (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
     (let ((buf (current-buffer)))
-      (lsp-copilot--async-request
+      (lsp-proxy--async-request
        'textDocument/documentHighlight
-       (lsp-copilot--request-or-notify-params (lsp-copilot--TextDocumentPosition))
+       (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
        :success-fn
        (lambda (highlights)
-         (mapc #'delete-overlay lsp-copilot--highlights)
-         (setq lsp-copilot--highlights
-               (lsp-copilot--when-buffer-window buf
+         (mapc #'delete-overlay lsp-proxy--highlights)
+         (setq lsp-proxy--highlights
+               (lsp-proxy--when-buffer-window buf
                  (mapcar (lambda (highlight)
                            (let* ((range (plist-get highlight :range)))
                              (pcase-let ((`(,beg . ,end)
-                                          (lsp-copilot--range-region range)))
+                                          (lsp-proxy--range-region range)))
                                (let ((ov (make-overlay beg end)))
-                                 (overlay-put ov 'face 'lsp-copilot-highlight-symbol-face)
+                                 (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
                                  (overlay-put ov 'modification-hooks
                                               `(,(lambda (o &rest _) (delete-overlay o))))
                                  ov))))
@@ -1364,42 +1364,42 @@ Only works when mode is `tick or `alive."
 ;;
 ;; format
 ;;
-(defun lsp-copilot--get-indent-width (mode)
+(defun lsp-proxy--get-indent-width (mode)
   "Get indentation offset for MODE."
-  (or (alist-get mode lsp-copilot--formatting-indent-alist)
-      (lsp-copilot--get-indent-width (or (get mode 'derived-mode-parent) 'default))))
+  (or (alist-get mode lsp-proxy--formatting-indent-alist)
+      (lsp-proxy--get-indent-width (or (get mode 'derived-mode-parent) 'default))))
 
-(defun lsp-copilot-format-buffer ()
+(defun lsp-proxy-format-buffer ()
   "Ask the server to format this document."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'textDocument/formatting
-   (lsp-copilot--request-or-notify-params
+   (lsp-proxy--request-or-notify-params
     (append (list
              :options
              (list
-              :tabSize (symbol-value (lsp-copilot--get-indent-width major-mode))
+              :tabSize (symbol-value (lsp-proxy--get-indent-width major-mode))
               :insertSpaces (not indent-tabs-mode)
-              :trimTrailingWhitespace lsp-copilot-trim-trailing-whitespace
-              :insertFinalNewline lsp-copilot-insert-final-newline
-              :trimFinalNewlinesmm lsp-copilot-trim-final-newlines))
-            (lsp-copilot--TextDocumentIdentifier)))
+              :trimTrailingWhitespace lsp-proxy-trim-trailing-whitespace
+              :insertFinalNewline lsp-proxy-insert-final-newline
+              :trimFinalNewlinesmm lsp-proxy-trim-final-newlines))
+            (lsp-proxy--TextDocumentIdentifier)))
    :success-fn (lambda (edits)
                  (if (and edits (> (length edits) 0))
                      (progn
-                       (lsp-copilot--apply-text-edits edits)
+                       (lsp-proxy--apply-text-edits edits)
                        (save-buffer))
-                   (lsp-copilot--info "%s" "No formatting changes provided")))))
+                   (lsp-proxy--info "%s" "No formatting changes provided")))))
 
 ;;
 ;; completion
 ;;
-(defun lsp-copilot-passthrough-all-completions (_string table pred _point)
+(defun lsp-proxy-passthrough-all-completions (_string table pred _point)
   "Like `completion-basic-all-completions' but have prefix ignored.
 TABLE PRED"
   (completion-basic-all-completions "" table pred 0))
 
-(defun lsp-copilot--dumb-tryc (pat table pred point)
+(defun lsp-proxy--dumb-tryc (pat table pred point)
   "Like `completion-basic-try-completion' but passthrough all completion.
 Without common substring required. PAT TABLE PRED POINT."
   (let ((probe (funcall table pat pred nil)))
@@ -1408,19 +1408,19 @@ Without common substring required. PAT TABLE PRED POINT."
           (t (cons pat point)))))
 
 
-(defvar-local lsp-copilot--last-inserted-char nil
+(defvar-local lsp-proxy--last-inserted-char nil
   "If non-nil, value of the last inserted character in buffer.")
 
-(defun lsp-copilot--post-self-insert-hook ()
-  "Set `lsp-copilot--last-inserted-char'."
-  (setq lsp-copilot--last-inserted-char last-input-event)
-  (lsp-copilot--maybe-enable-signature-help))
+(defun lsp-proxy--post-self-insert-hook ()
+  "Set `lsp-proxy--last-inserted-char'."
+  (setq lsp-proxy--last-inserted-char last-input-event)
+  (lsp-proxy--maybe-enable-signature-help))
 
-(defun lsp-copilot--pre-command-hook ()
+(defun lsp-proxy--pre-command-hook ()
   "Rest some temporary variables."
-  (setq lsp-copilot--last-inserted-char nil))
+  (setq lsp-proxy--last-inserted-char nil))
 
-(defun lsp-copilot--get-english-dash-string-boundaries ()
+(defun lsp-proxy--get-english-dash-string-boundaries ()
   "Return the boundaries of the English and dash string before point.
 Or nil if none."
   (save-excursion
@@ -1436,32 +1436,32 @@ Or nil if none."
           (cons start end)
         nil))))
 
-(defun lsp-copilot-completion-at-point ()
+(defun lsp-proxy-completion-at-point ()
   "Get lsp completions."
   ;; (when (not (nth 4 (syntax-ppss)))
-  (let* ((trigger-characters lsp-copilot--completion-trigger-characters)
-         (bounds-start (if-let* ((bounds (lsp-copilot--get-english-dash-string-boundaries)))
+  (let* ((trigger-characters lsp-proxy--completion-trigger-characters)
+         (bounds-start (if-let* ((bounds (lsp-proxy--get-english-dash-string-boundaries)))
                            (cl-first bounds)
                          (or (cl-first (bounds-of-thing-at-point 'symbol))
                              (point))))
          (candidates
           (lambda ()
             (let* ((prefix (buffer-substring-no-properties bounds-start (point)))
-                   (resp (lsp-copilot--request
+                   (resp (lsp-proxy--request
                           'textDocument/completion
-                          (lsp-copilot--request-or-notify-params
-                           (lsp-copilot--TextDocumentPosition)
+                          (lsp-proxy--request-or-notify-params
+                           (lsp-proxy--TextDocumentPosition)
                            `(:context
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
                               :prefix ,prefix
                               :boundsStart ,bounds-start
                               :startPoint ,(point)
-                              :triggerKind ,(if (null lsp-copilot--last-inserted-char) 1 2)))) ;; 只用来区分是否是空字符触发的，如果是空认为是主动触发，否则就是自动触发
+                              :triggerKind ,(if (null lsp-proxy--last-inserted-char) 1 2)))) ;; 只用来区分是否是空字符触发的，如果是空认为是主动触发，否则就是自动触发
                           :cancel-on-input t))
                    (items (mapcar (lambda (candidate)
                                     (let* ((item (plist-get candidate :item))
                                            (label (plist-get item :label)))
-                                      (propertize label 'lsp-copilot--item candidate)))
+                                      (propertize label 'lsp-proxy--item candidate)))
                                   resp)))
               items))))
     (list
@@ -1470,22 +1470,22 @@ Or nil if none."
      (lambda (probe pred action)
        (cond
         ((eq action 'metadata)
-         '(metadata (category . lsp-copilot-capf)
+         '(metadata (category . lsp-proxy-capf)
            (display-sort-function . identity)
            (cycle-sort-function . identity)))
         ((eq (car-safe action) 'boundaries) nil)
         (t
          (complete-with-action action (funcall candidates) probe pred))))
-     :annotation-function #'lsp-copilot--annotate
-     :company-kind #'lsp-copilot--candidate-kind
+     :annotation-function #'lsp-proxy--annotate
+     :company-kind #'lsp-proxy--candidate-kind
      :company-require-match 'nerver
      :company-prefix-length
      (save-excursion
-       (and (lsp-copilot--looking-back-trigger-characterp trigger-characters) t))
-     :company-doc-buffer #'lsp-copilot--doc-buffer
-     :exit-function #'lsp-copilot--company-post-completion)))
+       (and (lsp-proxy--looking-back-trigger-characterp trigger-characters) t))
+     :company-doc-buffer #'lsp-proxy--doc-buffer
+     :exit-function #'lsp-proxy--company-post-completion)))
 
-(defun lsp-copilot--looking-back-trigger-characterp (trigger-characters)
+(defun lsp-proxy--looking-back-trigger-characterp (trigger-characters)
   "Return character if text before point match any of the TRIGGER-CHARACTERS."
   (unless (= (point) (line-beginning-position))
     (cl-some
@@ -1495,27 +1495,27 @@ Or nil if none."
             trigger-char))
      trigger-characters)))
 
-(defun lsp-copilot--company-post-completion (candidate status)
+(defun lsp-proxy--company-post-completion (candidate status)
   "Replace a CompletionItem's label with its insertText.
 Apply text edits in CANDIDATE when STATUS is finished or exact."
   (when (memq status '(finished exact))
-    (let* ((copilot-item (get-text-property 0 'lsp-copilot--item candidate))
+    (let* ((proxy-item (get-text-property 0 'lsp-proxy--item candidate))
            (resolved-item (get-text-property 0 'resolved-item candidate))
-           (language-server-name (plist-get copilot-item :language_server_name))
+           (language-server-name (plist-get proxy-item :language_server_name))
            (marker (copy-marker (point) t)))
-      (unless copilot-item
-        (message "no lsp-copilot--item in post-completion %s" copilot-item))
+      (unless proxy-item
+        (message "no lsp-proxy--item in post-completion %s" proxy-item))
       (if (equal language-server-name "typescript-language-server")
           (if resolved-item
-              (lsp-copilot--company-post-completion-item resolved-item candidate marker)
-            (let ((resolved (lsp-copilot--sync-resolve copilot-item)))
+              (lsp-proxy--company-post-completion-item resolved-item candidate marker)
+            (let ((resolved (lsp-proxy--sync-resolve proxy-item)))
               (put-text-property 0 (length candidate) 'resolved-item resolved candidate)
-              (lsp-copilot--company-post-completion-item (or resolved copilot-item) candidate marker)))
-        (lsp-copilot--company-post-completion-item (or resolved-item copilot-item) candidate marker)))))
+              (lsp-proxy--company-post-completion-item (or resolved proxy-item) candidate marker)))
+        (lsp-proxy--company-post-completion-item (or resolved-item proxy-item) candidate marker)))))
 
-(defun lsp-copilot--company-post-completion-item (copilot-item candidate marker)
-  "Complete CANDIDATE of COPILOT-ITEM from MARKER."
-  (let* ((item (plist-get copilot-item :item))
+(defun lsp-proxy--company-post-completion-item (proxy-item candidate marker)
+  "Complete CANDIDATE of PROXY-ITEM from MARKER."
+  (let* ((item (plist-get proxy-item :item))
          (label (plist-get item :label))
          (insertText (plist-get item :insertText))
          ;; 1 = plaintext, 2 = snippet
@@ -1524,12 +1524,12 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
          (additionalTextEdits (plist-get item :additionalTextEdits))
          (startPoint (- marker (length candidate)))
          (insertTextMode (plist-get item :insertTextMode))
-         (start (plist-get copilot-item :start))
-         (end (plist-get copilot-item :end)))
+         (start (plist-get proxy-item :start))
+         (end (plist-get proxy-item :end)))
     (cond (textEdit
            (let* ((range (plist-get textEdit :range))
-                  (replaceStart (lsp-copilot--position-point (plist-get range :start)))
-                  (replaceEnd (lsp-copilot--position-point (plist-get range :end)))
+                  (replaceStart (lsp-proxy--position-point (plist-get range :start)))
+                  (replaceEnd (lsp-proxy--position-point (plist-get range :end)))
                   (newText (plist-get textEdit :newText))
                   (insertText (s-replace "\r" "" (or newText ""))))
              (delete-region start end)
@@ -1543,30 +1543,30 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
           (insertText
            (delete-region (- end (length candidate)) end)
            (insert (or insertText label))))
-    (lsp-copilot--indent-lines startPoint (point) insertTextMode)
+    (lsp-proxy--indent-lines startPoint (point) insertTextMode)
     (when (eq insertTextFormat 2)
-      (lsp-copilot--expand-snippet (buffer-substring startPoint (point))
+      (lsp-proxy--expand-snippet (buffer-substring startPoint (point))
                                    startPoint
                                    (point)))
     (if (cl-plusp (length additionalTextEdits))
-        (lsp-copilot--apply-text-edits additionalTextEdits)
+        (lsp-proxy--apply-text-edits additionalTextEdits)
       (if-let* ((resolved-item (get-text-property 0 'resolved-item candidate)))
           (if-let* ((additionalTextEdits (plist-get resolved-item :additionalTextEdits)))
-              (lsp-copilot--apply-text-edits additionalTextEdits))
-        (-let [(callback cleanup-fn) (lsp-copilot--create-apply-text-edits-handlers)]
-          (lsp-copilot--async-resolve copilot-item callback cleanup-fn))))))
+              (lsp-proxy--apply-text-edits additionalTextEdits))
+        (-let [(callback cleanup-fn) (lsp-proxy--create-apply-text-edits-handlers)]
+          (lsp-proxy--async-resolve proxy-item callback cleanup-fn))))))
 
-(defun lsp-copilot--candidate-kind (item)
+(defun lsp-proxy--candidate-kind (item)
   "Return ITEM's kind."
-  (let* ((copilot-item (get-text-property 0 'lsp-copilot--item item))
-         (completion-item (plist-get copilot-item :item))
+  (let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
+         (completion-item (plist-get proxy-item :item))
          (kind (and completion-item (plist-get completion-item :kind))))
-    (alist-get kind lsp-copilot--kind->symbol)))
+    (alist-get kind lsp-proxy--kind->symbol)))
 
-(defun lsp-copilot--annotate (item)
+(defun lsp-proxy--annotate (item)
   "Annotate ITEM detail."
-  (let* ((copilot-item (get-text-property 0 'lsp-copilot--item item))
-         (completion-item (plist-get copilot-item :item))
+  (let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
+         (completion-item (plist-get proxy-item :item))
          (kind (and completion-item (plist-get completion-item :kind)))
          (detail (and completion-item (plist-get completion-item :detail)))
          (label-detail (and completion-item (plist-get completion-item :labelDetails))))
@@ -1577,50 +1577,50 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
        (format " %s" label--detail))
      (when-let* ((description (and label-detail (plist-get label-detail :description))))
        (format " %s" description))
-     (when-let* ((kind-name (alist-get kind lsp-copilot--kind->symbol)))
+     (when-let* ((kind-name (alist-get kind lsp-proxy--kind->symbol)))
        (format " (%s)" kind-name)))))
 
-(defun lsp-copilot--doc-buffer (item)
+(defun lsp-proxy--doc-buffer (item)
   "Get ITEM doc."
-  (when-let* ((copilot-item (get-text-property 0 'lsp-copilot--item item))
-              (langauge-sever-id (plist-get copilot-item :language_server_id))
-              (completion-item (plist-get copilot-item :item)))
+  (when-let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
+              (langauge-sever-id (plist-get proxy-item :language_server_id))
+              (completion-item (plist-get proxy-item :item)))
     (let ((documentation (plist-get completion-item :documentation)))
       (unless (or documentation (get-text-property 0 'resolved-item item))
-        (let* ((resolved-item (lsp-copilot--sync-resolve copilot-item))) ;; (read item) 去掉了属性？
+        (let* ((resolved-item (lsp-proxy--sync-resolve proxy-item))) ;; (read item) 去掉了属性？
           (put-text-property 0 (length item) 'resolved-item resolved-item item)))))
-  (when-let* ((resolved-item (or (get-text-property 0 'resolved-item item) (get-text-property 0 'lsp-copilot--item item)))
+  (when-let* ((resolved-item (or (get-text-property 0 'resolved-item item) (get-text-property 0 'lsp-proxy--item item)))
               (completion-item (plist-get resolved-item :item))
               (documentation (plist-get completion-item :documentation))
-              (formatted (lsp-copilot--format-markup documentation)))
-    (with-current-buffer (get-buffer-create "*lsp-copilot-doc*")
+              (formatted (lsp-proxy--format-markup documentation)))
+    (with-current-buffer (get-buffer-create "*lsp-proxy-doc*")
       (erase-buffer)
       (insert formatted)
       (current-buffer))))
 
-(defun lsp-copilot--sync-resolve (copilot-item)
-  "Request `completionItem/resolve' of COPILOT-ITEM synchronously."
-  (when-let* ((language-server-id (plist-get copilot-item :language_server_id))
-              (start (plist-get copilot-item :start))
-              (end (plist-get copilot-item :end))
-              (item (plist-get copilot-item :item)))
-    (lsp-copilot--request
+(defun lsp-proxy--sync-resolve (proxy-item)
+  "Request `completionItem/resolve' of PROXY-ITEM synchronously."
+  (when-let* ((language-server-id (plist-get proxy-item :language_server_id))
+              (start (plist-get proxy-item :start))
+              (end (plist-get proxy-item :end))
+              (item (plist-get proxy-item :item)))
+    (lsp-proxy--request
      'completionItem/resolve
-     (lsp-copilot--request-or-notify-params
+     (lsp-proxy--request-or-notify-params
       item
       `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :cancel-on-input t)))
 
-(defun lsp-copilot--async-resolve (copilot-item callback &optional cleanup-fn)
-  "Resolve completion COPILOT-ITEM asynchronously with CALLBACK.
+(defun lsp-proxy--async-resolve (proxy-item callback &optional cleanup-fn)
+  "Resolve completion PROXY-ITEM asynchronously with CALLBACK.
 The CLEANUP-FN will be called to cleanup."
-  (when-let* ((language-server-id (plist-get copilot-item :language_server_id))
-              (start (plist-get copilot-item :start))
-              (end (plist-get copilot-item :end))
-              (item (plist-get copilot-item :item)))
-    (lsp-copilot--async-request
+  (when-let* ((language-server-id (plist-get proxy-item :language_server_id))
+              (start (plist-get proxy-item :start))
+              (end (plist-get proxy-item :end))
+              (item (plist-get proxy-item :item)))
+    (lsp-proxy--async-request
      'completionItem/resolve
-     (lsp-copilot--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
+     (lsp-proxy--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :success-fn (lambda (resolved-item)
                    (if-let* ((complete-item (plist-get resolved-item :item))
                              (additionalTextEdits (plist-get complete-item :additionalTextEdits)))
@@ -1632,55 +1632,55 @@ The CLEANUP-FN will be called to cleanup."
 ;;
 ;; Signature
 ;;
-(defvar lsp-copilot-signature-mode-map
+(defvar lsp-proxy-signature-mode-map
   (-doto (make-sparse-keymap)
-    (define-key (kbd "M-n") #'lsp-copilot-signature-next)
-    (define-key (kbd "M-p") #'lsp-copilot-signature-previous)
-    ;; (define-key (kbd "M-a") #'lsp-copilot-signature-toggle-full-docs)
-    (define-key (kbd "C-c C-k") #'lsp-copilot-signature-stop)
-    (define-key (kbd "M-k") #'lsp-copilot-signature-stop)
-    ;; (define-key (kbd "<ESC>") #'lsp-copilot-signature-stop)
-    (define-key (kbd "C-g") #'lsp-copilot-signature-stop))
-  "Keymap for `lsp-copilot-signature-mode'.")
+    (define-key (kbd "M-n") #'lsp-proxy-signature-next)
+    (define-key (kbd "M-p") #'lsp-proxy-signature-previous)
+    ;; (define-key (kbd "M-a") #'lsp-proxy-signature-toggle-full-docs)
+    (define-key (kbd "C-c C-k") #'lsp-proxy-signature-stop)
+    (define-key (kbd "M-k") #'lsp-proxy-signature-stop)
+    ;; (define-key (kbd "<ESC>") #'lsp-proxy-signature-stop)
+    (define-key (kbd "C-g") #'lsp-proxy-signature-stop))
+  "Keymap for `lsp-proxy-signature-mode'.")
 
-(defun lsp-copilot-signature-next ()
+(defun lsp-proxy-signature-next ()
   "Show next signature."
   (interactive)
-  (let ((nsigs (length (plist-get lsp-copilot--signature-last :signatures))))
-    (when (and lsp-copilot--signature-last-index
-               lsp-copilot--signature-last
+  (let ((nsigs (length (plist-get lsp-proxy--signature-last :signatures))))
+    (when (and lsp-proxy--signature-last-index
+               lsp-proxy--signature-last
                nsigs)
-      (setq lsp-copilot--signature-last-index (% (1+ lsp-copilot--signature-last-index) nsigs))
-      (lsp-copilot-signature-posframe (lsp-copilot--signature->message lsp-copilot--signature-last)))))
+      (setq lsp-proxy--signature-last-index (% (1+ lsp-proxy--signature-last-index) nsigs))
+      (lsp-proxy-signature-posframe (lsp-proxy--signature->message lsp-proxy--signature-last)))))
 
-(defun lsp-copilot-signature-previous ()
+(defun lsp-proxy-signature-previous ()
   "Show previous signature."
   (interactive)
-  (when (and lsp-copilot--signature-last-index
-             lsp-copilot--signature-last)
-    (setq lsp-copilot--signature-last-index (1- (if (zerop lsp-copilot--signature-last-index)
-                                                    (length (plist-get lsp-copilot--signature-last :signatures))
-                                                  lsp-copilot--signature-last-index)))
-    (lsp-copilot-signature-posframe (lsp-copilot--signature->message lsp-copilot--signature-last))))
+  (when (and lsp-proxy--signature-last-index
+             lsp-proxy--signature-last)
+    (setq lsp-proxy--signature-last-index (1- (if (zerop lsp-proxy--signature-last-index)
+                                                    (length (plist-get lsp-proxy--signature-last :signatures))
+                                                  lsp-proxy--signature-last-index)))
+    (lsp-proxy-signature-posframe (lsp-proxy--signature->message lsp-proxy--signature-last))))
 
-(define-minor-mode lsp-copilot-signature-mode
+(define-minor-mode lsp-proxy-signature-mode
   "Mode used to show signature popup."
-  :keymap lsp-copilot-signature-mode-map
+  :keymap lsp-proxy-signature-mode-map
   :lighter ""
-  :group 'lsp-copilot-mode)
+  :group 'lsp-proxy-mode)
 
-(defun lsp-copilot-signature-stop ()
+(defun lsp-proxy-signature-stop ()
   "Stop showing current signature help."
   (interactive)
-  (setq lsp-copilot--signature-last nil)
+  (setq lsp-proxy--signature-last nil)
   ;; TODO cancel request?
-  (remove-hook 'post-command-hook #'lsp-copilot-signature)
-  (lsp-copilot-signature-posframe nil)
-  (lsp-copilot-signature-mode -1))
+  (remove-hook 'post-command-hook #'lsp-proxy-signature)
+  (lsp-proxy-signature-posframe nil)
+  (lsp-proxy-signature-mode -1))
 
 (declare-function page-break-lines--update-display-tables "ext:page-break-lines")
 
-(defun lsp-copilot--setup-page-break-mode-if-present ()
+(defun lsp-proxy--setup-page-break-mode-if-present ()
   "Enable `page-break-lines-mode' in current buffer."
   (when (fboundp 'page-break-lines-mode)
     (page-break-lines-mode)
@@ -1691,12 +1691,12 @@ The CLEANUP-FN will be called to cleanup."
 (declare-function posframe-hide "ext:posframe")
 (declare-function posframe-poshandler-point-bottom-left-corner-upward "ext:posframe")
 
-(defface lsp-copilot-signature-posframe
+(defface lsp-proxy-signature-posframe
   '((t :inherit tooltip))
-  "Background and foreground for `lsp-copilot-signature-posframe'."
+  "Background and foreground for `lsp-proxy-signature-posframe'."
   :group 'lsp-mode)
 
-(defvar lsp-copilot-signature-posframe-params
+(defvar lsp-proxy-signature-posframe-params
   (list :poshandler #'posframe-poshandler-point-bottom-left-corner-upward
         :height 10
         :width 60
@@ -1704,50 +1704,50 @@ The CLEANUP-FN will be called to cleanup."
         :min-width 60)
   "Params for signature and `posframe-show'.")
 
-(defun lsp-copilot-signature-posframe (str)
+(defun lsp-proxy-signature-posframe (str)
   "Use posframe to show the STR signatureHelp string."
   (if str
       (apply #'posframe-show
-             (with-current-buffer (get-buffer-create lsp-copilot-signature-buffer)
+             (with-current-buffer (get-buffer-create lsp-proxy-signature-buffer)
                (erase-buffer)
                (insert str)
                (visual-line-mode)
-               (lsp-copilot--setup-page-break-mode-if-present)
+               (lsp-proxy--setup-page-break-mode-if-present)
                (current-buffer))
              (append
-              lsp-copilot-signature-posframe-params
+              lsp-proxy-signature-posframe-params
               (list :position (point)
-                    :background-color (face-attribute 'lsp-copilot-signature-posframe :background nil t)
-                    :foreground-color (face-attribute 'lsp-copilot-signature-posframe :foreground nil t)
+                    :background-color (face-attribute 'lsp-proxy-signature-posframe :background nil t)
+                    :foreground-color (face-attribute 'lsp-proxy-signature-posframe :foreground nil t)
                     :border-color (face-attribute 'font-lock-comment-face :foreground nil t))))
-    (posframe-hide lsp-copilot-signature-buffer)))
+    (posframe-hide lsp-proxy-signature-buffer)))
 
-(defun lsp-copilot-signature-activate ()
+(defun lsp-proxy-signature-activate ()
   "Activate signature help.
 It will show up only if current point has signature help."
   (interactive)
-  (setq lsp-copilot--signature-last nil
-        lsp-copilot--signature-last-index nil
-        lsp-copilot--signature-last-buffer (current-buffer))
-  (add-hook 'post-command-hook #'lsp-copilot-signature)
-  (lsp-copilot-signature-mode t))
+  (setq lsp-proxy--signature-last nil
+        lsp-proxy--signature-last-index nil
+        lsp-proxy--signature-last-buffer (current-buffer))
+  (add-hook 'post-command-hook #'lsp-proxy-signature)
+  (lsp-proxy-signature-mode t))
 
-(defun lsp-copilot--maybe-enable-signature-help ()
+(defun lsp-proxy--maybe-enable-signature-help ()
   "Hook function of `post-self-insert-hook'."
-  (when (and lsp-copilot-signature-auto-active lsp-copilot--signature-trigger-characters)
+  (when (and lsp-proxy-signature-auto-active lsp-proxy--signature-trigger-characters)
     (let ((ch last-command-event))
-      (when (cl-find ch lsp-copilot--signature-trigger-characters :key #'string-to-char)
-        (lsp-copilot-signature-activate)))))
+      (when (cl-find ch lsp-proxy--signature-trigger-characters :key #'string-to-char)
+        (lsp-proxy-signature-activate)))))
 
-(defun lsp-copilot--signature->message (signature-help)
+(defun lsp-proxy--signature->message (signature-help)
   "Generate eldoc message form SIGNATURE-HELP response."
-  (setq lsp-copilot--signature-last signature-help)
+  (setq lsp-proxy--signature-last signature-help)
   (when (and signature-help (not (seq-empty-p (plist-get signature-help :signatures))))
     (let* ((signatures (plist-get signature-help :signatures))
            (active-signature (plist-get signature-help :activeSignature))
            (active-parameter (plist-get signature-help :activeParameter))
-           (active-signature (or lsp-copilot--signature-last-index active-signature 0))
-           (_ (setq lsp-copilot--signature-last-index active-signature))
+           (active-signature (or lsp-proxy--signature-last-index active-signature 0))
+           (_ (setq lsp-proxy--signature-last-index active-signature))
            (signature (seq-elt signatures active-signature))
            (label (plist-get signature :label))
            (parameters (plist-get signature :parameters))
@@ -1772,40 +1772,40 @@ It will show up only if current point has signature help."
           (add-face-text-property start end 'eldoc-highlight-function-argument nil label)))
       (concat prefix label))))
 
-(defun lsp-copilot--handle-signature-update (signature)
+(defun lsp-proxy--handle-signature-update (signature)
   "Update SIGNATURE."
-  (let ((message (lsp-copilot--signature->message signature)))
-    (if (and (s-present? message) lsp-copilot-signature-mode)
-        (lsp-copilot-signature-posframe message)
-      (lsp-copilot-signature-stop))))
+  (let ((message (lsp-proxy--signature->message signature)))
+    (if (and (s-present? message) lsp-proxy-signature-mode)
+        (lsp-proxy-signature-posframe message)
+      (lsp-proxy-signature-stop))))
 
-(defun lsp-copilot-signature ()
+(defun lsp-proxy-signature ()
   "Display signature info (based on `textDocument/signatureHelp')."
   ;; (message "input %s char %s charp %s" last-input-event last-command-event (characterp last-command-event))
   ;; (message "type %s" (event-basic-type last-command-event))
   ;; (message "string type %s" (string (event-basic-type last-command-event)))
-  (if (and lsp-copilot--signature-last-buffer
-           (not (equal (current-buffer) lsp-copilot--signature-last-buffer)))
-      (lsp-copilot-signature-stop)
+  (if (and lsp-proxy--signature-last-buffer
+           (not (equal (current-buffer) lsp-proxy--signature-last-buffer)))
+      (lsp-proxy-signature-stop)
 
-    (lsp-copilot--async-request
+    (lsp-proxy--async-request
      'textDocument/signatureHelp
-     (lsp-copilot--request-or-notify-params
-      (lsp-copilot--TextDocumentPosition))
-     :success-fn #'lsp-copilot--handle-signature-update)
+     (lsp-proxy--request-or-notify-params
+      (lsp-proxy--TextDocumentPosition))
+     :success-fn #'lsp-proxy--handle-signature-update)
     ;; (message "char %s" (char-to-string last-inp))
     ;; 非输入字符则重新触发一次请求
-    ;; (if (or (characterp last-command-event) (memq (event-basic-type last-command-event) lsp-copilot-signature-retrigger-keys))
-    ;;     (if (and lsp-copilot--signature-last)
-    ;;         (lsp-copilot--handle-signature-update lsp-copilot--signature-last)
-    ;;       (lsp-copilot--async-request
+    ;; (if (or (characterp last-command-event) (memq (event-basic-type last-command-event) lsp-proxy-signature-retrigger-keys))
+    ;;     (if (and lsp-proxy--signature-last)
+    ;;         (lsp-proxy--handle-signature-update lsp-proxy--signature-last)
+    ;;       (lsp-proxy--async-request
     ;;        'textDocument/signatureHelp
-    ;;        (lsp-copilot--request-or-notify-params
-    ;;         (lsp-copilot--TextDocumentPosition)
+    ;;        (lsp-proxy--request-or-notify-params
+    ;;         (lsp-proxy--TextDocumentPosition)
     ;;         ;; `(:context (:signature-trigger-character ,(char-to-string last-command-event)))
     ;;         )
-    ;;        :success-fn #'lsp-copilot--handle-signature-update))
-    ;;   ;; (lsp-copilot-signature-stop)
+    ;;        :success-fn #'lsp-proxy--handle-signature-update))
+    ;;   ;; (lsp-proxy-signature-stop)
     ;;   (message "----")
     ;;   )
     ))
@@ -1813,7 +1813,7 @@ It will show up only if current point has signature help."
 ;;
 ;; rename
 ;;
-(defun lsp-copilot--get-symbol-to-rename ()
+(defun lsp-proxy--get-symbol-to-rename ()
   "Get a symbol to rename and placeholder at point.
 Returns a cons ((START . END) . PLACEHOLDER?), and nil if
 renaming is generally supported but cannot be done at point.
@@ -1823,73 +1823,73 @@ language server as the initial input of a new-name prompt."
   (when-let* ((bounds (bounds-of-thing-at-point 'symbol)))
     (cons bounds nil)))
 
-(defface lsp-copilot-face-rename '((t :underline t))
+(defface lsp-proxy-face-rename '((t :underline t))
   "Face used to highlight the identifier being renamed.
 Renaming can be done using `lsp-rename'."
-  :group 'lsp-copilot-mode)
+  :group 'lsp-proxy-mode)
 
-(defface lsp-copilot-rename-placeholder-face '((t :inherit font-lock-variable-name-face))
+(defface lsp-proxy-rename-placeholder-face '((t :inherit font-lock-variable-name-face))
   "Face used to display the rename placeholder in.
 When calling `lsp-rename' interactively, this will be the face of
 the new name."
-  :group 'lsp-copilot-mode)
+  :group 'lsp-proxy-mode)
 
-(defun lsp-copilot--read-rename (at-point)
-  "Read a new name for a `lsp-copilot-rename' at `point' from the user.
+(defun lsp-proxy--read-rename (at-point)
+  "Read a new name for a `lsp-proxy-rename' at `point' from the user.
 AT-POINT shall be a structure as returned by
-`lsp-copilot--get-symbol-to-rename'.
+`lsp-proxy--get-symbol-to-rename'.
 
 Returns a string, which should be the new name for the identifier at point.
 If renaming cannot be done at point (as determined from AT-POINT),
 throw a `user-error'.
 
-This function is for use in `lsp-copilot-rename' only, and shall not be
+This function is for use in `lsp-proxy-rename' only, and shall not be
 relied upon."
   (unless at-point
-    (user-error "`lsp-copilot-rename' is invalid here"))
+    (user-error "`lsp-proxy-rename' is invalid here"))
   (-let* ((((start . end) . placeholder?) at-point)
           ;; Do the `buffer-substring' first to not include `lsp-face-rename'
           (rename-me (buffer-substring start end))
           (placeholder (or placeholder? rename-me))
-          (placeholder (propertize placeholder 'face 'lsp-copilot-rename-placeholder-face))
+          (placeholder (propertize placeholder 'face 'lsp-proxy-rename-placeholder-face))
           overlay)
     ;; We need unwind protect, as the user might cancel here, causing the
     ;; overlay to linger.
     (unwind-protect
         (progn
           (setq overlay (make-overlay start end))
-          (overlay-put overlay 'face 'lsp-copilot-face-rename)
+          (overlay-put overlay 'face 'lsp-proxy-face-rename)
 
           (read-string (format "Rename %s to: " rename-me) placeholder
                        'lsp-rename-history))
       (and overlay (delete-overlay overlay)))))
 
-(defun lsp-copilot-rename (newname)
+(defun lsp-proxy-rename (newname)
   "Rename the symbol (and all references to it) under point to NEWNAME."
-  (interactive (list (lsp-copilot--read-rename (lsp-copilot--get-symbol-to-rename))))
-  (lsp-copilot--async-request
+  (interactive (list (lsp-proxy--read-rename (lsp-proxy--get-symbol-to-rename))))
+  (lsp-proxy--async-request
    'textDocument/rename
-   (lsp-copilot--request-or-notify-params
-    (append (lsp-copilot--TextDocumentPosition) `(:newName ,newname)))
+   (lsp-proxy--request-or-notify-params
+    (append (lsp-proxy--TextDocumentPosition) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
-                     (lsp-copilot--apply-workspace-edit edits t)
-                   (lsp-copilot--warn "%s" "Server does not support rename.")))))
+                     (lsp-proxy--apply-workspace-edit edits t)
+                   (lsp-proxy--warn "%s" "Server does not support rename.")))))
 
 ;;
 ;; Flycheck
 ;;
-(defun lsp-copilot-diagnostics--flycheck-buffer ()
+(defun lsp-proxy-diagnostics--flycheck-buffer ()
   "Trigger flycheck on buffer."
-  (remove-hook 'lsp-copilot-on-idle-hook #'lsp-copilot-diagnostics--flycheck-buffer t)
+  (remove-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer t)
   (when (bound-and-true-p flycheck-mode)
     (flycheck-buffer)))
 
-(defun lsp-copilot-diagnostics--flycheck-start (checker callback)
+(defun lsp-proxy-diagnostics--flycheck-start (checker callback)
   "Start an LSP syntax check with CHECKER.
 CALLBACK is the status callback passed by Flycheck."
-  (remove-hook 'lsp-copilot-on-idle-hook #'lsp-copilot-diagnostics--flycheck-buffer t)
-  (let* ((workspace-diagnostics (lsp-copilot--get-or-create-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map))
+  (remove-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer t)
+  (let* ((workspace-diagnostics (lsp-proxy--get-or-create-project (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
          (buffer-diagnostics (gethash (buffer-file-name) workspace-diagnostics '()))
          (errors (mapcar
                   (lambda (diagnostic)
@@ -1917,30 +1917,30 @@ CALLBACK is the status callback passed by Flycheck."
     (funcall callback 'finished errors)))
 
 ;;;###autoload
-(defun lsp-copilot-diagnostics-lsp-copilot-checker-if-needed ()
-  "Create a `lsp-copilot' checker of flycheck."
-  (unless (flycheck-valid-checker-p 'lsp-copilot)
-    (flycheck-define-generic-checker 'lsp-copilot
-      "A syntax checker using the langauge server protocol provided by lsp-copilot."
-      :start #'lsp-copilot-diagnostics--flycheck-start
-      :modes '(lsp-copilot-placeholder-mode)
-      :predicate (lambda () lsp-copilot-mode))))
+(defun lsp-proxy-diagnostics-lsp-proxy-checker-if-needed ()
+  "Create a `lsp-proxy' checker of flycheck."
+  (unless (flycheck-valid-checker-p 'lsp-proxy)
+    (flycheck-define-generic-checker 'lsp-proxy
+      "A syntax checker using the langauge server protocol provided by lsp-proxy."
+      :start #'lsp-proxy-diagnostics--flycheck-start
+      :modes '(lsp-proxy-placeholder-mode)
+      :predicate (lambda () lsp-proxy-mode))))
 
-(defun lsp-copilot-diagnostics-flycheck-enable (&rest _)
+(defun lsp-proxy-diagnostics-flycheck-enable (&rest _)
   "Enable flycheck integration for the current buffer."
   (require 'flycheck)
-  (lsp-copilot-diagnostics-lsp-copilot-checker-if-needed)
-  (unless lsp-copilot-diagnostics--flycheck-enabled
-    (setq-local lsp-copilot-diagnostics--flycheck-enabled t)
-    (add-to-list 'flycheck-checkers 'lsp-copilot)
-    (unless (flycheck-checker-supports-major-mode-p 'lsp-copilot major-mode)
-      (flycheck-add-mode 'lsp-copilot major-mode)))
+  (lsp-proxy-diagnostics-lsp-proxy-checker-if-needed)
+  (unless lsp-proxy-diagnostics--flycheck-enabled
+    (setq-local lsp-proxy-diagnostics--flycheck-enabled t)
+    (add-to-list 'flycheck-checkers 'lsp-proxy)
+    (unless (flycheck-checker-supports-major-mode-p 'lsp-proxy major-mode)
+      (flycheck-add-mode 'lsp-proxy major-mode)))
   (flycheck-mode 1))
 
-(defun lsp-copilot-diagnostics-flycheck-disable (&rest _)
+(defun lsp-proxy-diagnostics-flycheck-disable (&rest _)
   "Disable flycheck integartion for the current buffer."
-  (when lsp-copilot-diagnostics--flycheck-enabled
-    (setq-local lsp-copilot-diagnostics--flycheck-enabled nil)))
+  (when lsp-proxy-diagnostics--flycheck-enabled
+    (setq-local lsp-proxy-diagnostics--flycheck-enabled nil)))
 
 ;; Flycheck integration
 (declare-function flymake-mode "ext:flymake")
@@ -1949,39 +1949,39 @@ CALLBACK is the status callback passed by Flycheck."
 
 (defvar flymake-diagnostic-functions)
 (defvar flymake-mode)
-(defvar-local lsp-copilot-diagnostics--flymake-report-fn nil)
+(defvar-local lsp-proxy-diagnostics--flymake-report-fn nil)
 
-(defun lsp-copilot-diagnostics-flymake-enable ()
+(defun lsp-proxy-diagnostics-flymake-enable ()
   "Setup flymake."
-  (setq lsp-copilot-diagnostics--flymake-report-fn nil)
-  (unless lsp-copilot-diagnostics--flymake-enabled
-    (setq-local lsp-copilot-diagnostics--flymake-enabled t)
-    (add-hook 'flymake-diagnostic-functions 'lsp-copilot-diagnostics--flymake-backend nil t))
+  (setq lsp-proxy-diagnostics--flymake-report-fn nil)
+  (unless lsp-proxy-diagnostics--flymake-enabled
+    (setq-local lsp-proxy-diagnostics--flymake-enabled t)
+    (add-hook 'flymake-diagnostic-functions 'lsp-proxy-diagnostics--flymake-backend nil t))
   (flymake-mode 1))
 
-(defun lsp-copilot-diagnostics-flymake-disable ()
+(defun lsp-proxy-diagnostics-flymake-disable ()
   "Disable flymake integartion for the current buffer."
-  (when lsp-copilot-diagnostics--flymake-enabled
-    (setq-local lsp-copilot-diagnostics--flymake-enabled nil)))
+  (when lsp-proxy-diagnostics--flymake-enabled
+    (setq-local lsp-proxy-diagnostics--flymake-enabled nil)))
 
-(defun lsp-copilot-diagnostics--flymake-after-diagnostics ()
+(defun lsp-proxy-diagnostics--flymake-after-diagnostics ()
   "Handler for diagnostics update."
   (cond
-   ((and lsp-copilot-diagnostics--flymake-report-fn flymake-mode)
-    (lsp-copilot-diagnostics--flymake-update-diagnostics))
+   ((and lsp-proxy-diagnostics--flymake-report-fn flymake-mode)
+    (lsp-proxy-diagnostics--flymake-update-diagnostics))
    ((not flymake-mode)
-    (setq lsp-copilot-diagnostics--flymake-report-fn nil))))
+    (setq lsp-proxy-diagnostics--flymake-report-fn nil))))
 
-(defun lsp-copilot-diagnostics--flymake-backend (report-fn &rest _args)
+(defun lsp-proxy-diagnostics--flymake-backend (report-fn &rest _args)
   "Flymake backend using REPORT-FN."
-  (let ((first-run (null lsp-copilot-diagnostics--flymake-report-fn)))
-    (setq lsp-copilot-diagnostics--flymake-report-fn report-fn)
+  (let ((first-run (null lsp-proxy-diagnostics--flymake-report-fn)))
+    (setq lsp-proxy-diagnostics--flymake-report-fn report-fn)
     (when first-run
-      (lsp-copilot-diagnostics--flymake-update-diagnostics))))
+      (lsp-proxy-diagnostics--flymake-update-diagnostics))))
 
-(defun lsp-copilot-diagnostics--flymake-update-diagnostics ()
+(defun lsp-proxy-diagnostics--flymake-update-diagnostics ()
   "Report new diagnostics to flymake."
-  (let* ((workspace-diagnostics (lsp-copilot--get-or-create-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map))
+  (let* ((workspace-diagnostics (lsp-proxy--get-or-create-project (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
          (buffer-diagnostics (gethash (buffer-file-name) workspace-diagnostics '()))
          (diags (mapcar
                  (lambda (diagnostic)
@@ -1993,15 +1993,15 @@ CALLBACK is the status callback passed by Flycheck."
                           (start-line (plist-get start :line))
                           (character (plist-get start :character))
                           (end-line (plist-get end :line))
-                          (start-point (lsp-copilot--position-point start))
-                          (end-point (lsp-copilot--position-point end)))
+                          (start-point (lsp-proxy--position-point start))
+                          (end-point (lsp-proxy--position-point end)))
                      (when (= start-point end-point)
                        (if-let* ((region (flymake-diag-region (current-buffer)
                                                               (1+ start-line)
                                                               character)))
                            (setq start-point (car region)
                                  end-point (cdr region))
-                         (lsp-copilot--save-restriction-and-excursion
+                         (lsp-proxy--save-restriction-and-excursion
                            (goto-char (point-min))
                            (setq start-point (line-beginning-position (1+ start-line))
                                  end-point (line-end-position (1+ end-line))))))
@@ -2014,7 +2014,7 @@ CALLBACK is the status callback passed by Flycheck."
                                                 (t :note))
                                               message)))
                  buffer-diagnostics)))
-    (funcall lsp-copilot-diagnostics--flymake-report-fn
+    (funcall lsp-proxy-diagnostics--flymake-report-fn
              diags
              ;; This :region keyword forces flymake to delete old diagnostics in
              ;; case the buffer hasn't changed since the last call to the report
@@ -2022,13 +2022,13 @@ CALLBACK is the status callback passed by Flycheck."
              :region (cons (point-min) (point-max)))))
 
 ;; project diagnostics
-(defvar lsp-copilot-diagnostics-buffer-mode-map
+(defvar lsp-proxy-diagnostics-buffer-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") 'lsp-copilot-show-diagnostic)
-    (define-key map (kbd "o") 'lsp-copilot-goto-diagnostic)
+    (define-key map (kbd "RET") 'lsp-proxy-show-diagnostic)
+    (define-key map (kbd "o") 'lsp-proxy-goto-diagnostic)
     map))
 
-(defun lsp-copilot-show-diagnostic (pos &optional other-window)
+(defun lsp-proxy-show-diagnostic (pos &optional other-window)
   "Show location of diagnostic at POS.
 If OTHER-WINDOW is non nil, show diagnosis in a new window."
   (interactive (list (point) t))
@@ -2045,44 +2045,44 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
         (save-excursion
           (save-restriction
             (widen)
-            (let* ((b (lsp-copilot--position-point start))
-                   (e (lsp-copilot--position-point end)))
+            (let* ((b (lsp-proxy--position-point start))
+                   (e (lsp-proxy--position-point end)))
               (goto-char b)
               (pulse-momentary-highlight-region (point)
                                                 (or e (line-end-position)) 'highlight)))))
       (current-buffer))))
 
-(defun lsp-copilot-goto-diagnostic (pos)
+(defun lsp-proxy-goto-diagnostic (pos)
   "Show location of diagnostic at POS."
   (interactive "d")
   (pop-to-buffer
-   (lsp-copilot-show-diagnostic pos)))
+   (lsp-proxy-show-diagnostic pos)))
 
-(defvar lsp-copilot--diagnostics-base-tabulated-list-format
+(defvar lsp-proxy--diagnostics-base-tabulated-list-format
   `[("Type" 8 nil)
     ("File" 40 nil)
     ("Backend" 50 t)
     ("Message" 0 t)])
 
-(define-derived-mode lsp-copilot-diagnostics-buffer-mode tabulated-list-mode
-  "Lsp copilot diagnostics"
-  "A mode for listing Lsp copilot diagnostics."
+(define-derived-mode lsp-proxy-diagnostics-buffer-mode tabulated-list-mode
+  "Lsp proxy diagnostics"
+  "A mode for listing Lsp proxy diagnostics."
   :interactive nil
-  (setq tabulated-list-format lsp-copilot--diagnostics-base-tabulated-list-format)
-  ;; (setq tabulated-list-entries 'lsp-copilot--diagnostics-buffer-entries)
+  (setq tabulated-list-format lsp-proxy--diagnostics-base-tabulated-list-format)
+  ;; (setq tabulated-list-entries 'lsp-proxy--diagnostics-buffer-entries)
   (tabulated-list-init-header))
 
-(defun lsp-copilot-show-project-diagnostics ()
+(defun lsp-proxy-show-project-diagnostics ()
   "Show a list of diagnostics for current project."
   (interactive)
-  (unless lsp-copilot-mode
-    (user-error "Lsp copilot mode is not enabled in the current buffer"))
-  (let ((workspace-diagnostics (lsp-copilot--get-or-create-project
-                                (lsp-copilot-project-root)
-                                lsp-copilot--diagnostics-map))
-        (target (or (get-buffer lsp-copilot-diagnostics-buffer)
-                    (with-current-buffer (get-buffer-create lsp-copilot-diagnostics-buffer)
-                      (lsp-copilot-diagnostics-buffer-mode)
+  (unless lsp-proxy-mode
+    (user-error "Lsp proxy mode is not enabled in the current buffer"))
+  (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
+                                (lsp-proxy-project-root)
+                                lsp-proxy--diagnostics-map))
+        (target (or (get-buffer lsp-proxy-diagnostics-buffer)
+                    (with-current-buffer (get-buffer-create lsp-proxy-diagnostics-buffer)
+                      (lsp-proxy-diagnostics-buffer-mode)
                       (current-buffer))))
         rows)
     (maphash (lambda (filepath diags)
@@ -2111,7 +2111,7 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
 ;;
 ;; code action
 ;;
-(defun lsp-copilot--apply-workspace-edit (wedit &optional confirm)
+(defun lsp-proxy--apply-workspace-edit (wedit &optional confirm)
   "Apply workspace edit WEDIT with CONFIRM."
   (let ((changes (plist-get wedit :changes))
         (documentChanges (plist-get wedit :documentChanges))
@@ -2131,7 +2131,7 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
     (when confirm
       (if (length> all-edits 0)
           (unless (y-or-n-p
-                   (format "[LSP-COPILOT] Server wants to:\n %s\n Proceed? "
+                   (format "[LSP-PROXY] Server wants to:\n %s\n Proceed? "
                            (mapconcat #'identity (mapcar (lambda (edit)
                                                            (let ((kind (plist-get edit :kind))
                                                                  (change (plist-get edit :change)))
@@ -2149,8 +2149,8 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
                                                          all-edits)
                                       "\n ")))
             (setq confirmed nil)
-            (lsp-copilot--info "%s" "User cancelled server edit"))
-        (lsp-copilot--info "%s" "No edits to apply")
+            (lsp-proxy--info "%s" "User cancelled server edit"))
+        (lsp-proxy--info "%s" "No edits to apply")
         (setq confirmed nil)))
     (when (and confirmed (length> all-edits 0))
       (let (change
@@ -2161,38 +2161,38 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
           (setq kind (plist-get aedits :kind))
           (cond
            ((equal kind "change")
-            (setq filename (lsp-copilot--uri-to-path (plist-get change :uri))
+            (setq filename (lsp-proxy--uri-to-path (plist-get change :uri))
                   edits (plist-get change :edits)
                   version nil)
             (with-current-buffer (find-file-noselect filename)
-              (lsp-copilot--info "lsp-copilot--apply-text-edit filename %s" filename)
-              (lsp-copilot--apply-text-edits edits version)))
+              (lsp-proxy--info "lsp-proxy--apply-text-edit filename %s" filename)
+              (lsp-proxy--apply-text-edits edits version)))
            ((equal kind "documentChange")
             (setq textDocument (plist-get change :textDocument)
                   edits (plist-get change :edits))
-            (setq filename (lsp-copilot--uri-to-path (plist-get textDocument :uri))
+            (setq filename (lsp-proxy--uri-to-path (plist-get textDocument :uri))
                   version (plist-get textDocument :version))
             (with-current-buffer (find-file-noselect filename)
-              (lsp-copilot--warn "lsp-copilot--apply-text-edit filename %s" filename)
-              (lsp-copilot--apply-text-edits edits version)))
+              (lsp-proxy--warn "lsp-proxy--apply-text-edit filename %s" filename)
+              (lsp-proxy--apply-text-edits edits version)))
            (t
-            (lsp-copilot--warn "lsp-copilot--apply-file-edits filename %s" filename)
-            (lsp-copilot--apply-text-document-edit change))))))))
+            (lsp-proxy--warn "lsp-proxy--apply-file-edits filename %s" filename)
+            (lsp-proxy--apply-text-document-edit change))))))))
 
-(defun lsp-copilot--code-action-transform (it)
+(defun lsp-proxy--code-action-transform (it)
   "Transform code action IT to a `(title . it)' format."
   (let* ((item (plist-get it :lsp_item))
          (ls-name (plist-get it :language_server_name))
          (title (plist-get item :title)))
     (cons (format "%s - (%s)" title ls-name) it)))
 
-(defun lsp-copilot--select-action (actions)
+(defun lsp-proxy--select-action (actions)
   "Select an action to execute from ACTIONS."
   (cond
-   ((seq-empty-p actions) (lsp-copilot--info "%s" "No code actions found.") nil)
+   ((seq-empty-p actions) (lsp-proxy--info "%s" "No code actions found.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into actions 'list))
-             (col (mapcar #'lsp-copilot--code-action-transform collection))
+             (col (mapcar #'lsp-proxy--code-action-transform collection))
              (completion (completing-read "Select code actions: "
                                           (lambda (string pred action)
                                             (if (eq action 'metadata)
@@ -2200,89 +2200,89 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
                                               (complete-with-action action col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
-(defun lsp-copilot--text-document-code-action-params ()
+(defun lsp-proxy--text-document-code-action-params ()
   "Code action params."
   (append
    `(:range ,(if (use-region-p)
-                 (lsp-copilot--region-range (region-beginning) (region-end))
-               (lsp-copilot--region-range (point) (point)))
+                 (lsp-proxy--region-range (region-beginning) (region-end))
+               (lsp-proxy--region-range (point) (point)))
      :context (:diagnostics ,(vector)))
-   (lsp-copilot--TextDocumentIdentifier)))
+   (lsp-proxy--TextDocumentIdentifier)))
 
-(defun lsp-copilot--code-actions-at-point ()
+(defun lsp-proxy--code-actions-at-point ()
   "Retrieve the code actions for the active region or the current line."
-  (lsp-copilot--request 'textDocument/codeAction (lsp-copilot--request-or-notify-params (lsp-copilot--text-document-code-action-params))))
+  (lsp-proxy--request 'textDocument/codeAction (lsp-proxy--request-or-notify-params (lsp-proxy--text-document-code-action-params))))
 
-(defun lsp-copilot--execute-command (command arguments &optional server-id)
+(defun lsp-proxy--execute-command (command arguments &optional server-id)
   "Ask SERVER-ID to execute COMMAND with ARGUMENTS."
   (let ((params (list :command command :arguments arguments)))
-    (lsp-copilot--async-request
+    (lsp-proxy--async-request
      'workspace/executeCommand
-     (lsp-copilot--request-or-notify-params
+     (lsp-proxy--request-or-notify-params
       params
       `(:context (:language-server-id ,server-id))))))
 
-(defun lsp-copilot-execute-code-action (action)
+(defun lsp-proxy-execute-code-action (action)
   "Execute code action ACTION.
 If ACTION is not set it will be selected
-from `lsp-copilot--code-actions-at-point'.
+from `lsp-proxy--code-actions-at-point'.
 Request codeAction/resolve for more info if server supports."
-  (interactive (list (lsp-copilot--select-action (lsp-copilot--code-actions-at-point))))
+  (interactive (list (lsp-proxy--select-action (lsp-proxy--code-actions-at-point))))
   (when action
     (let* ((item (plist-get action :lsp_item))
            (ls-id (plist-get action :language_server_id))
            (command (plist-get item :command))
            (edit (plist-get item :edit)))
       (if (and (not command) (not edit))
-          (lsp-copilot--async-request
+          (lsp-proxy--async-request
            'codeAction/resolve
-           (lsp-copilot--request-or-notify-params item `(:context (:language-server-id ,ls-id)))
+           (lsp-proxy--request-or-notify-params item `(:context (:language-server-id ,ls-id)))
            :success-fn (lambda (action)
                          (if action
-                             (lsp-copilot--execute-code-action action)
-                           (lsp-copilot--info "%s" "No code action found."))))
-        (lsp-copilot--execute-code-action action)))))
+                             (lsp-proxy--execute-code-action action)
+                           (lsp-proxy--info "%s" "No code action found."))))
+        (lsp-proxy--execute-code-action action)))))
 
-(defun lsp-copilot--execute-code-action (action)
+(defun lsp-proxy--execute-code-action (action)
   "Execute code action ACTION."
   (let* ((item (plist-get action :lsp_item))
          (ls-id (plist-get action :language_server_id))
          (command (plist-get item :command))
          (edit (plist-get item :edit)))
     (when edit
-      (lsp-copilot--apply-workspace-edit edit))
+      (lsp-proxy--apply-workspace-edit edit))
     (when command
-      (lsp-copilot--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
+      (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
 
 ;; inlay hints
-(defface lsp-copilot-inlay-hint-face '((t (:height 0.8 :inherit shadow)))
-  "Face used for inlay hint overlays." :group 'lsp-copilot-mode)
+(defface lsp-proxy-inlay-hint-face '((t (:height 0.8 :inherit shadow)))
+  "Face used for inlay hint overlays." :group 'lsp-proxy-mode)
 
-(defface lsp-copilot-type-hint-face '((t (:inherit lsp-copilot-inlay-hint-face)))
-  "Face used for type inlay hint overlays." :group 'lsp-copilot-mode)
+(defface lsp-proxy-type-hint-face '((t (:inherit lsp-proxy-inlay-hint-face)))
+  "Face used for type inlay hint overlays." :group 'lsp-proxy-mode)
 
-(defface lsp-copilot-parameter-hint-face '((t (:inherit lsp-copilot-inlay-hint-face)))
-  "Face used for parameter inlay hint overlays." :group 'lsp-copilot-mode)
+(defface lsp-proxy-parameter-hint-face '((t (:inherit lsp-proxy-inlay-hint-face)))
+  "Face used for parameter inlay hint overlays." :group 'lsp-proxy-mode)
 
-(defface lsp-copilot-highlight-symbol-face
+(defface lsp-proxy-highlight-symbol-face
   '((t (:inherit bold)))
-  "Face used to highlight the symbol at point." :group 'lsp-copilot-mode)
+  "Face used to highlight the symbol at point." :group 'lsp-proxy-mode)
 
-(defvar-local lsp-copilot--outstanding-inlay-hints-region (cons nil nil)
+(defvar-local lsp-proxy--outstanding-inlay-hints-region (cons nil nil)
   "Jit-lock-calculated (FROM . TO) region with potentially outdated hints.")
 
-(defvar-local lsp-copilot--outstanding-inlay-hints-last-region nil)
+(defvar-local lsp-proxy--outstanding-inlay-hints-last-region nil)
 
-(defvar-local lsp-copilot--outstanding-inlay-regions-timer nil
-  "Helper timer for `lsp-copilot--update-hints'.")
+(defvar-local lsp-proxy--outstanding-inlay-regions-timer nil
+  "Helper timer for `lsp-proxy--update-hints'.")
 
-(defun lsp-copilot--update-inlay-hints (from to)
-  "Jit-lock function for lsp-copilot inlay hints.
+(defun lsp-proxy--update-inlay-hints (from to)
+  "Jit-lock function for lsp-proxy inlay hints.
 Update the range of `(FROM TO)'."
-  (when lsp-copilot--support-inlay-hints
-    (cl-symbol-macrolet ((region lsp-copilot--outstanding-inlay-hints-region)
-                         (last-region lsp-copilot--outstanding-inlay-hints-last-region)
-                         (timer lsp-copilot--outstanding-inlay-regions-timer))
+  (when lsp-proxy--support-inlay-hints
+    (cl-symbol-macrolet ((region lsp-proxy--outstanding-inlay-hints-region)
+                         (last-region lsp-proxy--outstanding-inlay-hints-last-region)
+                         (timer lsp-proxy--outstanding-inlay-regions-timer))
       (setcar region (min (or (car region) (point-max)) from))
       (setcdr region (max (or (cdr region) (point-min)) to))
       ;; HACK: We're relying on knowledge of jit-lock internals here.  The
@@ -2290,7 +2290,7 @@ Update the range of `(FROM TO)'."
       ;; `point-max' is a heuristic for telling whether this call to
       ;; `jit-lock-functions' happens after `jit-lock-context-timer' has
       ;; just run.  Only after this delay should we start the smoothing
-      ;; timer that will eventually call `lsp-copilot--update-hints-1' with the
+      ;; timer that will eventually call `lsp-proxy--update-hints-1' with the
       ;; coalesced region.  I wish we didn't need the timer, but sometimes
       ;; a lot of "non-contextual" calls come in all at once and do verify
       ;; the condition.  Notice it is a 0 second timer though, so we're
@@ -2301,27 +2301,27 @@ Update the range of `(FROM TO)'."
           (setq timer (run-at-time
                        0 nil
                        (lambda ()
-                         (lsp-copilot--when-live-buffer buf
+                         (lsp-proxy--when-live-buffer buf
                            ;; HACK: In some pathological situations
                            ;; (Emacs's own coding.c, for example),
-                           ;; jit-lock is calling `lsp-copilot--update-hints'
+                           ;; jit-lock is calling `lsp-proxy--update-hints'
                            ;; repeatedly with same sequence of
                            ;; arguments, which leads to
-                           ;; `lsp-copilot--update-hints-1' being called with
+                           ;; `lsp-proxy--update-hints-1' being called with
                            ;; the same region repeatedly.  This happens
                            ;; even if the hint-painting code does
                            ;; nothing else other than widen, narrow,
                            ;; move point then restore these things.
                            ;; Possible Emacs bug, but this fixes it.
                            (unless (equal last-region region)
-                             (lsp-copilot--update-hints-1 (max (car region) (point-min))
+                             (lsp-proxy--update-hints-1 (max (car region) (point-min))
                                                           (min (cdr region) (point-max)))
                              (setq last-region region))
                            (setq region (cons nil nil)
                                  timer nil))))))))))
 
-(defun lsp-copilot--update-hints-1 (from to)
-  "Do most work for `lsp-copilot--update-hints', including LSP request."
+(defun lsp-proxy--update-hints-1 (from to)
+  "Do most work for `lsp-proxy--update-hints', including LSP request."
   ;; (message "from %s to %s start %s end %s" from to (window-start) (window-end nil t))
   (let* ((buf (current-buffer))
          (paint-hint
@@ -2332,7 +2332,7 @@ Update the range of `(FROM TO)'."
                      (paddingRight (plist-get hint :paddingRight))
                      (kind (plist-get hint :kind))
                      (label (plist-get hint :label)))
-                (goto-char (lsp-copilot--position-point position))
+                (goto-char (lsp-proxy--position-point position))
                 (when (or (> (point) to) (< (point) from)) (cl-return))
                 (let* ((left-pad (and paddingLeft
                                       (not (eq paddingLeft :json-false))
@@ -2356,30 +2356,30 @@ Update the range of `(FROM TO)'."
                                         (propertize
                                          text
                                          'face (pcase kind
-                                                 (1 'lsp-copilot-type-hint-face)
-                                                 (2 'lsp-copilot-parameter-hint-face)
-                                                 (_ 'lsp-copilot-inlay-hint-face))))
+                                                 (1 'lsp-proxy-type-hint-face)
+                                                 (2 'lsp-proxy-parameter-hint-face)
+                                                 (_ 'lsp-proxy-inlay-hint-face))))
                            (overlay-put ov 'priority (if peg-after-p i (- n i)))
-                           (overlay-put ov 'lsp-copilot--inlay-hint t)
+                           (overlay-put ov 'lsp-proxy--inlay-hint t)
                            (overlay-put ov 'evaporate t)
-                           (overlay-put ov 'lsp-copilot--overlay t))))
+                           (overlay-put ov 'lsp-proxy--overlay t))))
                     (if (stringp label)
                         (do-it label left-pad right-pad 0 1)
                       (cl-loop
                        for i from 0 for ldetail across label
-                       do (lsp-copilot--dbind (:value value) ldetail
+                       do (lsp-proxy--dbind (:value value) ldetail
                             (do-it value
                                    (and (zerop i) left-pad)
                                    (and (= i (1- (length label))) right-pad)
                                    i (length label))))))))))))
-    (lsp-copilot--async-request
+    (lsp-proxy--async-request
      'textDocument/inlayHint
-     (lsp-copilot--request-or-notify-params
-      (append `(:range (:start ,(lsp-copilot--point-position from)
-                        :end ,(lsp-copilot--point-position to)))
-              (lsp-copilot--TextDocumentIdentifier)))
+     (lsp-proxy--request-or-notify-params
+      (append `(:range (:start ,(lsp-proxy--point-position from)
+                        :end ,(lsp-proxy--point-position to)))
+              (lsp-proxy--TextDocumentIdentifier)))
      :success-fn (lambda (hints)
-                   (lsp-copilot--when-live-buffer buf
+                   (lsp-proxy--when-live-buffer buf
                      (save-excursion
                        (save-restriction
                          (widen)
@@ -2389,7 +2389,7 @@ Update the range of `(FROM TO)'."
                          ;; overlays ending at TO don't logically belong
                          ;; to it.
                          (dolist (o (overlays-in (1- from) to))
-                           (when (and (overlay-get o 'lsp-copilot--inlay-hint)
+                           (when (and (overlay-get o 'lsp-proxy--inlay-hint)
                                       (cond ((eq (overlay-end o) from)
                                              (overlay-get o 'after-string))
                                             ((eq (overlay-end o) to)
@@ -2397,39 +2397,39 @@ Update the range of `(FROM TO)'."
                                             (t)))
                              (delete-overlay o)))
                          (mapc paint-hint hints)))))
-     :deferred 'lsp-copilot--update-hints-1)))
+     :deferred 'lsp-proxy--update-hints-1)))
 
-(defun lsp-copilot-activate-inlay-hints-mode ()
-  "Activate `lsp-copilot-inlay-hints-mode` for the current buffer
-if `lsp-copilot-inlay-hints-mode-config` allows it."
-  (when (and lsp-copilot--support-inlay-hints
-             (boundp 'lsp-copilot-inlay-hints-mode-config)
-             (or (eq lsp-copilot-inlay-hints-mode-config t)
-                 (and (listp lsp-copilot-inlay-hints-mode-config)
-                      (member major-mode lsp-copilot-inlay-hints-mode-config))))
-    (lsp-copilot-inlay-hints-mode 1)))
+(defun lsp-proxy-activate-inlay-hints-mode ()
+  "Activate `lsp-proxy-inlay-hints-mode` for the current buffer
+if `lsp-proxy-inlay-hints-mode-config` allows it."
+  (when (and lsp-proxy--support-inlay-hints
+             (boundp 'lsp-proxy-inlay-hints-mode-config)
+             (or (eq lsp-proxy-inlay-hints-mode-config t)
+                 (and (listp lsp-proxy-inlay-hints-mode-config)
+                      (member major-mode lsp-proxy-inlay-hints-mode-config))))
+    (lsp-proxy-inlay-hints-mode 1)))
 
-(define-minor-mode lsp-copilot-inlay-hints-mode
+(define-minor-mode lsp-proxy-inlay-hints-mode
   "Mode for displaying inlay hint."
   :lighter nil
   (cond
-   (lsp-copilot-inlay-hints-mode
-    (jit-lock-register #'lsp-copilot--update-inlay-hints 'contextual))
+   (lsp-proxy-inlay-hints-mode
+    (jit-lock-register #'lsp-proxy--update-inlay-hints 'contextual))
    (t
-    (jit-lock-unregister #'lsp-copilot--update-inlay-hints)
-    (remove-overlays nil nil 'lsp-copilot--inlay-hint t))))
+    (jit-lock-unregister #'lsp-proxy--update-inlay-hints)
+    (remove-overlays nil nil 'lsp-proxy--inlay-hint t))))
 
 ;;
 ;; commands
 ;;
-(defun lsp-copilot--get-commands ()
+(defun lsp-proxy--get-commands ()
   "Get support commands from server."
-  (lsp-copilot--request 'emacs/getCommands (lsp-copilot--request-or-notify-params nil)))
+  (lsp-proxy--request 'emacs/getCommands (lsp-proxy--request-or-notify-params nil)))
 
-(defun lsp-copilot--select-command (commands)
+(defun lsp-proxy--select-command (commands)
   "Select a command to execute from COMMANDS."
   (cond
-   ((seq-empty-p commands) (lsp-copilot--info "%s" "No command found.") nil)
+   ((seq-empty-p commands) (lsp-proxy--info "%s" "No command found.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into commands 'list))
              (col (mapcar (lambda (it) (cons (plist-get it :id) it)) collection))
@@ -2440,239 +2440,239 @@ if `lsp-copilot-inlay-hints-mode-config` allows it."
                                               (complete-with-action command col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
-(defun lsp-copilot-execute-command (command)
+(defun lsp-proxy-execute-command (command)
   "Execute COMMAND."
-  (interactive (list (lsp-copilot--select-command (lsp-copilot--get-commands))))
+  (interactive (list (lsp-proxy--select-command (lsp-proxy--get-commands))))
   (when command
-    (lsp-copilot--execute-command
+    (lsp-proxy--execute-command
      (plist-get command :id)
      (vector)
      (plist-get command :language_server_id))))
 
 ;; rust-analyzer
-(defun lsp-copilot--view-file-text ()
+(defun lsp-proxy--view-file-text ()
   "RustAnalyzer ViewFileText."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'rust-analyzer/viewFileText
-   (lsp-copilot--request-or-notify-params `(:uri ,(lsp-copilot--get-uri)))
+   (lsp-proxy--request-or-notify-params `(:uri ,(lsp-proxy--get-uri)))
    :success-fn (lambda (resp)
                  (message "resp %s" resp))))
 
 ;;
 ;; hooks
 ;;
-(defun lsp-copilot--before-change (beg end)
+(defun lsp-proxy--before-change (beg end)
   "Hook onto `before-change-functions' with BEG and END."
-  (when (listp lsp-copilot--recent-changes)
-    (push `(,(lsp-copilot--point-position beg)
-            ,(lsp-copilot--point-position end)
+  (when (listp lsp-proxy--recent-changes)
+    (push `(,(lsp-proxy--point-position beg)
+            ,(lsp-proxy--point-position end)
             (,beg . ,(copy-marker beg nil))
             (,end . ,(copy-marker end t)))
-          lsp-copilot--recent-changes)))
+          lsp-proxy--recent-changes)))
 
-(defun lsp-copilot--after-change (beg end pre-change-length)
+(defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
-  (cl-incf lsp-copilot--doc-version)
-  (pcase (and (listp lsp-copilot--recent-changes)
-              (car lsp-copilot--recent-changes))
+  (cl-incf lsp-proxy--doc-version)
+  (pcase (and (listp lsp-proxy--recent-changes)
+              (car lsp-proxy--recent-changes))
     (`(,lsp-beg ,lsp-end
        (,b-beg . ,b-beg-marker)
        (,b-end . ,b-end-marker))
      (if (and (= b-end b-end-marker) (= b-beg b-beg-marker)
               (or (/= beg b-beg) (/= end b-end)))
-         (setcar lsp-copilot--recent-changes
+         (setcar lsp-proxy--recent-changes
                  `(,lsp-beg ,lsp-end ,(- b-end-marker b-beg-marker)
                    ,(buffer-substring-no-properties b-beg-marker b-end-marker)))
-       (setcar lsp-copilot--recent-changes
+       (setcar lsp-proxy--recent-changes
                `(,lsp-beg ,lsp-end ,pre-change-length
                  ,(buffer-substring-no-properties beg end)))))
-    (_ (setf lsp-copilot--recent-changes :emacs-messup)))
-  (when lsp-copilot--change-idle-timer (cancel-timer lsp-copilot--change-idle-timer))
+    (_ (setf lsp-proxy--recent-changes :emacs-messup)))
+  (when lsp-proxy--change-idle-timer (cancel-timer lsp-proxy--change-idle-timer))
   (let ((buf (current-buffer)))
-    (setq lsp-copilot--change-idle-timer
+    (setq lsp-proxy--change-idle-timer
           (run-with-idle-timer
-           lsp-copilot--send-changes-idle-time
-           nil (lambda () (lsp-copilot--when-live-buffer buf
-                            (when lsp-copilot-mode
-                              (lsp-copilot--send-did-change)
-                              (setq lsp-copilot--change-idle-timer nil))))))))
+           lsp-proxy--send-changes-idle-time
+           nil (lambda () (lsp-proxy--when-live-buffer buf
+                            (when lsp-proxy-mode
+                              (lsp-proxy--send-did-change)
+                              (setq lsp-proxy--change-idle-timer nil))))))))
 
-(defun lsp-copilot--before-revert-hook ()
+(defun lsp-proxy--before-revert-hook ()
   "Hook of `before-revert-hook'."
-  (lsp-copilot--on-doc-close))
+  (lsp-proxy--on-doc-close))
 
-(defun lsp-copilot--after-revert-hook ()
+(defun lsp-proxy--after-revert-hook ()
   "Hook of `after-revert-hook'."
-  (lsp-copilot--on-doc-focus (selected-window)))
+  (lsp-proxy--on-doc-focus (selected-window)))
 
-(defun lsp-copilot--post-command-hook ()
+(defun lsp-proxy--post-command-hook ()
   "Post command hook."
-  (lsp-copilot--idle-reschedule (current-buffer))
+  (lsp-proxy--idle-reschedule (current-buffer))
   (let ((this-command-string (format "%s" this-command)))
-    (when lsp-copilot-mode
-      (posframe-hide lsp-copilot-hover-buffer))))
+    (when lsp-proxy-mode
+      (posframe-hide lsp-proxy-hover-buffer))))
 
-(defun lsp-copilot--mode-off ()
-  "Turn off `lsp-copilot-mode' unconditionally."
-  (remove-overlays nil nil 'lsp-copilot--overlay t)
-  (lsp-copilot-inlay-hints-mode -1)
-  (lsp-copilot-mode -1))
+(defun lsp-proxy--mode-off ()
+  "Turn off `lsp-proxy-mode' unconditionally."
+  (remove-overlays nil nil 'lsp-proxy--overlay t)
+  (lsp-proxy-inlay-hints-mode -1)
+  (lsp-proxy-mode -1))
 
-(defconst lsp-copilot--internal-hooks
-  '((before-change-functions . lsp-copilot--before-change)
-    (after-change-functions . lsp-copilot--after-change)
-    (before-revert-hook . lsp-copilot--before-revert-hook)
-    (after-revert-hook . lsp-copilot--after-revert-hook)
-    (kill-buffer-hook . lsp-copilot--mode-off)
-    (kill-buffer-hook . lsp-copilot--on-doc-close)
-    (xref-backend-functions . lsp-copilot--xref-backend)
-    (before-save-hook . lsp-copilot--will-save)
-    (after-save-hook . lsp-copilot--did-save)
-    (post-command-hook . lsp-copilot--post-command-hook)
-    (post-self-insert-hook . lsp-copilot--post-self-insert-hook)
-    (pre-command-hook . lsp-copilot--pre-command-hook)
-    (change-major-mode-hook . lsp-copilot--mode-off)))
+(defconst lsp-proxy--internal-hooks
+  '((before-change-functions . lsp-proxy--before-change)
+    (after-change-functions . lsp-proxy--after-change)
+    (before-revert-hook . lsp-proxy--before-revert-hook)
+    (after-revert-hook . lsp-proxy--after-revert-hook)
+    (kill-buffer-hook . lsp-proxy--mode-off)
+    (kill-buffer-hook . lsp-proxy--on-doc-close)
+    (xref-backend-functions . lsp-proxy--xref-backend)
+    (before-save-hook . lsp-proxy--will-save)
+    (after-save-hook . lsp-proxy--did-save)
+    (post-command-hook . lsp-proxy--post-command-hook)
+    (post-self-insert-hook . lsp-proxy--post-self-insert-hook)
+    (pre-command-hook . lsp-proxy--pre-command-hook)
+    (change-major-mode-hook . lsp-proxy--mode-off)))
 
 ;;
 ;; mode
 ;;
-(defun lsp-copilot--buffer-visible-p ()
+(defun lsp-proxy--buffer-visible-p ()
   "Return non nil if current buffer is visible."
   (or (buffer-modified-p) (get-buffer-window nil t)))
 
-(defun lsp-copilot--init-if-visible ()
-  "Run `lsp-copilot--on-doc-focus' for the current buffer if the buffer is visible.
-Return non nil if `lsp-copilot--on-doc-focus' was run for the buffer."
-  (when (lsp-copilot--buffer-visible-p)
-    (remove-hook 'window-configuration-change-hook #'lsp-copilot--init-if-visible t)
-    (lsp-copilot--on-doc-focus (selected-window))
+(defun lsp-proxy--init-if-visible ()
+  "Run `lsp-proxy--on-doc-focus' for the current buffer if the buffer is visible.
+Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
+  (when (lsp-proxy--buffer-visible-p)
+    (remove-hook 'window-configuration-change-hook #'lsp-proxy--init-if-visible t)
+    (lsp-proxy--on-doc-focus (selected-window))
     t))
 
-(defun lsp-copilot--mode-enter ()
-  "Set up lsp copilot mode when entering."
+(defun lsp-proxy--mode-enter ()
+  "Set up lsp proxy mode when entering."
   ;; Do add hook
   (when buffer-file-name
-    (dolist (hook lsp-copilot--internal-hooks)
+    (dolist (hook lsp-proxy--internal-hooks)
       (add-hook (car hook) (cdr hook) nil t))
     (setq eldoc-documentation-strategy #'eldoc-documentation-compose)
-    (add-hook 'eldoc-documentation-functions #'lsp-copilot-hover-eldoc-function nil t)
+    (add-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function nil t)
     (eldoc-mode 1)
-    ;; Ensure that `lsp-copilot-completion-at-point' the first CAPF to be tried,
+    ;; Ensure that `lsp-proxy-completion-at-point' the first CAPF to be tried,
     ;; unless user has put it elsewhere in the list by their own
-    (add-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point -50 t)
-    ;; (completion-at-point-functions . lsp-copilot-completion-at-point)
+    (add-hook 'completion-at-point-functions #'lsp-proxy-completion-at-point -50 t)
+    ;; (completion-at-point-functions . lsp-proxy-completion-at-point)
     ;; Hook onto both window-selection-change-functions and window-buffer-change-functions
     ;; since both are separate ways of 'focussing' a buffer.
-    (add-hook 'window-selection-change-functions #'lsp-copilot--on-doc-focus nil 'local)
-    (add-hook 'window-buffer-change-functions #'lsp-copilot--on-doc-focus nil 'local)
+    (add-hook 'window-selection-change-functions #'lsp-proxy--on-doc-focus nil 'local)
+    (add-hook 'window-buffer-change-functions #'lsp-proxy--on-doc-focus nil 'local)
     (make-local-variable 'completion-category-defaults)
-    (setf (alist-get 'lsp-copilot-capf completion-category-defaults) '((styles . (lsp-copilot-passthrough))))
+    (setf (alist-get 'lsp-proxy-capf completion-category-defaults) '((styles . (lsp-proxy-passthrough))))
     (make-local-variable 'completion-styles-alist)
-    (setf (alist-get 'lsp-copilot-passthrough completion-styles-alist)
-          '(lsp-copilot--dumb-tryc
-            lsp-copilot-passthrough-all-completions
+    (setf (alist-get 'lsp-proxy-passthrough completion-styles-alist)
+          '(lsp-proxy--dumb-tryc
+            lsp-proxy-passthrough-all-completions
             "Passthrough completion."))
     (cond
      ((and (or
-            (and (eq lsp-copilot-diagnostics-provider :auto)
+            (and (eq lsp-proxy-diagnostics-provider :auto)
                  (functionp 'flycheck-mode))
-            (and (eq lsp-copilot-diagnostics-provider :flycheck)
+            (and (eq lsp-proxy-diagnostics-provider :flycheck)
                  (or (functionp 'flycheck-mode)
-                     (user-error "The lsp-copilot-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
+                     (user-error "The lsp-proxy-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
            (require 'flycheck nil t))
-      (lsp-copilot-diagnostics-flycheck-enable))
-     ((or (eq lsp-copilot-diagnostics-provider :auto)
-          (eq lsp-copilot-diagnostics-provider :flymake)
-          (eq lsp-copilot-diagnostics-provider t))
+      (lsp-proxy-diagnostics-flycheck-enable))
+     ((or (eq lsp-proxy-diagnostics-provider :auto)
+          (eq lsp-proxy-diagnostics-provider :flymake)
+          (eq lsp-proxy-diagnostics-provider t))
       (require 'flymake)
-      (lsp-copilot-diagnostics-flymake-enable))
-     ((not (eq lsp-copilot-diagnostics-provider :none))
-      (lsp-copilot--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
-     (t (lsp-copilot--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
+      (lsp-proxy-diagnostics-flymake-enable))
+     ((not (eq lsp-proxy-diagnostics-provider :none))
+      (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
+     (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
     (let ((buffer (current-buffer)))
       (run-with-idle-timer 0 nil (lambda ()
                                    (when (buffer-live-p buffer)
                                      (with-current-buffer buffer
-                                       (unless (lsp-copilot--init-if-visible)
-                                         (add-hook 'window-configuration-change-hook #'lsp-copilot--init-if-visible)))))))))
+                                       (unless (lsp-proxy--init-if-visible)
+                                         (add-hook 'window-configuration-change-hook #'lsp-proxy--init-if-visible)))))))))
 
-(defun lsp-copilot--mode-exit ()
-  "Clean up lsp copilot mode when exising."
+(defun lsp-proxy--mode-exit ()
+  "Clean up lsp proxy mode when exising."
   ;; remove hook
-  (dolist (hook lsp-copilot--internal-hooks)
+  (dolist (hook lsp-proxy--internal-hooks)
     (remove-hook (car hook) (cdr hook) t))
-  (remove-hook 'completion-at-point-functions #'lsp-copilot-completion-at-point 'local)
-  (remove-hook 'window-selection-change-functions #'lsp-copilot--on-doc-focus 'local)
-  (remove-hook 'window-buffer-change-functions #'lsp-copilot--on-doc-focus 'local)
-  (remove-hook 'eldoc-documentation-functions #'lsp-copilot-hover-eldoc-function 'local)
+  (remove-hook 'completion-at-point-functions #'lsp-proxy-completion-at-point 'local)
+  (remove-hook 'window-selection-change-functions #'lsp-proxy--on-doc-focus 'local)
+  (remove-hook 'window-buffer-change-functions #'lsp-proxy--on-doc-focus 'local)
+  (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
   (setq-local completion-category-defaults
-              (cl-remove 'lsp-copilot-capf completion-category-defaults :key #'cl-first))
+              (cl-remove 'lsp-proxy-capf completion-category-defaults :key #'cl-first))
   (setq-local completion-styles-alist
-              (cl-remove 'lsp-copilot-passthrough completion-styles-alist :key #'cl-first))
-  (lsp-copilot-diagnostics-flycheck-disable)
-  (lsp-copilot-diagnostics-flymake-disable)
-  (when lsp-copilot--highlights
-    (mapc #'delete-overlay lsp-copilot--highlights))
-  (if lsp-copilot-inlay-hints-mode
-      (lsp-copilot-inlay-hints-mode -1))
+              (cl-remove 'lsp-proxy-passthrough completion-styles-alist :key #'cl-first))
+  (lsp-proxy-diagnostics-flycheck-disable)
+  (lsp-proxy-diagnostics-flymake-disable)
+  (when lsp-proxy--highlights
+    (mapc #'delete-overlay lsp-proxy--highlights))
+  (if lsp-proxy-inlay-hints-mode
+      (lsp-proxy-inlay-hints-mode -1))
 
   ;; Send the close event for the active buffer since activating the mode will open it again.
-  (lsp-copilot--on-doc-close))
+  (lsp-proxy--on-doc-close))
 
 ;; Rename file
-(defun lsp-copilot--on-set-visited-file-name (old-func &rest args)
+(defun lsp-proxy--on-set-visited-file-name (old-func &rest args)
   "Advice around function `set-visited-file-name'.
 
 This advice sends textDocument/didClose for the old file and
 textDocument/didOpen for the new file."
-  (when lsp-copilot-mode
-    (lsp-copilot--on-doc-close))
+  (when lsp-proxy-mode
+    (lsp-proxy--on-doc-close))
   (prog1 (apply old-func args)
-    (when lsp-copilot-mode
-      (lsp-copilot--on-doc-open))))
+    (when lsp-proxy-mode
+      (lsp-proxy--on-doc-open))))
 
-(advice-add 'set-visited-file-name :around #'lsp-copilot--on-set-visited-file-name)
+(advice-add 'set-visited-file-name :around #'lsp-proxy--on-set-visited-file-name)
 
-(defun lsp-copilot-restart ()
+(defun lsp-proxy-restart ()
   "Restart."
   (interactive)
-  (when lsp-copilot--connection
-    (jsonrpc-shutdown lsp-copilot--connection)
-    (setq lsp-copilot--connection nil))
-  (setq lsp-copilot--opened-buffers nil)
+  (when lsp-proxy--connection
+    (jsonrpc-shutdown lsp-proxy--connection)
+    (setq lsp-proxy--connection nil))
+  (setq lsp-proxy--opened-buffers nil)
   ;; progress map
-  (clrhash lsp-copilot--project-hashmap)
+  (clrhash lsp-proxy--project-hashmap)
   ;; diagnostics
-  (clrhash lsp-copilot--diagnostics-map)
+  (clrhash lsp-proxy--diagnostics-map)
   ;; document highlights
-  (when lsp-copilot--highlights
-    (mapc #'delete-overlay lsp-copilot--highlights))
+  (when lsp-proxy--highlights
+    (mapc #'delete-overlay lsp-proxy--highlights))
   ;; inlay hints
-  (remove-overlays nil nil 'lsp-copilot--inlay-hint t)
-  (lsp-copilot--on-doc-focus (selected-window))
-  (message "[LSP-COPILOT] Process restarted."))
+  (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
+  (lsp-proxy--on-doc-focus (selected-window))
+  (message "[LSP-PROXY] Process restarted."))
 
-(defun lsp-copilot-toggle-trace-io ()
+(defun lsp-proxy-toggle-trace-io ()
   "Toggle jsonrpc logging."
   (interactive)
-  (setq lsp-copilot-log-max (if lsp-copilot-log-max nil 0))
-  (lsp-copilot-restart)
-  (lsp-copilot--info "JSON-RPC logging %s." (if lsp-copilot-log-max "disabled" "enabled")))
+  (setq lsp-proxy-log-max (if lsp-proxy-log-max nil 0))
+  (lsp-proxy-restart)
+  (lsp-proxy--info "JSON-RPC logging %s." (if lsp-proxy-log-max "disabled" "enabled")))
 
-(defun lsp-copilot--server-transform (it)
+(defun lsp-proxy--server-transform (it)
   "Transform server IT to a `(name . it)' format."
   (let* ((name (plist-get it :name)))
     (cons (format "%s" name) it)))
 
-(defun lsp-copilot--select-server (servers)
+(defun lsp-proxy--select-server (servers)
   "Select a server in SERVERS to restart."
   (cond
-   ((seq-empty-p servers) (lsp-copilot--info "%s" "No server associated.") nil)
+   ((seq-empty-p servers) (lsp-proxy--info "%s" "No server associated.") nil)
    (t (let* ((completion-ignore-case t)
              (collection (seq-into servers 'list))
-             (col (mapcar #'lsp-copilot--server-transform collection))
+             (col (mapcar #'lsp-proxy--server-transform collection))
              (completion (completing-read "Select a server: "
                                           (lambda (string pred action)
                                             (if (eq action 'metadata)
@@ -2680,64 +2680,64 @@ textDocument/didOpen for the new file."
                                               (complete-with-action action col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
-(defun lsp-copilot-workspace-restart ()
+(defun lsp-proxy-workspace-restart ()
   "Restart SERVER."
   (interactive)
-  (lsp-copilot--async-request
+  (lsp-proxy--async-request
    'emacs/workspaceRestart
-   (lsp-copilot--request-or-notify-params nil)
+   (lsp-proxy--request-or-notify-params nil)
    :success-fn (lambda (data)
                  ;; 清理所有已经打开的该项目下的文件
                  (let ((paths (seq-into data 'list)))
-                   (setq lsp-copilot--opened-buffers
+                   (setq lsp-proxy--opened-buffers
                          (cl-remove-if
                           (lambda (elt)
                             (member (buffer-file-name elt) paths))
-                          lsp-copilot--opened-buffers)))
+                          lsp-proxy--opened-buffers)))
                  ;; 清理所有 buffer 存在的 diagnostic 信息
-                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--diagnostics-map)
+                 (lsp-proxy--remove-project (lsp-proxy-project-root) lsp-proxy--diagnostics-map)
                  ;; 清理记录的当前项目的 progress 信息
-                 (lsp-copilot--remove-project (lsp-copilot-project-root) lsp-copilot--project-hashmap)
+                 (lsp-proxy--remove-project (lsp-proxy-project-root) lsp-proxy--project-hashmap)
                  (revert-buffer))))
 
-(defvar lsp-copilot-mode-map
+(defvar lsp-proxy-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "M-S-SPC") #'lsp-copilot-signature-activate)
-    (define-key map (kbd "M-,") #'lsp-copilot-signature-activate)
+    (define-key map (kbd "M-S-SPC") #'lsp-proxy-signature-activate)
+    (define-key map (kbd "M-,") #'lsp-proxy-signature-activate)
     map))
 
-(defun lsp-copilot-open-config-file ()
+(defun lsp-proxy-open-config-file ()
   "Open the configuration file. If it does not exist, create it first."
   (interactive)
-  (unless (file-exists-p lsp-copilot-user-languages-config)
-    (with-temp-buffer lsp-copilot-user-languages-config))
-  (find-file lsp-copilot-user-languages-config))
+  (unless (file-exists-p lsp-proxy-user-languages-config)
+    (with-temp-buffer lsp-proxy-user-languages-config))
+  (find-file lsp-proxy-user-languages-config))
 
-(defun lsp-copilot-open-log-file ()
+(defun lsp-proxy-open-log-file ()
   "Open the log file. If it does not exist, create it first."
   (interactive)
-  (unless (file-exists-p lsp-copilot--log-file)
-    (with-temp-buffer lsp-copilot--log-file))
-  (find-file lsp-copilot--log-file))
+  (unless (file-exists-p lsp-proxy--log-file)
+    (with-temp-buffer lsp-proxy--log-file))
+  (find-file lsp-proxy--log-file))
 
 ;;;###autoload
-(define-minor-mode lsp-copilot-mode
-  "Minor mode for Lsp-Copilot."
-  :map lsp-copilot-mode-map
+(define-minor-mode lsp-proxy-mode
+  "Minor mode for Lsp-Proxy."
+  :map lsp-proxy-mode-map
   :init-value nil
-  :lighter " Lsp Copilot"
-  (if lsp-copilot-mode
-      (lsp-copilot--mode-enter)
-    (lsp-copilot--mode-exit)))
+  :lighter " Lsp Proxy"
+  (if lsp-proxy-mode
+      (lsp-proxy--mode-enter)
+    (lsp-proxy--mode-exit)))
 
 ;;;###autoload
-(define-global-minor-mode global-lsp-copilot-mode
-  lsp-copilot-mode lsp-copilot-turn-on-unless-buffer-read-only)
+(define-global-minor-mode global-lsp-proxy-mode
+  lsp-proxy-mode lsp-proxy-turn-on-unless-buffer-read-only)
 
-(defun lsp-copilot-turn-on-unless-buffer-read-only ()
-  "Turn on `lsp-copilot-mode' if the buffer is writable."
+(defun lsp-proxy-turn-on-unless-buffer-read-only ()
+  "Turn on `lsp-proxy-mode' if the buffer is writable."
   (unless buffer-read-only
-    (lsp-copilot-mode 1)))
+    (lsp-proxy-mode 1)))
 
-(provide 'lsp-copilot)
-;;; lsp-copilot.el ends here
+(provide 'lsp-proxy)
+;;; lsp-proxy.el ends here

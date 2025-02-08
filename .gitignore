@@ -4,3 +4,5 @@
 .vscode
 lsp-copilot
 lsp-copilot.exe
+lsp-proxy
+lsp-proxy.exe

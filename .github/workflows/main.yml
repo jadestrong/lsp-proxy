@@ -15,17 +15,17 @@ jobs:
             os: ubuntu-latest
             rust: nightly
             target: x86_64-unknown-linux-musl
-            archive-name: lsp-copilot-linux.tar.gz
+            archive-name: lsp-proxy-linux.tar.gz
           - build: macos
             os: macos-latest
             rust: nightly
             target: x86_64-apple-darwin
-            archive-name: lsp-copilot-macos.tar.gz
+            archive-name: lsp-proxy-macos.tar.gz
           - build: windows
             os: windows-latest
             rust: nightly-x86_64-msvc
             target: x86_64-pc-windows-msvc
-            archive-name: lsp-copilot-windows.7z
+            archive-name: lsp-proxy-windows.7z
       fail-fast: false
 
     steps:
@@ -47,20 +47,20 @@ jobs:
 
       - name: Strip binary (linux and macos)
         if: matrix.build == 'linux' || matrix.build == 'macos'
-        run: strip "target/${{ matrix.target }}/release/lsp-copilot"
+        run: strip "target/${{ matrix.target }}/release/lsp-proxy"
 
       - name: Build archive
         shell: bash
         run: |
           mkdir archive
-          cp LICENSE README.org lsp-copilot.el archive/
+          cp LICENSE README.org lsp-proxy.el archive/
           cd archive
           if [ "${{ matrix.build }}" = "windows" ]; then
-            cp "../target/${{ matrix.target }}/release/lsp-copilot.exe" ./
-            7z a "${{ matrix.archive-name }}" LICENSE README.org lsp-copilot.el lsp-copilot.exe
+            cp "../target/${{ matrix.target }}/release/lsp-proxy.exe" ./
+            7z a "${{ matrix.archive-name }}" LICENSE README.org lsp-proxy.el lsp-proxy.exe
           else
-            cp "../target/${{ matrix.target }}/release/lsp-copilot" ./
-            tar -czf "${{ matrix.archive-name }}" LICENSE README.org lsp-copilot.el lsp-copilot
+            cp "../target/${{ matrix.target }}/release/lsp-proxy" ./
+            tar -czf "${{ matrix.archive-name }}" LICENSE README.org lsp-proxy.el lsp-proxy
           fi
       - name: Upload archive
         uses: actions/upload-artifact@v4
@@ -86,9 +86,9 @@ jobs:
           if: startsWith(github.ref, 'refs/tags/')
           with:
             files: |
-                   ./assets/lsp-copilot-linux.tar.gz/lsp-copilot-linux.tar.gz
-                   ./assets/lsp-copilot-macos.tar.gz/lsp-copilot-macos.tar.gz
-                   ./assets/lsp-copilot-windows.7z/lsp-copilot-windows.7z
+                   ./assets/lsp-proxy-linux.tar.gz/lsp-proxy-linux.tar.gz
+                   ./assets/lsp-proxy-macos.tar.gz/lsp-proxy-macos.tar.gz
+                   ./assets/lsp-proxy-windows.7z/lsp-proxy-windows.7z
             body: |
               Automated release for build artifacts.
             draft: false
