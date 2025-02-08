@@ -179,7 +179,7 @@ language-servers = [
   # { name = "typescript-language-server", except-features = [
   #   "format",
   # ] },
-  "tailwindcss-ls",
+  { name = "tailwindcss-ls", config-files = ["tailwind.config.js", "tailwind.config.ts"] },
   { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
 ]
 
