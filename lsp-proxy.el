@@ -1,12 +1,12 @@
 ;;; lsp-proxy.el --- Description -*- lexical-binding: t; -*-
 ;;
-;; Copyright (C) 2023 JadeStrong
+;; Copyright (C) 2023-2025 JadeStrong
 ;;
 ;; Author: JadeStrong <jadestrong@163.com>
 ;; Maintainer: JadeStrong <jadestrong@163.com>
 ;; Created: December 15, 2023
 ;; Modified: December 15, 2023
-;; Version: 0.0.1
+;; Version: 0.4.0
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
 ;; Homepage: https://github.com/jadestrong/lsp-proxy
 ;; Package-Requires: ((emacs "29.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
@@ -26,6 +26,7 @@
 (require 'seq)
 (require 'url-util)
 (require 'project)
+(require 'eglot)
 
 (require 's)
 (require 'f)
@@ -142,14 +143,9 @@ the buffer when it becomes large."
           (const :tag "Trace" 3))
   :group 'lsp-proxy)
 
-(defface lsp-proxy-hover-posframe
-  '((t :inherit tooltip))
-  "Background and foreground for `lsp-proxy-hover-posframe'."
-  :group 'lsp-proxy)
-
 (defcustom lsp-proxy-signature-retrigger-keys '(return)
   "Character strings used to retrigger a new textDocument/signatureHelp request."
-  :type 'list
+  :type '(symbol)
   :group 'lsp-proxy-mode)
 
 (defcustom lsp-proxy-diagnostics-provider :auto
@@ -181,6 +177,16 @@ The value can be:
   "Highlight references of the symbol at point."
   :type 'boolean
   :group 'lsp-proxy)
+
+(defcustom lsp-proxy-enable-imenu t
+  "Enable imenu."
+  :type 'boolean
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-progress-prefix "⌛ "
+  "Progress prefix."
+  :group 'lsp-proxy-mode
+  :type 'string)
 
 (defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
                                                      "./lsp-proxy.exe"
@@ -239,6 +245,9 @@ from language server.")
 (defvar-local lsp-proxy--support-document-highlight nil
   "Is there any server associated with this buffer that support `textDocument/documentHighlight' request.")
 
+(defvar-local lsp-proxy--support-document-symbols nil
+  "Is there any server associated with this buffer that support `textDocument/documentSymbols' request.")
+
 (defvar lsp-proxy--show-message t
   "If non-nil, show debug message from `lsp-proxy-mode'.")
 
@@ -292,33 +301,6 @@ from language server.")
 
     (default                    . standard-indent))                 ; default fallback
   "A mapping from `major-mode' to its indent variable.")
-
-(defconst lsp-proxy--kind->symbol
-  '((1 . text)
-    (2 . method)
-    (3 . function)
-    (4 . constructor)
-    (5 . field)
-    (6 . variable)
-    (7 . class)
-    (8 . interface)
-    (9 . module)
-    (10 . property)
-    (11 . unit)
-    (12 . value)
-    (13 . enum)
-    (14 . keyword)
-    (15 . snippet)
-    (16 . color)
-    (17 . file)
-    (18 . reference)
-    (19 . folder)
-    (20 . enum-member)
-    (21 . constant)
-    (22 . struct)
-    (23 . event)
-    (24 . operator)
-    (25 . type-parameter)))
 
 (defconst lsp-proxy--message-type-face
   `((1 . ,compilation-error-face)
@@ -487,48 +469,12 @@ FORMAT and ARGS is the same as for `messsage'."
   `(-let ((,(lsp-proxy--transform-pattern pattern) ,source))
      ,@body))
 
-(defvar lsp-proxy--already-widened nil)
-(defmacro lsp-proxy--save-restriction-and-excursion (&rest form)
-  (declare (indent 0) (debug t))
-  `(if lsp-proxy--already-widened
-       (save-excursion ,@form)
-     (let* ((lsp-proxy--already-widened t))
-       (save-restriction
-         (widen)
-         (save-excursion ,@form)))))
+(defun lsp-proxy--fix-path-casing (path)
+  "On windows, downcases path because the windows file system is
+case-insensitive.
 
-(cl-defmacro lsp-proxy--when-live-buffer (buf &rest body)
-  "Check BUF live, then do BODY in it." (declare (indent 1) (debug t))
-  (let ((b (cl-gensym)))
-    `(let ((,b ,buf)) (if (buffer-live-p ,b) (with-current-buffer ,b ,@body)))))
-
-(cl-defmacro lsp-proxy--when-buffer-window (buf &body body)
-  "Check BUF showing somewhere, then do BODY in it." (declare (indent 1) (debug t))
-  (let ((b (cl-gensym)))
-    `(let ((,b ,buf))
-       ;;notice the exception when testing with `ert'
-       (when (or (get-buffer-window ,b) (ert-running-test))
-         (with-current-buffer ,b ,@body)))))
-
-(defun lsp-proxy--calculate-column ()
-  "Calculate character offset of cursor in current line."
-  (/ (- (length
-         (encode-coding-region
-          (line-beginning-position)
-          (min (point) (point-max)) 'utf-16 t))
-        2)
-     2))
-
-(defun lsp-proxy--get-uri ()
-  "Get URI of current buffer."
-  (cond
-   ((not buffer-file-name)
-    (concat "buffer://" (url-encode-url (buffer-name (current-buffer)))))
-   ((and (eq system-type 'windows-nt)
-         (not (s-starts-with-p "/" buffer-file-name)))
-    (concat "file:///" (url-encode-url buffer-file-name)))
-   (t
-    (concat "file://" (url-encode-url buffer-file-name)))))
+On other systems, returns path without change."
+  (if (eq system-type 'window-nt) (downcase path) path))
 
 (defun lsp-proxy--fix-path-casing (path)
   "On windows, downcases path because the windows file system is
@@ -556,102 +502,10 @@ On other systems, returns path without change."
           (concat remote-prefix normalized))
       uri)))
 
-(defun lsp-proxy--get-source ()
-  "Get source code from current buffer."
-  (buffer-substring-no-properties (point-min) (point-max)))
-
-(defun lsp-proxy--position ()
-  (list :line (1- (line-number-at-pos)) :character (lsp-proxy--calculate-column)))
-
-(defun lsp-proxy--point-position (point)
-  "Get position of the POINT."
-  (lsp-proxy--save-restriction-and-excursion
-    (goto-char point)
-    (lsp-proxy--position)))
-
-(defun lsp-proxy--position-point (pos)
-  "Convert `Position' object POS to a point."
-  (let* ((line (plist-get pos :line))
-         (character (plist-get pos :character)))
-    (lsp-proxy--line-character-to-point line character)))
-
-(defun lsp-proxy--line-character-to-point (line character)
-  "Return the point for character CHARACTER on line LINE."
-  (let ((inhibit-field-text-motion t))
-    (lsp-proxy--save-restriction-and-excursion
-      (goto-char (point-min))
-      (forward-line line)
-      ;; server may send character position beyond the current line and we
-      ;; sould fallback to line end.
-      (let* ((line-end (line-end-position)))
-        (if (> character (- line-end (point)))
-            line-end
-          (forward-char character)
-          (point))))))
-
-(defun lsp-proxy--position-equal (pos-a pos-b)
-  "Return whether POS-A and POS-B positions are equal."
-  (and (= (plist-get pos-a :line) (plist-get pos-b :line))
-       (= (plist-get pos-a :character) (plist-get pos-b :character))))
-
-(defun lsp-proxy--position-compare (pos-a pos-b)
-  "Return t if POS-A if greater thatn POS-B."
-  (let* ((line-a (plist-get pos-a :line))
-         (line-b (plist-get pos-b :line)))
-    (if (= line-a line-b)
-        (> (plist-get pos-a :character) (plist-get pos-b :character))
-      (> line-a line-b))))
-
-;; TODO fix point if the line or charactor is -1
-(defun lsp-proxy--range-region (range)
-  "Return region (BEG . END) that represents LSP RANGE.
-If optional MARKERS, make markers."
-  (let ((beg (lsp-proxy--position-point (plist-get range :start)))
-        (end (lsp-proxy--position-point (plist-get range :end))))
-    (cons beg end)))
-
 (defun lsp-proxy--region-range (start end)
   "Make Range object for the current region START and END."
-  (list :start (lsp-proxy--point-position start)
-        :end (lsp-proxy--point-position end)))
-
-(defun lsp-proxy--region-or-line ()
-  "The active region or the current line."
-  (if (use-region-p)
-      (lsp-proxy--region-range (region-beginning) (region-end))
-    (lsp-proxy--region-range (line-beginning-position) (line-end-position))))
-
-(defun lsp-proxy--format-markup (markup)
-  "Format MARKUP according to LSP's spec."
-  (pcase-let ((`(,string ,mode)
-               (if (stringp markup) (list markup 'gfm-view-mode)
-                 (list (plist-get markup :value)
-                       (pcase (plist-get markup :kind)
-                         ("markdown" 'gfm-view-mode)
-                         ("plaintext" 'text-mode)
-                         (_ major-mode))))))
-    (with-temp-buffer
-      (setq-local markdown-fontify-code-blocks-natively t)
-      (insert string)
-      (let ((inhibit-message t)
-            (message-log-max nil))
-        (ignore-errors (delay-mode-hooks (funcall mode))))
-      (font-lock-ensure)
-      (string-trim (buffer-string)))))
-
-(defun lsp-proxy--markdown-render ()
-  (when (fboundp 'gfm-view-mode)
-    (let ((inhibit-message t))
-      (setq-local markdown-fontify-code-blocks-natively t)
-      (set-face-background 'markdown-code-face (face-attribute 'lsp-proxy-hover-posframe :background nil t))
-      ;; (set-face-attribute 'markdown-code-face nil :height 230)
-      (gfm-view-mode)))
-  (read-only-mode 0)
-  (prettify-symbols-mode 1)
-  (display-line-numbers-mode -1)
-  (font-lock-ensure)
-
-  (setq-local mode-line-format nil))
+  (list :start (eglot--pos-to-lsp-position start)
+        :end (eglot--pos-to-lsp-position end)))
 
 (defun lsp-proxy--expand-snippet (snippet &optional start end expand-env)
   "Wrapper of `yas-expand-snippet' with all of it arguments.
@@ -697,29 +551,10 @@ LSP server result."
         (funcall indent-line-function)
         (forward-line)))))
 
-(defun lsp-proxy--get-file-contents-from-list (paths)
-  "Get all file content of PATHS list."
-  (apply #'vector
-         (mapcar
-          (lambda (path)
-            (let ((buffer (find-file-noselect path)))
-              (with-current-buffer buffer
-                (list :path path :content (buffer-substring-no-properties (point-min) (point-max)))))) paths)))
-
-(defun lsp-proxy--TextDocumentIdentifier ()
-  "Make a TextDocumentIdentifier object."
-  `(:textDocument
-    (:uri ,(lsp-proxy--get-uri))))
-
-(defun lsp-proxy--TextDocumentPosition ()
-  "Make a TextDocumentPosition object."
-  (append `(:position ,(lsp-proxy--position))
-          (lsp-proxy--TextDocumentIdentifier)))
-
 (defun lsp-proxy--request-or-notify-params (params &rest args)
   "Wrap request or notify params base PARAMS and add extra ARGS."
   (let ((rest (apply 'append args)))
-    (append (list :uri (lsp-proxy--get-uri) :params params) rest)))
+    (append (append (eglot--TextDocumentIdentifier) `(:params ,params)) rest)))
 
 (defun lsp-proxy--advice-json-parse (old-fn &rest args)
   "Try to parse bytecode instead of json."
@@ -764,17 +599,6 @@ LSP server result."
   (save-excursion
     (lsp-proxy-find-type-definition)))
 
-
-(defcustom lsp-proxy-xref-force-references nil
-  "If non-nil threat everything as references(e. g. jump if only one item.)"
-  :group 'lsp-proxy
-  :type 'boolean)
-
-(defcustom lsp-proxy-progress-prefix "⌛ "
-  "Progress prefix."
-  :group 'lsp-proxy-mode
-  :type 'string)
-
 (defun lsp-proxy-show-xrefs (xrefs display-action references?)
   (unless (region-active-p) (push-mark nil t))
   (if (boundp 'xref-show-definitions-function)
@@ -810,8 +634,8 @@ LSP server result."
                                                      (save-excursion
                                                        (save-restriction
                                                          (widen)
-                                                         (let* ((beg (lsp-proxy--position-point start))
-                                                                (end (lsp-proxy--position-point end))
+                                                         (let* ((beg (eglot--lsp-position-to-point start))
+                                                                (end (eglot--lsp-position-to-point end))
                                                                 (bol (progn (goto-char beg) (line-beginning-position)))
                                                                 (summary (buffer-substring bol (line-end-position)))
                                                                 (hi-beg (- beg bol))
@@ -830,185 +654,6 @@ LSP server result."
                                  (if (vectorp locations) locations (vector locations)))))
       (lsp-proxy-show-xrefs locs nil nil))))
 
-;;
-;; text-edit
-;;
-(defun lsp-proxy--apply-text-document-edit (change)
-  "Apply CHANGE."
-  (let* ((kind (gethash "kind" change))
-         (options (gethash "options" change))
-         uri
-         filename
-         new-uri new-filename
-         overwrite ignoreIfExists recursive ignoreIfNotExists)
-    (cond
-     ((equal kind "create")
-      (setq uri (gethash "uri" change))
-      (setq filename (lsp-proxy--uri-to-path uri))
-      (when options
-        (setq overwrite (gethash "overwrite" options)
-              ignoreIfExists (gethash "ignoreIfExists" options)))
-      (if (file-exists-p filename)
-          (if (or overwrite
-                  (not ignoreIfExists))
-              (progn
-                (when (find-buffer-visiting filename)
-                  (with-current-buffer (find-buffer-visiting filename)
-                    (save-buffer)
-                    (kill-buffer)))
-                (delete-file filename t)
-                (with-current-buffer (find-file-noselect filename)
-                  (save-buffer)))
-            (lsp-proxy--warn "Cannot create file %s." filename))
-        (when (find-buffer-visiting filename)
-          (with-current-buffer (find-buffer-visiting filename)
-            (save-buffer)
-            (kill-buffer)))
-        (delete-file filename t)
-        (with-current-buffer (find-file-noselect new-filename)
-          (save-buffer))))
-     ((equal kind "rename")
-      (setq uri (gethash "oldUri" change))
-      (setq filename (lsp-proxy--uri-to-path uri))
-      (setq new-uri (gethash "newUri" change))
-      (setq new-filename (lsp-proxy--uri-to-path new-uri))
-      (when options
-        (setq overwrite (gethash "overwrite" options)
-              ignoreIfExists (gethash "ignoreIfExists" options)))
-      (if (file-exists-p new-filename)
-          (if (or overwrite
-                  (not ignoreIfExists))
-              (progn
-                (when (find-buffer-visiting filename)
-                  (with-current-buffer (find-buffer-visiting filename)
-                    (save-buffer)
-                    (kill-buffer)))
-                (when (find-buffer-visiting new-filename)
-                  (with-current-buffer (find-buffer-visiting new-filename)
-                    (save-buffer)
-                    (kill-buffer)))
-                (rename-file filename new-filename t))
-            (lsp-proxy--warn "Cannot rename %s to %s" filename new-filename))
-        (if (find-buffer-visiting filename) ;; new filename not existing
-            (progn
-              (with-current-buffer (find-buffer-visiting filename)
-                (save-buffer)
-                (kill-buffer))
-              (rename-file filename new-filename t)
-              (find-file new-filename))
-          (rename-file filename new-filename t))))
-     ((equal kind "delete")
-      (setq uri (gethash "uri" change))
-      (setq filename (lsp-proxy--uri-to-path uri))
-      (when options
-        (setq recursive (gethash "recursive" options)
-              ignoreIfNotExists (gethash "ignoreIfNotExists" options)))
-      (when (file-exists-p filename)
-        (if (file-directory-p filename)
-            (progn
-              (if recursive
-                  (progn
-                    (dolist (buf (buffer-list))
-                      (with-current-buffer buf
-                        (when (and buffer-file-name
-                                   (f-parent-of-p filename buffer-file-name))
-                          (save-buffer)
-                          (kill-buffer))))
-                    (delete-directory filename t t))
-                (lsp-proxy--warn "Cannot delete directory %s" filename)))
-          (if (find-buffer-visiting filename)
-              (with-current-buffer (find-buffer-visiting filename)
-                (save-buffer)
-                (kill-buffer)))
-          (delete-file filename t)))))))
-
-(defun lsp-proxy--sort-edits (edits)
-  (sort edits #'(lambda (edit-a edit-b)
-                  (let* ((range-a (plist-get edit-a :range))
-                         (range-b (plist-get edit-b :range))
-                         (start-a (plist-get range-a :start))
-                         (start-b (plist-get range-b :start))
-                         (end-a (plist-get range-a :end))
-                         (end-b (plist-get range-a :end)))
-                    (if (lsp-proxy--position-equal start-a start-b)
-                        (lsp-proxy--position-compare end-a end-b)
-                      (lsp-proxy--position-compare start-a start-b))))))
-
-(defun lsp-proxy--apply-text-edit (edit)
-  "Apply the edits ddescribed in the TextEdit objet in TEXT-EDIT."
-  (let* ((start (lsp-proxy--position-point (plist-get (plist-get edit :range) :start)))
-         (end (lsp-proxy--position-point (plist-get (plist-get edit :range) :end)))
-         (new-text (plist-get edit :newText)))
-    (setq new-text (s-replace "\r" "" (or new-text "")))
-    (plist-put edit :newText new-text)
-    (goto-char start)
-    (delete-region start end)
-    (insert new-text)))
-
-(defun lsp-proxy--apply-text-edit-replace-buffer-contents (edit)
-  "Apply the edits described in the TextEdit object in TEXT-EDIT.
-The method uses `replace-buffer-contents'."
-  (let* (
-         (source (current-buffer))
-         (new-text (plist-get edit :newText))
-         (region (lsp-proxy--range-region (plist-get edit :range)))
-         (beg (car region))
-         (end (cdr region))
-         ;; ((beg . end) (lsp--range-to-region (lsp-make-range :start (lsp--fix-point start)
-         ;;                                      :end (lsp--fix-point end))))
-         )
-    (setq new-text (s-replace "\r" "" (or new-text "")))
-    (plist-put edit :newText new-text)
-    (with-temp-buffer
-      (insert new-text)
-      (let ((temp (current-buffer)))
-        (with-current-buffer source
-          (save-excursion
-            (save-restriction
-              (narrow-to-region beg end)
-
-              ;; On emacs versions < 26.2,
-              ;; `replace-buffer-contents' is buggy - it calls
-              ;; change functions with invalid arguments - so we
-              ;; manually call the change functions here.
-              ;;
-              ;; See emacs bugs #32237, #32278:
-              ;; https://debbugs.gnu.org/cgi/bugreport.cgi?bug=32237
-              ;; https://debbugs.gnu.org/cgi/bugreport.cgi?bug=32278
-              (let ((inhibit-modification-hooks t)
-                    (length (- end beg)))
-                (run-hook-with-args 'before-change-functions
-                                    beg end)
-                (replace-buffer-contents temp)
-                (run-hook-with-args 'after-change-functions
-                                    beg (+ beg (length new-text))
-                                    length)))))))))
-
-(defun lsp-proxy--apply-text-edits (edits &optional version)
-  "Apply the EDITS of VERSION described in the TextEdit[] object."
-  (unless (seq-empty-p edits)
-    (atomic-change-group
-      (let* ((change-group (prepare-change-group))
-             (howmany (length edits))
-             (message (format "Applying %s edits to `%s' ..." howmany (current-buffer)))
-             (_ (message message))
-             (reporter (make-progress-reporter message 0 howmany))
-             (done 0))
-        (unwind-protect
-            (mapc (lambda (edit)
-                    (progress-reporter-update reporter (cl-incf done))
-                    (lsp-proxy--apply-text-edit-replace-buffer-contents edit)
-                    (when-let* ((insert-text-format (plist-get edit :insertTextFormat))
-                                (start (lsp-proxy--position-point (plist-get (plist-get edit :range) :start)))
-                                (new-text (plist-get edit :newText)))
-                      (when (eq insert-text-format 2)
-                        ;; No `save-excursion' needed since expand snippet will change point anyway
-                        (goto-char (+ start (length new-text)))
-                        (lsp-proxy--indent-lines start (point))
-                        (lsp-proxy--expand-snippet new-text start (point))))) (reverse edits))
-          (undo-amalgamate-change-group change-group)
-          (progress-reporter-done reporter))))))
-
 (defun lsp-proxy--create-apply-text-edits-handlers ()
   "Create (handler cleanup-fn) for applying text edits in async request.
 Only works when mode is `tick or `alive."
@@ -1023,12 +668,11 @@ Only works when mode is `tick or `alive."
        (if (and first-edited
                 (seq-find (lambda (edit) (let* ((range (plist-get edit :range))
                                                 (end (plist-get range :end))
-                                                (end-point (lsp-proxy--position-point end)))
-                                           (message "range %s end %s" range end)
+                                                (end-point (eglot--lsp-position-to-point end)))
                                            (> end-point first-edited)))
                           edits))
            (lsp-proxy--warn "%s" "TextEdits will not be applied since document has been modified before of them.")
-         (lsp-proxy--apply-text-edits edits)))
+         (eglot--apply-text-edits edits)))
      (lambda ()
        (remove-hook 'before-change-functions func t)))))
 
@@ -1095,7 +739,7 @@ Only works when mode is `tick or `alive."
      (unless (lsp-proxy--connection-alivep)
        (lsp-proxy--start-agent))
      (if (or (eq ,method 'textDocument/didOpen) (eq ,method 'textDocument/willSave) (eq ,method 'textDocument/didSave) (-contains-p lsp-proxy--opened-buffers (current-buffer)))
-         (let ((new-params (list :uri (lsp-proxy--get-uri) :params ,@params)))
+         (let ((new-params (append (eglot--TextDocumentIdentifier) (list :params ,@params))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
        (lsp-proxy--on-doc-open))))
 
@@ -1156,7 +800,7 @@ Only works when mode is `tick or `alive."
 (defun lsp-proxy--handle-notification (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'textDocument/publishDiagnostics)
-    (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) (plist-get msg :params)
+    (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) msg
       (let ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists-p filepath)
           (with-current-buffer (find-file-noselect filepath)
@@ -1173,18 +817,19 @@ Only works when mode is `tick or `alive."
                   (lsp-proxy-diagnostics--flymake-enabled
                    (lsp-proxy-diagnostics--flymake-after-diagnostics))))))))
   (when  (eql method 'window/logMessage)
-    (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
+    (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
   (when  (eql method 'window/showMessage)
-    (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
+    (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
   (when (eql method 'emacs/triggerCharacters)
     (lsp-proxy--dbind (:uri uri
-                         :triggerCharacters trigger-characters
-                         :signatureTriggerCharacters signature-trigger-characters
-                         :supportInlayHints support-inlay-hints
-                         :supportDocumentHighlight support-document-highlight)
-        (plist-get msg :params)
+                       :triggerCharacters trigger-characters
+                       :signatureTriggerCharacters signature-trigger-characters
+                       :supportInlayHints support-inlay-hints
+                       :supportDocumentHighlight support-document-highlight
+                       :supportDocumentSymbols support-document-symbols)
+        msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists? filepath)
           (with-current-buffer (find-file-noselect filepath)
@@ -1192,12 +837,13 @@ Only works when mode is `tick or `alive."
             (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
             (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
             (setq-local lsp-proxy--support-document-highlight support-document-highlight)
+            (setq-local lsp-proxy--support-document-symbols support-document-symbols)
             (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
   (when (eql method '$/progress)
     (add-to-list 'global-mode-string '(t (:eval (lsp-proxy--progress-status))))
-    (lsp-proxy--dbind (:rootPath root-path :params params) (plist-get msg :params)
+    (lsp-proxy--dbind (:rootPath root-path :params params) msg
       (let* ((token (plist-get params :token))
              (value (plist-get params :value))
              (kind (plist-get value :kind)))
@@ -1209,14 +855,11 @@ Only works when mode is `tick or `alive."
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'workspace/applyEdit)
-    (lsp-proxy--dbind (:edit edit) (plist-get msg :params)
-      (lsp-proxy--apply-workspace-edit edit)))
+    (lsp-proxy--dbind (:edit edit) msg
+      (eglot--apply-workspace-edit edit last-command)))
   (when (eql method 'eslint/openDoc)
-    (lsp-proxy--dbind (:url url) (plist-get msg :params)
-      (browse-url url)))
-  (when (eql method 'emacs/getFiles)
-    (lsp-proxy--dbind (:paths paths) (plist-get msg :params)
-      (list :files (lsp-proxy--get-file-contents-from-list (seq-into paths 'list))))))
+    (lsp-proxy--dbind (:url url) msg
+      (browse-url url))))
 
 ;;
 ;; lsp request/notification
@@ -1230,7 +873,7 @@ Only works when mode is `tick or `alive."
   (when (and lsp-proxy-mode (eq window (selected-window)))
     (if (-contains-p lsp-proxy--opened-buffers (current-buffer))
         (lsp-proxy--notify ':textDocument/didFocus
-                             (list :textDocument (list :uri (lsp-proxy--get-uri))))
+                             (list :textDocument (eglot--TextDocumentIdentifier)))
       (lsp-proxy--on-doc-open))))
 
 (defun lsp-proxy--on-doc-open ()
@@ -1242,14 +885,18 @@ Only works when mode is `tick or `alive."
       (save-buffer))
     (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
     (lsp-proxy--notify 'textDocument/didOpen
-                         (list :textDocument (list :uri (lsp-proxy--get-uri)
-                                                   :text (lsp-proxy--get-source))))))
+                         (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                     (list
+                                                      :text (eglot--widening
+                                                             (buffer-substring-no-properties (point-min) (point-max)))
+                                                      :languageId ""
+                                                      :version lsp-proxy--doc-version))))))
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
   (when (-contains-p lsp-proxy--opened-buffers (current-buffer))
     (lsp-proxy--notify 'textDocument/didClose
-                         (list :textDocument (list :uri (lsp-proxy--get-uri))))
+                         (list :textDocument (eglot--TextDocumentIdentifier)))
     (setq lsp-proxy--opened-buffers (delete (current-buffer) lsp-proxy--opened-buffers))))
 
 
@@ -1257,12 +904,12 @@ Only works when mode is `tick or `alive."
   "Send textDocument/willSave notification."
   (lsp-proxy--notify 'textDocument/willSave
                        ;; 1 Manual, 2 AfterDelay, 3 FocusOut
-                       (append '(:reason 1) (lsp-proxy--TextDocumentIdentifier))))
+                       (list :textDocument (eglot--TextDocumentIdentifier) :reason 1 )))
 
 (defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
   (lsp-proxy--notify 'textDocument/didSave
-                       (lsp-proxy--TextDocumentIdentifier)))
+                       (list :textDocument (eglot--TextDocumentIdentifier))))
 
 (defun lsp-proxy--send-did-change ()
   "Send textDocument/didChange to server."
@@ -1270,10 +917,10 @@ Only works when mode is `tick or `alive."
     (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
       (lsp-proxy--notify 'textDocument/didChange
                            (list :textDocument
-                                 (list :uri (lsp-proxy--get-uri) :version lsp-proxy--doc-version)
+                                 (append (eglot--TextDocumentIdentifier) `(:version ,lsp-proxy--doc-version))
                                  :contentChanges
                                  (if full-sync-p
-                                     (vector (list :text (lsp-proxy--save-restriction-and-excursion
+                                     (vector (list :text (eglot--widening
                                                            (buffer-substring-no-properties (point-min)
                                                                                            (point-max)))))
                                    (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
@@ -1287,7 +934,7 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/definition
-   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-references ()
@@ -1295,7 +942,8 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/references
-   (lsp-proxy--request-or-notify-params (append (lsp-proxy--TextDocumentPosition) `(:context (:includeDeclaration t))))
+   (lsp-proxy--request-or-notify-params
+    (append (eglot--TextDocumentPositionParams) `(:context (:includeDeclaration t))))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-declaration ()
@@ -1303,7 +951,7 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/declaration
-   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-type-definition ()
@@ -1311,7 +959,7 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/typeDefinition
-   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-implementations ()
@@ -1319,7 +967,7 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/implementation
-   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (define-derived-mode lsp-proxy-help-mode help-mode "LspProxyHelp"
@@ -1330,14 +978,14 @@ Only works when mode is `tick or `alive."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/hover
-   (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn (lambda (hover-help)
                  (if (and hover-help (not (equal hover-help "")))
                      (with-current-buffer (get-buffer-create lsp-proxy-hover-buffer)
                        (let ((delay-mode-hooks t))
                          (lsp-proxy-help-mode)
                          (with-help-window lsp-proxy-hover-buffer
-                           (insert (lsp-proxy--format-markup hover-help))))
+                           (insert (eglot--format-markup hover-help))))
                        (run-mode-hooks))
                    (lsp-proxy--info "%s" "No content at point.")))))
 
@@ -1349,16 +997,16 @@ Only works when mode is `tick or `alive."
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/documentHighlight
-       (lsp-proxy--request-or-notify-params (lsp-proxy--TextDocumentPosition))
+       (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
        :success-fn
        (lambda (highlights)
          (mapc #'delete-overlay lsp-proxy--highlights)
          (setq lsp-proxy--highlights
-               (lsp-proxy--when-buffer-window buf
+               (eglot--when-buffer-window buf
                  (mapcar (lambda (highlight)
                            (let* ((range (plist-get highlight :range)))
                              (pcase-let ((`(,beg . ,end)
-                                          (lsp-proxy--range-region range)))
+                                          (eglot-range-region range)))
                                (let ((ov (make-overlay beg end)))
                                  (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
                                  (overlay-put ov 'modification-hooks
@@ -1383,19 +1031,18 @@ Only works when mode is `tick or `alive."
   (lsp-proxy--async-request
    'textDocument/formatting
    (lsp-proxy--request-or-notify-params
-    (append (list
-             :options
-             (list
-              :tabSize (symbol-value (lsp-proxy--get-indent-width major-mode))
-              :insertSpaces (not indent-tabs-mode)
-              :trimTrailingWhitespace lsp-proxy-trim-trailing-whitespace
-              :insertFinalNewline lsp-proxy-insert-final-newline
-              :trimFinalNewlinesmm lsp-proxy-trim-final-newlines))
-            (lsp-proxy--TextDocumentIdentifier)))
+    (list
+     :options (list
+               :tabSize (symbol-value (lsp-proxy--get-indent-width major-mode))
+               :insertSpaces (not indent-tabs-mode)
+               :trimTrailingWhitespace lsp-proxy-trim-trailing-whitespace
+               :insertFinalNewline lsp-proxy-insert-final-newline
+               :trimFinalNewlinesmm lsp-proxy-trim-final-newlines)
+     :textDocument (eglot--TextDocumentIdentifier)))
    :success-fn (lambda (edits)
                  (if (and edits (> (length edits) 0))
                      (progn
-                       (lsp-proxy--apply-text-edits edits)
+                       (eglot--apply-text-edits edits)
                        (save-buffer))
                    (lsp-proxy--info "%s" "No formatting changes provided")))))
 
@@ -1458,7 +1105,7 @@ Or nil if none."
                    (resp (lsp-proxy--request
                           'textDocument/completion
                           (lsp-proxy--request-or-notify-params
-                           (lsp-proxy--TextDocumentPosition)
+                           (eglot--TextDocumentPositionParams)
                            `(:context
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
                               :prefix ,prefix
@@ -1536,8 +1183,8 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
          (end (plist-get proxy-item :end)))
     (cond (textEdit
            (let* ((range (plist-get textEdit :range))
-                  (replaceStart (lsp-proxy--position-point (plist-get range :start)))
-                  (replaceEnd (lsp-proxy--position-point (plist-get range :end)))
+                  (replaceStart (eglot--lsp-position-to-point (plist-get range :start)))
+                  (replaceEnd (eglot--lsp-position-to-point (plist-get range :end)))
                   (newText (plist-get textEdit :newText))
                   (insertText (s-replace "\r" "" (or newText ""))))
              (delete-region start end)
@@ -1557,10 +1204,10 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
                                    startPoint
                                    (point)))
     (if (cl-plusp (length additionalTextEdits))
-        (lsp-proxy--apply-text-edits additionalTextEdits)
+        (eglot--apply-text-edits additionalTextEdits)
       (if-let* ((resolved-item (get-text-property 0 'resolved-item candidate)))
           (if-let* ((additionalTextEdits (plist-get resolved-item :additionalTextEdits)))
-              (lsp-proxy--apply-text-edits additionalTextEdits))
+              (eglot--apply-text-edits additionalTextEdits))
         (-let [(callback cleanup-fn) (lsp-proxy--create-apply-text-edits-handlers)]
           (lsp-proxy--async-resolve proxy-item callback cleanup-fn))))))
 
@@ -1569,7 +1216,7 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
   (let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
          (completion-item (plist-get proxy-item :item))
          (kind (and completion-item (plist-get completion-item :kind))))
-    (alist-get kind lsp-proxy--kind->symbol)))
+    (alist-get kind eglot--kind-names)))
 
 (defun lsp-proxy--annotate (item)
   "Annotate ITEM detail."
@@ -1585,7 +1232,7 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
        (format " %s" label--detail))
      (when-let* ((description (and label-detail (plist-get label-detail :description))))
        (format " %s" description))
-     (when-let* ((kind-name (alist-get kind lsp-proxy--kind->symbol)))
+     (when-let* ((kind-name (alist-get kind eglot--kind-names)))
        (format " (%s)" kind-name)))))
 
 (defun lsp-proxy--doc-buffer (item)
@@ -1600,7 +1247,7 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
   (when-let* ((resolved-item (or (get-text-property 0 'resolved-item item) (get-text-property 0 'lsp-proxy--item item)))
               (completion-item (plist-get resolved-item :item))
               (documentation (plist-get completion-item :documentation))
-              (formatted (lsp-proxy--format-markup documentation)))
+              (formatted (eglot--format-markup documentation)))
     (with-current-buffer (get-buffer-create "*lsp-proxy-doc*")
       (erase-buffer)
       (insert formatted)
@@ -1799,7 +1446,7 @@ It will show up only if current point has signature help."
     (lsp-proxy--async-request
      'textDocument/signatureHelp
      (lsp-proxy--request-or-notify-params
-      (lsp-proxy--TextDocumentPosition))
+      (eglot--TextDocumentPositionParams))
      :success-fn #'lsp-proxy--handle-signature-update)
     ;; (message "char %s" (char-to-string last-inp))
     ;; 非输入字符则重新触发一次请求
@@ -1809,7 +1456,7 @@ It will show up only if current point has signature help."
     ;;       (lsp-proxy--async-request
     ;;        'textDocument/signatureHelp
     ;;        (lsp-proxy--request-or-notify-params
-    ;;         (lsp-proxy--TextDocumentPosition)
+    ;;         (eglot--TextDocumentPositionParams)
     ;;         ;; `(:context (:signature-trigger-character ,(char-to-string last-command-event)))
     ;;         )
     ;;        :success-fn #'lsp-proxy--handle-signature-update))
@@ -1821,67 +1468,74 @@ It will show up only if current point has signature help."
 ;;
 ;; rename
 ;;
-(defun lsp-proxy--get-symbol-to-rename ()
-  "Get a symbol to rename and placeholder at point.
-Returns a cons ((START . END) . PLACEHOLDER?), and nil if
-renaming is generally supported but cannot be done at point.
-START and END are the bounds of the identifiers being renamed,
-while PLACEHOLDER?, is either nil or a string suggested by the
-language server as the initial input of a new-name prompt."
-  (when-let* ((bounds (bounds-of-thing-at-point 'symbol)))
-    (cons bounds nil)))
+;; (defun lsp-proxy--get-symbol-to-rename ()
+;;   "Get a symbol to rename and placeholder at point.
+;; Returns a cons ((START . END) . PLACEHOLDER?), and nil if
+;; renaming is generally supported but cannot be done at point.
+;; START and END are the bounds of the identifiers being renamed,
+;; while PLACEHOLDER?, is either nil or a string suggested by the
+;; language server as the initial input of a new-name prompt."
+;;   (when-let* ((bounds (bounds-of-thing-at-point 'symbol)))
+;;     (cons bounds nil)))
 
-(defface lsp-proxy-face-rename '((t :underline t))
-  "Face used to highlight the identifier being renamed.
-Renaming can be done using `lsp-rename'."
-  :group 'lsp-proxy-mode)
+;; (defface lsp-proxy-face-rename '((t :underline t))
+;;   "Face used to highlight the identifier being renamed.
+;; Renaming can be done using `lsp-rename'."
+;;   :group 'lsp-proxy-mode)
 
-(defface lsp-proxy-rename-placeholder-face '((t :inherit font-lock-variable-name-face))
-  "Face used to display the rename placeholder in.
-When calling `lsp-rename' interactively, this will be the face of
-the new name."
-  :group 'lsp-proxy-mode)
+;; (defface lsp-proxy-rename-placeholder-face '((t :inherit font-lock-variable-name-face))
+;;   "Face used to display the rename placeholder in.
+;; When calling `lsp-rename' interactively, this will be the face of
+;; the new name."
+;;   :group 'lsp-proxy-mode)
 
-(defun lsp-proxy--read-rename (at-point)
-  "Read a new name for a `lsp-proxy-rename' at `point' from the user.
-AT-POINT shall be a structure as returned by
-`lsp-proxy--get-symbol-to-rename'.
+;; (defun lsp-proxy--read-rename (at-point)
+;;   "Read a new name for a `lsp-proxy-rename' at `point' from the user.
+;; AT-POINT shall be a structure as returned by
+;; `lsp-proxy--get-symbol-to-rename'.
 
-Returns a string, which should be the new name for the identifier at point.
-If renaming cannot be done at point (as determined from AT-POINT),
-throw a `user-error'.
+;; Returns a string, which should be the new name for the identifier at point.
+;; If renaming cannot be done at point (as determined from AT-POINT),
+;; throw a `user-error'.
 
-This function is for use in `lsp-proxy-rename' only, and shall not be
-relied upon."
-  (unless at-point
-    (user-error "`lsp-proxy-rename' is invalid here"))
-  (-let* ((((start . end) . placeholder?) at-point)
-          ;; Do the `buffer-substring' first to not include `lsp-face-rename'
-          (rename-me (buffer-substring start end))
-          (placeholder (or placeholder? rename-me))
-          (placeholder (propertize placeholder 'face 'lsp-proxy-rename-placeholder-face))
-          overlay)
-    ;; We need unwind protect, as the user might cancel here, causing the
-    ;; overlay to linger.
-    (unwind-protect
-        (progn
-          (setq overlay (make-overlay start end))
-          (overlay-put overlay 'face 'lsp-proxy-face-rename)
+;; This function is for use in `lsp-proxy-rename' only, and shall not be
+;; relied upon."
+;;   (unless at-point
+;;     (user-error "`lsp-proxy-rename' is invalid here"))
+;;   (-let* ((((start . end) . placeholder?) at-point)
+;;           ;; Do the `buffer-substring' first to not include `lsp-face-rename'
+;;           (rename-me (buffer-substring start end))
+;;           (placeholder (or placeholder? rename-me))
+;;           (placeholder (propertize placeholder 'face 'lsp-proxy-rename-placeholder-face))
+;;           overlay)
+;;     ;; We need unwind protect, as the user might cancel here, causing the
+;;     ;; overlay to linger.
+;;     (unwind-protect
+;;         (progn
+;;           (setq overlay (make-overlay start end))
+;;           (overlay-put overlay 'face 'lsp-proxy-face-rename)
 
-          (read-string (format "Rename %s to: " rename-me) placeholder
-                       'lsp-rename-history))
-      (and overlay (delete-overlay overlay)))))
+;;           (read-string (format "Rename %s to: " rename-me) placeholder
+;;                        'lsp-rename-history))
+;;       (and overlay (delete-overlay overlay)))))
 
 (defun lsp-proxy-rename (newname)
   "Rename the symbol (and all references to it) under point to NEWNAME."
-  (interactive (list (lsp-proxy--read-rename (lsp-proxy--get-symbol-to-rename))))
+  ;; (interactive (list (lsp-proxy--read-rename (lsp-proxy--get-symbol-to-rename))))
+  (interactive
+   (list (read-from-minibuffer
+          (eglot--format "Rename `%s' to: "
+                         (or (thing-at-point 'symbol t)
+                             "unknown symbol"))
+          nil nil nil nil
+          (symbol-name (symbol-at-point)))))
   (lsp-proxy--async-request
    'textDocument/rename
    (lsp-proxy--request-or-notify-params
-    (append (lsp-proxy--TextDocumentPosition) `(:newName ,newname)))
+    (append (eglot--TextDocumentPositionParams) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
-                     (lsp-proxy--apply-workspace-edit edits t)
+                     (eglot--apply-workspace-edit edits this-command)
                    (lsp-proxy--warn "%s" "Server does not support rename.")))))
 
 ;;
@@ -2001,15 +1655,15 @@ CALLBACK is the status callback passed by Flycheck."
                           (start-line (plist-get start :line))
                           (character (plist-get start :character))
                           (end-line (plist-get end :line))
-                          (start-point (lsp-proxy--position-point start))
-                          (end-point (lsp-proxy--position-point end)))
+                          (start-point (eglot--lsp-position-to-point start))
+                          (end-point (eglot--lsp-position-to-point end)))
                      (when (= start-point end-point)
                        (if-let* ((region (flymake-diag-region (current-buffer)
                                                               (1+ start-line)
                                                               character)))
                            (setq start-point (car region)
                                  end-point (cdr region))
-                         (lsp-proxy--save-restriction-and-excursion
+                         (eglot--widening
                            (goto-char (point-min))
                            (setq start-point (line-beginning-position (1+ start-line))
                                  end-point (line-end-position (1+ end-line))))))
@@ -2053,8 +1707,8 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
         (save-excursion
           (save-restriction
             (widen)
-            (let* ((b (lsp-proxy--position-point start))
-                   (e (lsp-proxy--position-point end)))
+            (let* ((b (eglot--lsp-position-to-point start))
+                   (e (eglot--lsp-position-to-point end)))
               (goto-char b)
               (pulse-momentary-highlight-region (point)
                                                 (or e (line-end-position)) 'highlight)))))
@@ -2119,74 +1773,6 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
 ;;
 ;; code action
 ;;
-(defun lsp-proxy--apply-workspace-edit (wedit &optional confirm)
-  "Apply workspace edit WEDIT with CONFIRM."
-  (let ((changes (plist-get wedit :changes))
-        (documentChanges (plist-get wedit :documentChanges))
-        (confirmed t)
-        kind
-        all-edits)
-    (if documentChanges
-        (dolist (dc (seq-into documentChanges 'list))
-          (setq kind (plist-get dc :kind))
-          (if kind
-              (cl-pushnew (list :kind kind :change dc) all-edits)
-            (cl-pushnew (list :kind "documentChange" :change dc) all-edits)))
-      (when changes
-        (cl-loop for (uri edits) on changes by #'cddr
-                 do (push (list :kind "change" :change (list :uri uri :edits edits)) all-edits))))
-    (setq all-edits (reverse all-edits))
-    (when confirm
-      (if (length> all-edits 0)
-          (unless (y-or-n-p
-                   (format "[LSP-PROXY] Server wants to:\n %s\n Proceed? "
-                           (mapconcat #'identity (mapcar (lambda (edit)
-                                                           (let ((kind (plist-get edit :kind))
-                                                                 (change (plist-get edit :change)))
-                                                             (cond
-                                                              ((equal kind "change")
-                                                               (format "edit %s" (plist-get change :uri)))
-                                                              ((equal kind "documentChange")
-                                                               (format "edit %s" (plist-get (plist-get change :textDocument) :uri)))
-                                                              ((equal kind "rename")
-                                                               (format "rename %s to %s" (plist-get change :oldUri) (plist-get change :newUri)))
-                                                              ((equal kind "delete")
-                                                               (format "delete %s" (plist-get "uri" change)))
-                                                              ((equal kind "create")
-                                                               (format "create %s" (plist-get change :uri))))))
-                                                         all-edits)
-                                      "\n ")))
-            (setq confirmed nil)
-            (lsp-proxy--info "%s" "User cancelled server edit"))
-        (lsp-proxy--info "%s" "No edits to apply")
-        (setq confirmed nil)))
-    (when (and confirmed (length> all-edits 0))
-      (let (change
-            kind
-            textDocument filename edits version)
-        (dolist (aedits all-edits)
-          (setq change (plist-get aedits :change))
-          (setq kind (plist-get aedits :kind))
-          (cond
-           ((equal kind "change")
-            (setq filename (lsp-proxy--uri-to-path (plist-get change :uri))
-                  edits (plist-get change :edits)
-                  version nil)
-            (with-current-buffer (find-file-noselect filename)
-              (lsp-proxy--info "lsp-proxy--apply-text-edit filename %s" filename)
-              (lsp-proxy--apply-text-edits edits version)))
-           ((equal kind "documentChange")
-            (setq textDocument (plist-get change :textDocument)
-                  edits (plist-get change :edits))
-            (setq filename (lsp-proxy--uri-to-path (plist-get textDocument :uri))
-                  version (plist-get textDocument :version))
-            (with-current-buffer (find-file-noselect filename)
-              (lsp-proxy--warn "lsp-proxy--apply-text-edit filename %s" filename)
-              (lsp-proxy--apply-text-edits edits version)))
-           (t
-            (lsp-proxy--warn "lsp-proxy--apply-file-edits filename %s" filename)
-            (lsp-proxy--apply-text-document-edit change))))))))
-
 (defun lsp-proxy--code-action-transform (it)
   "Transform code action IT to a `(title . it)' format."
   (let* ((item (plist-get it :lsp_item))
@@ -2208,18 +1794,17 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
                                               (complete-with-action action col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
-(defun lsp-proxy--text-document-code-action-params ()
-  "Code action params."
-  (append
-   `(:range ,(if (use-region-p)
-                 (lsp-proxy--region-range (region-beginning) (region-end))
-               (lsp-proxy--region-range (point) (point)))
-     :context (:diagnostics ,(vector)))
-   (lsp-proxy--TextDocumentIdentifier)))
-
 (defun lsp-proxy--code-actions-at-point ()
   "Retrieve the code actions for the active region or the current line."
-  (lsp-proxy--request 'textDocument/codeAction (lsp-proxy--request-or-notify-params (lsp-proxy--text-document-code-action-params))))
+  (lsp-proxy--request
+   'textDocument/codeAction
+   (lsp-proxy--request-or-notify-params
+    (list
+     :textDocument (eglot--TextDocumentIdentifier)
+     :range (if (use-region-p)
+                (lsp-proxy--region-range (region-beginning) (region-end))
+              (lsp-proxy--region-range (point) (point)))
+     :context (list :diagnostics (vector))))))
 
 (defun lsp-proxy--execute-command (command arguments &optional server-id)
   "Ask SERVER-ID to execute COMMAND with ARGUMENTS."
@@ -2258,7 +1843,7 @@ Request codeAction/resolve for more info if server supports."
          (command (plist-get item :command))
          (edit (plist-get item :edit)))
     (when edit
-      (lsp-proxy--apply-workspace-edit edit))
+      (eglot--apply-workspace-edit edit this-command))
     (when command
       (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
 
@@ -2309,7 +1894,7 @@ Update the range of `(FROM TO)'."
           (setq timer (run-at-time
                        0 nil
                        (lambda ()
-                         (lsp-proxy--when-live-buffer buf
+                         (eglot--when-live-buffer buf
                            ;; HACK: In some pathological situations
                            ;; (Emacs's own coding.c, for example),
                            ;; jit-lock is calling `lsp-proxy--update-hints'
@@ -2340,7 +1925,7 @@ Update the range of `(FROM TO)'."
                      (paddingRight (plist-get hint :paddingRight))
                      (kind (plist-get hint :kind))
                      (label (plist-get hint :label)))
-                (goto-char (lsp-proxy--position-point position))
+                (goto-char (eglot--lsp-position-to-point position))
                 (when (or (> (point) to) (< (point) from)) (cl-return))
                 (let* ((left-pad (and paddingLeft
                                       (not (eq paddingLeft :json-false))
@@ -2383,11 +1968,12 @@ Update the range of `(FROM TO)'."
     (lsp-proxy--async-request
      'textDocument/inlayHint
      (lsp-proxy--request-or-notify-params
-      (append `(:range (:start ,(lsp-proxy--point-position from)
-                        :end ,(lsp-proxy--point-position to)))
-              (lsp-proxy--TextDocumentIdentifier)))
+      (list
+       :textDocument (eglot--TextDocumentIdentifier)
+       :range (list :start (eglot--pos-to-lsp-position from)
+                    :end (eglot--pos-to-lsp-position to))))
      :success-fn (lambda (hints)
-                   (lsp-proxy--when-live-buffer buf
+                   (eglot--when-live-buffer buf
                      (save-excursion
                        (save-restriction
                          (widen)
@@ -2427,6 +2013,21 @@ if `lsp-proxy-inlay-hints-mode-config` allows it."
     (jit-lock-unregister #'lsp-proxy--update-inlay-hints)
     (remove-overlays nil nil 'lsp-proxy--inlay-hint t))))
 
+;; imenu
+(cl-defun lsp-proxy-imenu ()
+    "Lsp-Proxy's `imenu-create-index-function'.
+Returns a list as described in docstring of `imenu--index-alist'."
+  (unless lsp-proxy--support-document-symbols
+    (cl-return-from lsp-proxy-imenu))
+  (let* ((res (lsp-proxy--request 'textDocument/documentSymbol
+                                  (lsp-proxy--request-or-notify-params (list :textDocument (eglot--TextDocumentIdentifier)))
+                                  :cancel-on-input non-essential))
+         (head (and (cl-plusp (length res)) (elt res 0))))
+    (when head
+      (eglot--dcase head
+        (((SymbolInformation)) (eglot--imenu-SymbolInformation res))
+        (((DocumentSymbol)) (eglot--imenu-DocumentSymbol res))))))
+
 ;;
 ;; commands
 ;;
@@ -2463,7 +2064,7 @@ if `lsp-proxy-inlay-hints-mode-config` allows it."
   (interactive)
   (lsp-proxy--async-request
    'rust-analyzer/viewFileText
-   (lsp-proxy--request-or-notify-params `(:uri ,(lsp-proxy--get-uri)))
+   (lsp-proxy--request-or-notify-params (eglot--TextDocumentIdentifier))
    :success-fn (lambda (resp)
                  (message "resp %s" resp))))
 
@@ -2473,8 +2074,8 @@ if `lsp-proxy-inlay-hints-mode-config` allows it."
 (defun lsp-proxy--before-change (beg end)
   "Hook onto `before-change-functions' with BEG and END."
   (when (listp lsp-proxy--recent-changes)
-    (push `(,(lsp-proxy--point-position beg)
-            ,(lsp-proxy--point-position end)
+    (push `(,(eglot--pos-to-lsp-position beg)
+            ,(eglot--pos-to-lsp-position end)
             (,beg . ,(copy-marker beg nil))
             (,end . ,(copy-marker end t)))
           lsp-proxy--recent-changes)))
@@ -2502,7 +2103,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
     (setq lsp-proxy--change-idle-timer
           (run-with-idle-timer
            lsp-proxy--send-changes-idle-time
-           nil (lambda () (lsp-proxy--when-live-buffer buf
+           nil (lambda () (eglot--when-live-buffer buf
                             (when lsp-proxy-mode
                               (lsp-proxy--send-did-change)
                               (setq lsp-proxy--change-idle-timer nil))))))))
@@ -2582,6 +2183,9 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
           '(lsp-proxy--dumb-tryc
             lsp-proxy-passthrough-all-completions
             "Passthrough completion."))
+    (if lsp-proxy-enable-imenu
+        (add-function :before-until (local 'imenu-create-index-function)
+                      #'lsp-proxy-imenu))
     (cond
      ((and (or
             (and (eq lsp-proxy-diagnostics-provider :auto)
@@ -2615,6 +2219,7 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
   (remove-hook 'window-selection-change-functions #'lsp-proxy--on-doc-focus 'local)
   (remove-hook 'window-buffer-change-functions #'lsp-proxy--on-doc-focus 'local)
   (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
+  (remove-function (local 'imenu-create-index-function) #'lsp-proxy-imenu)
   (setq-local completion-category-defaults
               (cl-remove 'lsp-proxy-capf completion-category-defaults :key #'cl-first))
   (setq-local completion-styles-alist
@@ -2668,25 +2273,6 @@ textDocument/didOpen for the new file."
   (setq lsp-proxy-log-max (if lsp-proxy-log-max nil 0))
   (lsp-proxy-restart)
   (lsp-proxy--info "JSON-RPC logging %s." (if lsp-proxy-log-max "disabled" "enabled")))
-
-(defun lsp-proxy--server-transform (it)
-  "Transform server IT to a `(name . it)' format."
-  (let* ((name (plist-get it :name)))
-    (cons (format "%s" name) it)))
-
-(defun lsp-proxy--select-server (servers)
-  "Select a server in SERVERS to restart."
-  (cond
-   ((seq-empty-p servers) (lsp-proxy--info "%s" "No server associated.") nil)
-   (t (let* ((completion-ignore-case t)
-             (collection (seq-into servers 'list))
-             (col (mapcar #'lsp-proxy--server-transform collection))
-             (completion (completing-read "Select a server: "
-                                          (lambda (string pred action)
-                                            (if (eq action 'metadata)
-                                                `(metadata (display-sort-function . identity))
-                                              (complete-with-action action col string pred))) nil t)))
-        (cdr (assoc completion col))))))
 
 (defun lsp-proxy-workspace-restart ()
   "Restart SERVER."

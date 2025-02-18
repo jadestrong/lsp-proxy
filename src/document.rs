@@ -115,6 +115,11 @@ impl Document {
             .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
     }
 
+    pub fn is_document_symbols_support(&self) -> bool {
+        self.language_servers()
+            .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentSymbols))
+    }
+
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
         let language_config =
             config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
@@ -159,13 +164,6 @@ impl Document {
         })
     }
 
-    // -- LSP methods
-
-    #[inline]
-    pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
-        lsp::TextDocumentIdentifier::new(self.uri.clone())
-    }
-
     pub fn get_all_language_servers(&self) -> Vec<Arc<Client>> {
         self.language_config()
             .into_iter()
@@ -180,6 +178,13 @@ impl Document {
                 })
             })
             .collect()
+    }
+
+    // -- LSP methods
+
+    #[inline]
+    pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
+        lsp::TextDocumentIdentifier::new(self.uri.clone())
     }
 
     #[inline]
