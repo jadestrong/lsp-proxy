@@ -9,7 +9,7 @@
 ;; Version: 0.4.0
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
 ;; Homepage: https://github.com/jadestrong/lsp-proxy
-;; Package-Requires: ((emacs "29.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (posframe "1.4.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
+;; Package-Requires: ((emacs "29.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
 ;;
 ;; This file is not part of GNU Emacs.
 ;;
@@ -32,7 +32,6 @@
 (require 'f)
 (require 'ht)
 (require 'dash)
-(require 'posframe)
 (require 'yasnippet)
 
 (declare-function yas-expand-snippet "ext:yasnippet")
@@ -295,6 +294,9 @@ from language server.")
 
 (defvar-local lsp-proxy--support-document-symbols nil
   "Is there any server associated with this buffer that support `textDocument/documentSymbols' request.")
+
+(defvar-local lsp-proxy--support-signature-help nil
+  "Is there any server associated with this buffer that support `textDocument/signatureHelp' request.")
 
 (defvar lsp-proxy--show-message t
   "If non-nil, show debug message from `lsp-proxy-mode'.")
@@ -885,7 +887,8 @@ Only works when mode is `tick or `alive."
                        :signatureTriggerCharacters signature-trigger-characters
                        :supportInlayHints support-inlay-hints
                        :supportDocumentHighlight support-document-highlight
-                       :supportDocumentSymbols support-document-symbols)
+                       :supportDocumentSymbols support-document-symbols
+                       :supportSignatureHelp support-signature-help)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists? filepath)
@@ -895,6 +898,7 @@ Only works when mode is `tick or `alive."
             (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
             (setq-local lsp-proxy--support-document-highlight support-document-highlight)
             (setq-local lsp-proxy--support-document-symbols support-document-symbols)
+            (setq-local lsp-proxy--support-signature-help support-signature-help)
             (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
@@ -1071,8 +1075,8 @@ Only works when mode is `tick or `alive."
                                  ov))))
                          highlights))))
        :deferred 'textDocument/documentHighlight)
-      nil))
-  t)
+      nil)
+    t))
 
 ;;
 ;; format
@@ -1125,8 +1129,7 @@ Without common substring required. PAT TABLE PRED POINT."
 
 (defun lsp-proxy--post-self-insert-hook ()
   "Set `lsp-proxy--last-inserted-char'."
-  (setq lsp-proxy--last-inserted-char last-input-event)
-  (lsp-proxy--maybe-enable-signature-help))
+  (setq lsp-proxy--last-inserted-char last-input-event))
 
 (defun lsp-proxy--pre-command-hook ()
   "Rest some temporary variables."
@@ -1638,183 +1641,30 @@ The CLEANUP-FN will be called to cleanup."
 ;;
 ;; Signature
 ;;
-(defvar lsp-proxy-signature-mode-map
-  (-doto (make-sparse-keymap)
-    (define-key (kbd "M-n") #'lsp-proxy-signature-next)
-    (define-key (kbd "M-p") #'lsp-proxy-signature-previous)
-    ;; (define-key (kbd "M-a") #'lsp-proxy-signature-toggle-full-docs)
-    (define-key (kbd "C-c C-k") #'lsp-proxy-signature-stop)
-    (define-key (kbd "M-k") #'lsp-proxy-signature-stop)
-    ;; (define-key (kbd "<ESC>") #'lsp-proxy-signature-stop)
-    (define-key (kbd "C-g") #'lsp-proxy-signature-stop))
-  "Keymap for `lsp-proxy-signature-mode'.")
-
-(defun lsp-proxy-signature-next ()
-  "Show next signature."
-  (interactive)
-  (let ((nsigs (length (plist-get lsp-proxy--signature-last :signatures))))
-    (when (and lsp-proxy--signature-last-index
-               lsp-proxy--signature-last
-               nsigs)
-      (setq lsp-proxy--signature-last-index (% (1+ lsp-proxy--signature-last-index) nsigs))
-      (lsp-proxy-signature-posframe (lsp-proxy--signature->message lsp-proxy--signature-last)))))
-
-(defun lsp-proxy-signature-previous ()
-  "Show previous signature."
-  (interactive)
-  (when (and lsp-proxy--signature-last-index
-             lsp-proxy--signature-last)
-    (setq lsp-proxy--signature-last-index (1- (if (zerop lsp-proxy--signature-last-index)
-                                                    (length (plist-get lsp-proxy--signature-last :signatures))
-                                                  lsp-proxy--signature-last-index)))
-    (lsp-proxy-signature-posframe (lsp-proxy--signature->message lsp-proxy--signature-last))))
-
-(define-minor-mode lsp-proxy-signature-mode
-  "Mode used to show signature popup."
-  :keymap lsp-proxy-signature-mode-map
-  :lighter ""
-  :group 'lsp-proxy-mode)
-
-(defun lsp-proxy-signature-stop ()
-  "Stop showing current signature help."
-  (interactive)
-  (setq lsp-proxy--signature-last nil)
-  ;; TODO cancel request?
-  (remove-hook 'post-command-hook #'lsp-proxy-signature)
-  (lsp-proxy-signature-posframe nil)
-  (lsp-proxy-signature-mode -1))
-
-(declare-function page-break-lines--update-display-tables "ext:page-break-lines")
-
-(defun lsp-proxy--setup-page-break-mode-if-present ()
-  "Enable `page-break-lines-mode' in current buffer."
-  (when (fboundp 'page-break-lines-mode)
-    (page-break-lines-mode)
-    ;; force page-break-lines-mode to update the display tables.
-    (page-break-lines--update-display-tables)))
-
-(declare-function posframe-show "ext:posframe")
-(declare-function posframe-hide "ext:posframe")
-(declare-function posframe-poshandler-point-bottom-left-corner-upward "ext:posframe")
-
-(defface lsp-proxy-signature-posframe
-  '((t :inherit tooltip))
-  "Background and foreground for `lsp-proxy-signature-posframe'."
-  :group 'lsp-mode)
-
-(defvar lsp-proxy-signature-posframe-params
-  (list :poshandler #'posframe-poshandler-point-bottom-left-corner-upward
-        :height 10
-        :width 60
-        :border-width 1
-        :min-width 60)
-  "Params for signature and `posframe-show'.")
-
-(defun lsp-proxy-signature-posframe (str)
-  "Use posframe to show the STR signatureHelp string."
-  (if str
-      (apply #'posframe-show
-             (with-current-buffer (get-buffer-create lsp-proxy-signature-buffer)
-               (erase-buffer)
-               (insert str)
-               (visual-line-mode)
-               (lsp-proxy--setup-page-break-mode-if-present)
-               (current-buffer))
-             (append
-              lsp-proxy-signature-posframe-params
-              (list :position (point)
-                    :background-color (face-attribute 'lsp-proxy-signature-posframe :background nil t)
-                    :foreground-color (face-attribute 'lsp-proxy-signature-posframe :foreground nil t)
-                    :border-color (face-attribute 'font-lock-comment-face :foreground nil t))))
-    (posframe-hide lsp-proxy-signature-buffer)))
-
-(defun lsp-proxy-signature-activate ()
-  "Activate signature help.
-It will show up only if current point has signature help."
-  (interactive)
-  (setq lsp-proxy--signature-last nil
-        lsp-proxy--signature-last-index nil
-        lsp-proxy--signature-last-buffer (current-buffer))
-  (add-hook 'post-command-hook #'lsp-proxy-signature)
-  (lsp-proxy-signature-mode t))
-
-(defun lsp-proxy--maybe-enable-signature-help ()
-  "Hook function of `post-self-insert-hook'."
-  (when (and lsp-proxy-signature-auto-active lsp-proxy--signature-trigger-characters)
-    (let ((ch last-command-event))
-      (when (cl-find ch lsp-proxy--signature-trigger-characters :key #'string-to-char)
-        (lsp-proxy-signature-activate)))))
-
-(defun lsp-proxy--signature->message (signature-help)
-  "Generate eldoc message form SIGNATURE-HELP response."
-  (setq lsp-proxy--signature-last signature-help)
-  (when (and signature-help (not (seq-empty-p (plist-get signature-help :signatures))))
-    (let* ((signatures (plist-get signature-help :signatures))
-           (active-signature (plist-get signature-help :activeSignature))
-           (active-parameter (plist-get signature-help :activeParameter))
-           (active-signature (or lsp-proxy--signature-last-index active-signature 0))
-           (_ (setq lsp-proxy--signature-last-index active-signature))
-           (signature (seq-elt signatures active-signature))
-           (label (plist-get signature :label))
-           (parameters (plist-get signature :parameters))
-           (prefix (if (= (length signatures) 1)
-                       ""
-                     (concat (propertize (format " %s/%s"
-                                                 (1+ active-signature)
-                                                 (length signatures))
-                                         'face 'success)
-                             " "))))
-      (when (and active-parameter (not (seq-empty-p parameters)))
-        (when-let* ((param (when (and (< -1 active-parameter (length parameters)))
-                             (seq-elt parameters active-parameter)))
-                    (selected-param-label (let ((label (plist-get param :label)))
-                                            (if (stringp label) label (append label nil))))
-                    (start (if (stringp selected-param-label)
-                               (s-index-of selected-param-label label)
-                             (cl-first selected-param-label)))
-                    (end (if (stringp selected-param-label)
-                             (+ start (length selected-param-label))
-                           (cl-second selected-param-label))))
-          (add-face-text-property start end 'eldoc-highlight-function-argument nil label)))
-      (concat prefix label))))
-
-(defun lsp-proxy--handle-signature-update (signature)
-  "Update SIGNATURE."
-  (let ((message (lsp-proxy--signature->message signature)))
-    (if (and (s-present? message) lsp-proxy-signature-mode)
-        (lsp-proxy-signature-posframe message)
-      (lsp-proxy-signature-stop))))
-
-(defun lsp-proxy-signature ()
-  "Display signature info (based on `textDocument/signatureHelp')."
-  ;; (message "input %s char %s charp %s" last-input-event last-command-event (characterp last-command-event))
-  ;; (message "type %s" (event-basic-type last-command-event))
-  ;; (message "string type %s" (string (event-basic-type last-command-event)))
-  (if (and lsp-proxy--signature-last-buffer
-           (not (equal (current-buffer) lsp-proxy--signature-last-buffer)))
-      (lsp-proxy-signature-stop)
-
-    (lsp-proxy--async-request
-     'textDocument/signatureHelp
-     (lsp-proxy--request-or-notify-params
-      (eglot--TextDocumentPositionParams))
-     :success-fn #'lsp-proxy--handle-signature-update)
-    ;; (message "char %s" (char-to-string last-inp))
-    ;; 非输入字符则重新触发一次请求
-    ;; (if (or (characterp last-command-event) (memq (event-basic-type last-command-event) lsp-proxy-signature-retrigger-keys))
-    ;;     (if (and lsp-proxy--signature-last)
-    ;;         (lsp-proxy--handle-signature-update lsp-proxy--signature-last)
-    ;;       (lsp-proxy--async-request
-    ;;        'textDocument/signatureHelp
-    ;;        (lsp-proxy--request-or-notify-params
-    ;;         (eglot--TextDocumentPositionParams)
-    ;;         ;; `(:context (:signature-trigger-character ,(char-to-string last-command-event)))
-    ;;         )
-    ;;        :success-fn #'lsp-proxy--handle-signature-update))
-    ;;   ;; (lsp-proxy-signature-stop)
-    ;;   (message "----")
-    ;;   )
-    ))
+(defun lsp-proxy-signature-eldoc-function (cb)
+  "A member of `eldoc-documentation-functions', for signatures."
+  (when lsp-proxy--support-signature-help
+    (let ((buf (current-buffer)))
+      (lsp-proxy--async-request
+       'textDocument/signatureHelp
+       (lsp-proxy--request-or-notify-params
+        (eglot--TextDocumentPositionParams))
+       :success-fn
+       (eglot--lambda ((SignatureHelp)
+                       signatures activeSignature (activeParameter 0))
+         (eglot--when-buffer-window buf
+           (let ((active-sig (and (cl-plusp (length signatures))
+                                  (aref signatures (or activeSignature 0)))))
+             (if (not active-sig) (funcall cb nil)
+               (funcall
+                cb (mapconcat (lambda (s)
+                                (eglot--sig-info s (and (eq s active-sig)
+                                                        activeParameter)
+                                                 nil))
+                              signatures "\n")
+                :echo (eglot--sig-info active-sig activeParameter t))))))
+       :deferred :textDocument/signatureHelp))
+    t))
 
 ;;
 ;; rename
@@ -2487,10 +2337,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 
 (defun lsp-proxy--post-command-hook ()
   "Post command hook."
-  (lsp-proxy--idle-reschedule (current-buffer))
-  (let ((this-command-string (format "%s" this-command)))
-    (when lsp-proxy-mode
-      (posframe-hide lsp-proxy-hover-buffer))))
+  (lsp-proxy--idle-reschedule (current-buffer)))
 
 (defun lsp-proxy--mode-off ()
   "Turn off `lsp-proxy-mode' unconditionally."
@@ -2534,8 +2381,9 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
   (when buffer-file-name
     (dolist (hook lsp-proxy--internal-hooks)
       (add-hook (car hook) (cdr hook) nil t))
-    (setq eldoc-documentation-strategy #'eldoc-documentation-compose)
+    (setq eldoc-documentation-strategy #'eldoc-documentation-compose-eagerly)
     (add-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function nil t)
+    (add-hook 'eldoc-documentation-functions #'lsp-proxy-signature-eldoc-function nil t)
     (eldoc-mode 1)
     ;; Ensure that `lsp-proxy-completion-at-point' the first CAPF to be tried,
     ;; unless user has put it elsewhere in the list by their own
@@ -2588,6 +2436,7 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
   (remove-hook 'window-selection-change-functions #'lsp-proxy--on-doc-focus 'local)
   (remove-hook 'window-buffer-change-functions #'lsp-proxy--on-doc-focus 'local)
   (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
+  (remove-hook 'eldoc-documentation-functions #'lsp-proxy-signature-eldoc-function 'local)
   (remove-function (local 'imenu-create-index-function) #'lsp-proxy-imenu)
   (setq-local completion-category-defaults
               (cl-remove 'lsp-proxy-capf completion-category-defaults :key #'cl-first))

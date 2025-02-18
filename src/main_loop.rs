@@ -328,6 +328,7 @@ impl Application {
                                         support_document_highlight: doc
                                             .is_document_highlight_support(),
                                         support_document_symbols: doc.is_document_symbols_support(),
+                                        support_signature_help: doc.is_signature_help_support(),
                                     },
                                 )
                             });
