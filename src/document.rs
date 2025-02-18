@@ -91,20 +91,6 @@ impl Document {
         trigger_characters
     }
 
-    pub fn get_signature_trigger_characters(&self) -> Vec<String> {
-        let mut signature_trigger_characters = vec![];
-        self.language_servers().for_each(|ls| {
-            if let Some(lsp_types::SignatureHelpOptions {
-                trigger_characters: Some(characters),
-                ..
-            }) = &ls.capabilities().signature_help_provider
-            {
-                signature_trigger_characters.append(&mut characters.to_owned());
-            }
-        });
-        signature_trigger_characters
-    }
-
     pub fn is_has_inlay_hints_support(&self) -> bool {
         self.language_servers()
             .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))

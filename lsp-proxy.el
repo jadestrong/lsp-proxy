@@ -54,6 +54,8 @@
 (defvar flycheck-checker)
 (defvar flycheck-checkers)
 
+(defvar lsp-proxy-mode)
+
 (defgroup lsp-proxy nil
   "Interaction with Lsp Proxy Server."
   :prefix "lsp-proxy-"
@@ -109,16 +111,6 @@ the buffer when it becomes large."
   :type 'string
   :group 'lsp-proxy)
 
-(defcustom lsp-proxy-signature-buffer " *lsp-proxy-signature*"
-  "Buffer for display signature help info."
-  :type 'string
-  :group 'lsp-proxy)
-
-(defcustom lsp-proxy-signature-auto-active nil
-  "If auto active signature help."
-  :type 'boolean
-  :group 'lsp-proxy)
-
 (defcustom lsp-proxy-trim-trailing-whitespace t
   "Trim trailing whitespace on a line."
   :group 'lsp-proxy
@@ -141,11 +133,6 @@ the buffer when it becomes large."
           (const :tag "Debug" 2)
           (const :tag "Trace" 3))
   :group 'lsp-proxy)
-
-(defcustom lsp-proxy-signature-retrigger-keys '(return)
-  "Character strings used to retrigger a new textDocument/signatureHelp request."
-  :type '(symbol)
-  :group 'lsp-proxy-mode)
 
 (defcustom lsp-proxy-diagnostics-provider :auto
   "The checker backend provider."
@@ -213,30 +200,21 @@ The value can be:
 (defvar-local lsp-proxy--change-idle-timer nil
   "Idle timer for didChange signals.")
 
-(defvar-local lsp-proxy--completion-trigger-characters nil
-  "Completion trigger characters.")
-
-(defvar-local lsp-proxy--signature-trigger-characters nil
-  "Signature trigger characters.")
-
 (defvar-local lsp-proxy-enable-relative-indentation nil
   "Enable relative indentation when insert texts, snippets ...
 from language server.")
 
 (defvar-local lsp-proxy-diagnostics--flycheck-enabled nil
-  "True when lsp-proxy diagnostics flycheck integration
- has been enabled in this buffer.")
+  "Non-nil when lsp-proxy diagnostics flycheck integration has been enabled in this buffer.")
 
 (defvar-local lsp-proxy-diagnostics--flymake-enabled nil
-  "True when lsp-proxy diagnostics flymake integration
- has been enabled in this buffer.")
+  "Non-nil when lsp-proxy diagnostics flymake integration has been enabled in this buffer.")
 
 (defvar-local lsp-proxy-diagnostics--flycheck-checker nil
   "The value of flycheck-checker before lsp-proxy diagnostics was activated.")
 
-(defvar-local lsp-proxy--signature-last nil)
-(defvar-local lsp-proxy--signature-last-index nil)
-(defvar lsp-proxy--signature-last-buffer nil)
+(defvar-local lsp-proxy--completion-trigger-characters nil
+  "Completion trigger characters.")
 
 (defvar-local lsp-proxy--support-inlay-hints nil
   "Is there any server associated with this buffer that support `textDocument/inlayHint' request.")
@@ -304,44 +282,6 @@ from language server.")
     (default                    . standard-indent))                 ; default fallback
   "A mapping from `major-mode' to its indent variable.")
 
-(defconst lsp-proxy--message-type-face
-  `((1 . ,compilation-error-face)
-    (2 . ,compilation-warning-face)
-    (3 . ,compilation-message-face)
-    (4 . ,compilation-info-face)))
-
-;; progress token map
-(defvar lsp-proxy--project-hashmap (make-hash-table :test 'equal))
-
-(defun lsp-proxy--add-project (project-root-path project-map)
-  (puthash project-root-path (make-hash-table :test 'equal) project-map))
-
-(defun lsp-proxy--remove-project (project-root-path project-map)
-  (if project-root-path
-      (remhash project-root-path project-map)))
-
-(defun lsp-proxy--get-or-create-project (project-root-path project-map)
-  (or (gethash project-root-path project-map)
-      (lsp-proxy--add-project project-root-path project-map)
-      (gethash project-root-path project-map)))
-
-(defun lsp-proxy--set-work-done-token (project-root-path token value)
-  (let ((project (lsp-proxy--get-or-create-project project-root-path lsp-proxy--project-hashmap)))
-    (if project
-        (puthash token value project)
-      (error "Project not found: %s" project-root-path))))
-
-(defun lsp-proxy--rem-work-done-token (project-root-path token)
-  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
-    (if project
-        (remhash token project)
-      (error "Project not found: %s" project-root-path))))
-
-(defun lsp-proxy--progressing-p (project-root-path)
-  "Check if the server at PROJECT-ROOT-PATH is in progress."
-  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
-    (and project (not (hash-table-empty-p project)))))
-
 ;; diagnostics map
 (defvar lsp-proxy--diagnostics-map (make-hash-table :test 'equal))
 
@@ -364,7 +304,16 @@ from language server.")
              lsp-proxy-mode)
     (run-hooks 'lsp-proxy-on-idle-hook)))
 
+;;
 ;; log message
+;;
+
+(defconst lsp-proxy--message-type-face
+  `((1 . ,compilation-error-face)
+    (2 . ,compilation-warning-face)
+    (3 . ,compilation-message-face)
+    (4 . ,compilation-info-face)))
+
 (defun lsp-proxy--message  (format &rest args)
   "Wrapper for `message'
 
@@ -504,11 +453,6 @@ On other systems, returns path without change."
           (concat remote-prefix normalized))
       uri)))
 
-(defun lsp-proxy--region-range (start end)
-  "Make Range object for the current region START and END."
-  (list :start (eglot--pos-to-lsp-position start)
-        :end (eglot--pos-to-lsp-position end)))
-
 (defun lsp-proxy--expand-snippet (snippet &optional start end expand-env)
   "Wrapper of `yas-expand-snippet' with all of it arguments.
 The snippet will be convert to LSP style and indent according to
@@ -574,88 +518,6 @@ LSP server result."
             :around
             #'lsp-proxy--advice-json-parse)
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; xref integration ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defun lsp-proxy--xref-backend () "lsp-proxy xref backend." 'xref-lsp-proxy)
-
-(cl-defmethod xref-backend-identifier-at-point ((_backend (eql xref-lsp-proxy)))
-  (propertize (or (thing-at-point 'symbol) "")
-              'identifier-at-point t))
-
-(cl-defmethod xref-backend-identifier-completion-table ((_backend (eql xref-lsp-proxy)))
-  (list (propertize (or (thing-at-point 'symbol) "")
-                    'identifier-at-point t)))
-
-(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-definition)))
-
-(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-references)))
-
-(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-implementations)))
-
-(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-type-definition)))
-
-(defun lsp-proxy-show-xrefs (xrefs display-action references?)
-  (unless (region-active-p) (push-mark nil t))
-  (if (boundp 'xref-show-definitions-function)
-      (with-no-warnings
-        (xref-push-marker-stack)
-        (funcall (if (and references? (not lsp-xref-force-references))
-                     xref-show-xrefs-function
-                   xref-show-definitions-function)
-                 (-const xrefs)
-                 `((window . ,(selected-window))
-                   (display-action . ,display-action)
-                   ,(if (and references? (not lsp-xref-force-references))
-                        `(auto-jump . ,xref-auto-jump-to-first-xref)
-                      `(auto-jump . ,xref-auto-jump-to-first-definition)))))
-    (xref--show-xrefs xrefs display-action)))
-
-(defun lsp-proxy--process-locations (locations)
-  "Process LOCATIONS and show xrefs."
-  (if (seq-empty-p locations)
-      (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
-    (when-let* ((locs (cl-mapcar (lambda (it)
-                                   (let* ((uri (plist-get it :uri))
-                                          (filepath (lsp-proxy--uri-to-path uri))
-                                          (visiting (find-buffer-visiting filepath))
-                                          (range (plist-get it :range))
-                                          (start (plist-get range :start))
-                                          (end (plist-get range :end))
-                                          (start-line (plist-get start :line))
-                                          (start-column (plist-get start :character))
-                                          (_end-line (plist-get end :line))
-                                          (_end-column (plist-get end :character))
-                                          (collect (lambda ()
-                                                     (save-excursion
-                                                       (save-restriction
-                                                         (widen)
-                                                         (let* ((beg (eglot--lsp-position-to-point start))
-                                                                (end (eglot--lsp-position-to-point end))
-                                                                (bol (progn (goto-char beg) (line-beginning-position)))
-                                                                (summary (buffer-substring bol (line-end-position)))
-                                                                (hi-beg (- beg bol))
-                                                                (hi-end (- (min (line-end-position) end) bol)))
-                                                           (when summary
-                                                             (add-face-text-property hi-beg hi-end 'xref-match t summary))
-                                                           (xref-make summary
-                                                                      (xref-make-file-location filepath (1+ start-line) start-column))))))))
-                                     (cond
-                                      (visiting (with-current-buffer visiting (funcall collect)))
-                                      ((file-readable-p filepath)
-                                       (with-temp-buffer
-                                         (insert-file-contents-literally filepath)
-                                         (funcall collect)))
-                                      (t (lsp-proxy--warn "Failed  to process xref entry for file %s" filepath)))))
-                                 (if (vectorp locations) locations (vector locations)))))
-      (lsp-proxy-show-xrefs locs nil nil))))
-
 (defun lsp-proxy--create-apply-text-edits-handlers ()
   "Create (handler cleanup-fn) for applying text edits in async request.
 Only works when mode is `tick or `alive."
@@ -679,8 +541,39 @@ Only works when mode is `tick or `alive."
        (remove-hook 'before-change-functions func t)))))
 
 ;;
-;; modeline
+;; modeline progress
 ;;
+(defvar lsp-proxy--project-hashmap (make-hash-table :test 'equal))
+
+(defun lsp-proxy--add-project (project-root-path project-map)
+  (puthash project-root-path (make-hash-table :test 'equal) project-map))
+
+(defun lsp-proxy--remove-project (project-root-path project-map)
+  (if project-root-path
+      (remhash project-root-path project-map)))
+
+(defun lsp-proxy--get-or-create-project (project-root-path project-map)
+  (or (gethash project-root-path project-map)
+      (lsp-proxy--add-project project-root-path project-map)
+      (gethash project-root-path project-map)))
+
+(defun lsp-proxy--set-work-done-token (project-root-path token value)
+  (let ((project (lsp-proxy--get-or-create-project project-root-path lsp-proxy--project-hashmap)))
+    (if project
+        (puthash token value project)
+      (error "Project not found: %s" project-root-path))))
+
+(defun lsp-proxy--rem-work-done-token (project-root-path token)
+  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
+    (if project
+        (remhash token project)
+      (error "Project not found: %s" project-root-path))))
+
+(defun lsp-proxy--progressing-p (project-root-path)
+  "Check if the server at PROJECT-ROOT-PATH is in progress."
+  (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
+    (and project (not (hash-table-empty-p project)))))
+
 (defun lsp-proxy--progress-status ()
   "Return the status of the progress for the current workspaces."
   (when lsp-proxy-mode
@@ -827,7 +720,6 @@ Only works when mode is `tick or `alive."
   (when (eql method 'emacs/triggerCharacters)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters
-                       :signatureTriggerCharacters signature-trigger-characters
                        :supportInlayHints support-inlay-hints
                        :supportDocumentHighlight support-document-highlight
                        :supportDocumentSymbols support-document-symbols
@@ -837,7 +729,6 @@ Only works when mode is `tick or `alive."
         (when (f-exists? filepath)
           (with-current-buffer (find-file-noselect filepath)
             (setq-local lsp-proxy--completion-trigger-characters trigger-characters)
-            (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
             (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
             (setq-local lsp-proxy--support-document-highlight support-document-highlight)
             (setq-local lsp-proxy--support-document-symbols support-document-symbols)
@@ -933,6 +824,88 @@ Only works when mode is `tick or `alive."
                                                              :rangeLength len :text text)]))))
       (setq lsp-proxy--recent-changes nil))))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; xref integration ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+(defun lsp-proxy--xref-backend () "lsp-proxy xref backend." 'xref-lsp-proxy)
+
+(cl-defmethod xref-backend-identifier-at-point ((_backend (eql xref-lsp-proxy)))
+  (propertize (or (thing-at-point 'symbol) "")
+              'identifier-at-point t))
+
+(cl-defmethod xref-backend-identifier-completion-table ((_backend (eql xref-lsp-proxy)))
+  (list (propertize (or (thing-at-point 'symbol) "")
+                    'identifier-at-point t)))
+
+(cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
+  (save-excursion
+    (lsp-proxy-find-definition)))
+
+(cl-defmethod xref-backend-references ((_backend (eql xref-lsp-proxy)) _identifier)
+  (save-excursion
+    (lsp-proxy-find-references)))
+
+(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-proxy)) _identifier)
+  (save-excursion
+    (lsp-proxy-find-implementations)))
+
+(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
+  (save-excursion
+    (lsp-proxy-find-type-definition)))
+
+(defun lsp-proxy-show-xrefs (xrefs display-action references?)
+  (unless (region-active-p) (push-mark nil t))
+  (if (boundp 'xref-show-definitions-function)
+      (with-no-warnings
+        (xref-push-marker-stack)
+        (funcall (if (and references? (not lsp-xref-force-references))
+                     xref-show-xrefs-function
+                   xref-show-definitions-function)
+                 (-const xrefs)
+                 `((window . ,(selected-window))
+                   (display-action . ,display-action)
+                   ,(if (and references? (not lsp-xref-force-references))
+                        `(auto-jump . ,xref-auto-jump-to-first-xref)
+                      `(auto-jump . ,xref-auto-jump-to-first-definition)))))
+    (xref--show-xrefs xrefs display-action)))
+
+(defun lsp-proxy--process-locations (locations)
+  "Process LOCATIONS and show xrefs."
+  (if (seq-empty-p locations)
+      (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
+    (when-let* ((locs (cl-mapcar (lambda (it)
+                                   (let* ((uri (plist-get it :uri))
+                                          (filepath (lsp-proxy--uri-to-path uri))
+                                          (visiting (find-buffer-visiting filepath))
+                                          (range (plist-get it :range))
+                                          (start (plist-get range :start))
+                                          (end (plist-get range :end))
+                                          (start-line (plist-get start :line))
+                                          (start-column (plist-get start :character))
+                                          (_end-line (plist-get end :line))
+                                          (_end-column (plist-get end :character))
+                                          (collect (lambda ()
+                                                     (save-excursion
+                                                       (save-restriction
+                                                         (widen)
+                                                         (let* ((beg (eglot--lsp-position-to-point start))
+                                                                (end (eglot--lsp-position-to-point end))
+                                                                (bol (progn (goto-char beg) (line-beginning-position)))
+                                                                (summary (buffer-substring bol (line-end-position)))
+                                                                (hi-beg (- beg bol))
+                                                                (hi-end (- (min (line-end-position) end) bol)))
+                                                           (when summary
+                                                             (add-face-text-property hi-beg hi-end 'xref-match t summary))
+                                                           (xref-make summary
+                                                                      (xref-make-file-location filepath (1+ start-line) start-column))))))))
+                                     (cond
+                                      (visiting (with-current-buffer visiting (funcall collect)))
+                                      ((file-readable-p filepath)
+                                       (with-temp-buffer
+                                         (insert-file-contents-literally filepath)
+                                         (funcall collect)))
+                                      (t (lsp-proxy--warn "Failed  to process xref entry for file %s" filepath)))))
+                                 (if (vectorp locations) locations (vector locations)))))
+      (lsp-proxy-show-xrefs locs nil nil))))
+
 (defun lsp-proxy-find-definition ()
   "Find definition."
   (interactive)
@@ -974,6 +947,9 @@ Only works when mode is `tick or `alive."
    (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
+;;
+;; hover
+;;
 (define-derived-mode lsp-proxy-help-mode help-mode "LspProxyHelp"
   "Major mode for displaying lsp help.")
 
@@ -993,6 +969,9 @@ Only works when mode is `tick or `alive."
                        (run-mode-hooks))
                    (lsp-proxy--info "%s" "No content at point.")))))
 
+;;
+;; symbol highlight
+;;
 (defvar lsp-proxy--highlights nil "Overlays for textDocument/documentHighlight.")
 
 (defun lsp-proxy-hover-eldoc-function (_cb)
@@ -1644,6 +1623,12 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
                                               (complete-with-action action col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
+
+(defun lsp-proxy--region-range (start end)
+  "Make Range object for the current region START and END."
+  (list :start (eglot--pos-to-lsp-position start)
+        :end (eglot--pos-to-lsp-position end)))
+
 (defun lsp-proxy--code-actions-at-point ()
   "Retrieve the code actions for the active region or the current line."
   (lsp-proxy--request
@@ -1697,7 +1682,9 @@ Request codeAction/resolve for more info if server supports."
     (when command
       (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
 
+;;
 ;; inlay hints
+;;
 (defface lsp-proxy-inlay-hint-face '((t (:height 0.8 :inherit shadow)))
   "Face used for inlay hint overlays." :group 'lsp-proxy-mode)
 
@@ -2143,12 +2130,6 @@ textDocument/didOpen for the new file."
                  (lsp-proxy--remove-project (lsp-proxy-project-root) lsp-proxy--project-hashmap)
                  (revert-buffer))))
 
-(defvar lsp-proxy-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "M-S-SPC") #'lsp-proxy-signature-activate)
-    (define-key map (kbd "M-,") #'lsp-proxy-signature-activate)
-    map))
-
 (defun lsp-proxy-open-config-file ()
   "Open the configuration file. If it does not exist, create it first."
   (interactive)
@@ -2166,7 +2147,6 @@ textDocument/didOpen for the new file."
 ;;;###autoload
 (define-minor-mode lsp-proxy-mode
   "Minor mode for Lsp-Proxy."
-  :map lsp-proxy-mode-map
   :init-value nil
   :lighter " Lsp Proxy"
   (if lsp-proxy-mode

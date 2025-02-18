@@ -22,7 +22,6 @@ pub enum DidRecordTriggerCharacters {}
 pub struct DidRecordTriggerCharactersParams {
     pub uri: String,
     pub trigger_characters: Vec<String>,
-    pub signature_trigger_characters: Vec<String>,
     pub support_inlay_hints: bool,
     pub support_document_highlight: bool,
     pub support_document_symbols: bool,
