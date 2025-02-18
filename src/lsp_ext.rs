@@ -26,6 +26,7 @@ pub struct DidRecordTriggerCharactersParams {
     pub support_inlay_hints: bool,
     pub support_document_highlight: bool,
     pub support_document_symbols: bool,
+    pub support_signature_help: bool,
 }
 
 impl Notification for DidRecordTriggerCharacters {

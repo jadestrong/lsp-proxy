@@ -44,6 +44,7 @@ pub(crate) fn handle_did_open_text_document(
                             support_inlay_hints: doc.is_has_inlay_hints_support(),
                             support_document_highlight: doc.is_document_highlight_support(),
                             support_document_symbols: doc.is_document_symbols_support(),
+                            support_signature_help: doc.is_signature_help_support(),
                         },
                     );
                 }
