@@ -14,8 +14,9 @@ The features it supports are:
 - rename (triggered by ~lsp-proxy-rename~)
 - format buffer (triggered by ~lsp-proxy-format-buffer~)
 - workspace command, such as ~typescript.restartTsServer(vtsls)~ 、 ~reloadWorkspace(rust-analyzer)~ (triggered by ~lsp-proxy-execute-command~)
-- signature/inlay hints (triggered by ~lsp-proxy-signature-mode~ 、 ~lsp-proxy-inlay-hints-mode~), there might be bugs and usability issues, as it is used relatively infrequently.
-- documentHighlight
+- inlay hints (triggered by ~lsp-proxy-inlay-hints-mode~)
+- documentHighlight/signature (baesd on ~eldoc~)
+- documentSymbols (triggered by ~imenu~)
 
 [[file:images/show.gif]]
 
