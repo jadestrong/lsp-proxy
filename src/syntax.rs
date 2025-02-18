@@ -342,13 +342,13 @@ impl FileTypeGlobMatcher {
 pub struct Loader {
     language_configs: Vec<Arc<LanguageConfiguration>>,
     language_config_ids_by_extension: HashMap<String, usize>,
-    // language_config_ids_by_suffix: HashMap<String, usize>,
     language_config_ids_glob_matcher: FileTypeGlobMatcher,
     language_server_configs: HashMap<String, LanguageServerConfiguration>,
 }
 
 pub type LoaderError = globset::Error;
 
+#[allow(dead_code)]
 impl Loader {
     pub fn new(config: Configuration) -> Result<Self, LoaderError> {
         let mut language_configs = Vec::new();
