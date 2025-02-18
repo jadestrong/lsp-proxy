@@ -233,9 +233,6 @@ Auto inline complete will be not triggered if any predicates return t."
   "C-i" 'lsp-proxy-inline-completion-trigger
   )
 
-(defvar-local lsp-proxy--doc-version 0
-  "The document version of the current buffer. Incremented after each change.")
-
 (defvar-local lsp-proxy--recent-changes nil
   "Recent buffer changes as collected by `lsp-proxy--before-change'.")
 
@@ -831,7 +828,7 @@ Only works when mode is `tick or `alive."
 (defun lsp-proxy--on-doc-open ()
   "On doc open."
   (setq lsp-proxy--recent-changes nil
-        lsp-proxy--doc-version 0)
+        eglot--versioned-identifier 0)
   (when buffer-file-name
     (when (not (f-exists? buffer-file-name))
       (save-buffer))
@@ -842,7 +839,7 @@ Only works when mode is `tick or `alive."
                                                       :text (eglot--widening
                                                              (buffer-substring-no-properties (point-min) (point-max)))
                                                       :languageId ""
-                                                      :version lsp-proxy--doc-version))))))
+                                                      :version eglot--versioned-identifier))))))
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
@@ -869,7 +866,7 @@ Only works when mode is `tick or `alive."
     (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
       (lsp-proxy--notify 'textDocument/didChange
                            (list :textDocument
-                                 (append (eglot--TextDocumentIdentifier) `(:version ,lsp-proxy--doc-version))
+                                 (eglot--VersionedTextDocumentIdentifier)
                                  :contentChanges
                                  (if full-sync-p
                                      (vector (list :text (eglot--widening
@@ -2277,7 +2274,7 @@ movements may have changed the position")
 (defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
-  (cl-incf lsp-proxy--doc-version)
+  (cl-incf eglot--versioned-identifier)
   (pcase (and (listp lsp-proxy--recent-changes)
               (car lsp-proxy--recent-changes))
     (`(,lsp-beg ,lsp-end
