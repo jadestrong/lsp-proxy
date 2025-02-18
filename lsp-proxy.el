@@ -530,6 +530,13 @@ FORMAT and ARGS is the same as for `messsage'."
    (t
     (concat "file://" (url-encode-url buffer-file-name)))))
 
+(defun lsp-proxy--fix-path-casing (path)
+  "On windows, downcases path because the windows file system is
+case-insensitive.
+
+On other systems, returns path without change."
+  (if (eq system-type 'window-nt) (downcase path) path))
+
 (declare-function w32-long-file-name "w32proc.c" (fn))
 (defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
@@ -1155,10 +1162,11 @@ Only works when mode is `tick or `alive."
           (with-current-buffer (find-file-noselect filepath)
             (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
                                           (lsp-proxy-project-root)
-                                          lsp-proxy--diagnostics-map)))
+                                          lsp-proxy--diagnostics-map))
+                  (file (lsp-proxy--fix-path-casing filepath)))
               (if (seq-empty-p diagnostics)
-                  (remhash filepath workspace-diagnostics)
-                (puthash filepath (append diagnostics nil) workspace-diagnostics)))
+                  (remhash file workspace-diagnostics)
+                (puthash file (append diagnostics nil) workspace-diagnostics)))
             (cond (lsp-proxy-diagnostics--flycheck-enabled
                    (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
                    (lsp-proxy--idle-reschedule (current-buffer)))
@@ -1890,7 +1898,7 @@ relied upon."
 CALLBACK is the status callback passed by Flycheck."
   (remove-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer t)
   (let* ((workspace-diagnostics (lsp-proxy--get-or-create-project (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
-         (buffer-diagnostics (gethash (buffer-file-name) workspace-diagnostics '()))
+         (buffer-diagnostics (gethash (lsp-proxy--fix-path-casing buffer-file-name) workspace-diagnostics '()))
          (errors (mapcar
                   (lambda (diagnostic)
                     (let* ((range (plist-get diagnostic :range))
