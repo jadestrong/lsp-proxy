@@ -473,20 +473,12 @@ case-insensitive.
 On other systems, returns path without change."
   (if (eq system-type 'window-nt) (downcase path) path))
 
-(defun lsp-proxy--fix-path-casing (path)
-  "On windows, downcases path because the windows file system is
-case-insensitive.
-
-On other systems, returns path without change."
-  (if (eq system-type 'window-nt) (downcase path) path))
-
 (defun lsp-proxy--normalize-path (path)
   "On Windows systems, normalize path separators to Unix-style.
 If the system is not Windows, return the original path."
   (if (eq system-type 'windows-nt)
       (replace-regexp-in-string "\\\\" "/" path)
     path))
-
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
 (defun lsp-proxy--uri-to-path (uri)
@@ -510,7 +502,6 @@ If the system is not Windows, return the original path."
 (defun lsp-proxy--expand-snippet (snippet &optional start end expand-env)
   "Wrapper of `yas-expand-snippet' with all of it arguments.
 The snippet will be convert to LSP style and indent according to
-LSP server according to
 LSP server result."
   (let* ((inhibit-field-text-motion t)
          (yas-wrap-around-region nil)
@@ -2100,7 +2091,6 @@ Update the range of `(FROM TO)'."
 
 (defun lsp-proxy--update-hints-1 (from to)
   "Do most work for `lsp-proxy--update-hints', including LSP request."
-  ;; (message "from %s to %s start %s end %s" from to (window-start) (window-end nil t))
   (let* ((buf (current-buffer))
          (paint-hint
           (lambda (hint)
