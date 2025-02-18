@@ -70,7 +70,7 @@ fn try_main() -> Result<()> {
     initialize_log_file(args.log_file);
     setup_logging(args.log_level).context("failed to initialize logging")?;
     info!("Server starting...");
-    with_extra_thread("LspCopilot", run_server)?;
+    with_extra_thread("LspProxy", run_server)?;
 
     Ok(())
 }

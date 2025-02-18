@@ -9,7 +9,7 @@ use lsp_types::{
 
 pub(crate) fn handle_did_open_text_document(
     app: &mut Application,
-    params: lsp_ext::CustomizeDidOpenTextDocumentParams,
+    params: lsp_types::DidOpenTextDocumentParams,
 ) -> Result<()> {
     let doc = app.editor.document_by_uri(&params.text_document.uri);
     match doc {
@@ -43,6 +43,7 @@ pub(crate) fn handle_did_open_text_document(
                             signature_trigger_characters: doc.get_signature_trigger_characters(),
                             support_inlay_hints: doc.is_has_inlay_hints_support(),
                             support_document_highlight: doc.is_document_highlight_support(),
+                            support_document_symbols: doc.is_document_symbols_support(),
                         },
                     );
                 }
