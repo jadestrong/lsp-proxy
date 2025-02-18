@@ -322,8 +322,6 @@ impl Application {
                                     lsp_ext::DidRecordTriggerCharactersParams {
                                         uri: doc.uri.to_string(),
                                         trigger_characters: doc.get_trigger_characters(),
-                                        signature_trigger_characters: doc
-                                            .get_signature_trigger_characters(),
                                         support_inlay_hints: doc.is_has_inlay_hints_support(),
                                         support_document_highlight: doc
                                             .is_document_highlight_support(),
