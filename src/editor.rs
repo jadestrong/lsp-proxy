@@ -22,6 +22,7 @@ pub struct Editor {
     pub syn_loader: Arc<syntax::Loader>,
 }
 
+#[allow(dead_code)]
 impl Editor {
     pub fn new(syn_loader: Arc<syntax::Loader>) -> Self {
         let language_servers = Registry::new(syn_loader.clone());

@@ -1,6 +1,6 @@
 use crate::msg::RequestId;
 use lsp_types::{
-    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams, Url,
+    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -31,29 +31,6 @@ pub struct DidRecordTriggerCharactersParams {
 impl Notification for DidRecordTriggerCharacters {
     type Params = DidRecordTriggerCharactersParams;
     const METHOD: &'static str = "emacs/triggerCharacters";
-}
-
-// customize did open
-
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomizeTextDocumentItem {
-    pub uri: Url,
-    pub text: String,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomizeDidOpenTextDocumentParams {
-    pub text_document: CustomizeTextDocumentItem,
-}
-
-#[derive(Debug)]
-pub enum CustomizeDidOpenTextDocument {}
-
-impl Notification for CustomizeDidOpenTextDocument {
-    type Params = CustomizeDidOpenTextDocumentParams;
-    const METHOD: &'static str = "textDocument/didOpen";
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]

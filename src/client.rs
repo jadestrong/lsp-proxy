@@ -77,6 +77,7 @@ pub struct Client {
     pub(crate) activate_time: Arc<Mutex<u128>>,
 }
 
+#[allow(dead_code)]
 impl Client {
     pub fn try_add_doc(
         self: &Arc<Self>,
