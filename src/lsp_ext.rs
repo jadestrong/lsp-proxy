@@ -14,12 +14,13 @@ pub struct CompletionItem {
     pub end: i32,
 }
 
+// emacs/serverCapabilities
 #[derive(Debug)]
-pub enum DidRecordTriggerCharacters {}
+pub enum CustomServerCapabilities {}
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DidRecordTriggerCharactersParams {
+pub struct CustomServerCapabilitiesParams {
     pub uri: String,
     pub trigger_characters: Vec<String>,
     pub support_inlay_hints: bool,
@@ -28,11 +29,12 @@ pub struct DidRecordTriggerCharactersParams {
     pub support_signature_help: bool,
 }
 
-impl Notification for DidRecordTriggerCharacters {
-    type Params = DidRecordTriggerCharactersParams;
-    const METHOD: &'static str = "emacs/triggerCharacters";
+impl Notification for CustomServerCapabilities {
+    type Params = CustomServerCapabilitiesParams;
+    const METHOD: &'static str = "emacs/serverCapabilities";
 }
 
+// $/cancelRequest
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomizeCancelParams {
@@ -129,6 +131,7 @@ impl Notification for CustomProgress {
     const METHOD: &'static str = "$/progress";
 }
 
+// didFocus
 pub enum DidFocusTextDocument {}
 
 impl Notification for DidFocusTextDocument {
