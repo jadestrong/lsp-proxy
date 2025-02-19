@@ -36,15 +36,8 @@ pub(crate) fn handle_did_open_text_document(
                     .unwrap();
                 });
                 if doc.language_servers.values().any(|ls| ls.is_initialized()) {
-                    app.send_notification::<lsp_ext::DidRecordTriggerCharacters>(
-                        lsp_ext::DidRecordTriggerCharactersParams {
-                            uri: uri.to_string(),
-                            trigger_characters: doc.get_trigger_characters(),
-                            support_inlay_hints: doc.is_has_inlay_hints_support(),
-                            support_document_highlight: doc.is_document_highlight_support(),
-                            support_document_symbols: doc.is_document_symbols_support(),
-                            support_signature_help: doc.is_signature_help_support(),
-                        },
+                    app.send_notification::<lsp_ext::CustomServerCapabilities>(
+                        doc.get_server_capabilities()
                     );
                 }
                 let configed_servers = doc.language_servers.keys().join("、");

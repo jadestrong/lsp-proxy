@@ -706,7 +706,7 @@ Only works when mode is `tick or `alive."
   (when  (eql method 'window/showMessage)
     (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
-  (when (eql method 'emacs/triggerCharacters)
+  (when (eql method 'emacs/serverCapabilities)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters
                        :supportInlayHints support-inlay-hints

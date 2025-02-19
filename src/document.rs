@@ -1,7 +1,5 @@
 use crate::{
-    client::Client,
-    registry::LanguageServerName,
-    syntax::{self, LanguageConfiguration, LanguageServerFeature},
+    client::Client, lsp_ext::CustomServerCapabilitiesParams, registry::LanguageServerName, syntax::{self, LanguageConfiguration, LanguageServerFeature}
 };
 use lsp::Diagnostic;
 use lsp_types::{self as lsp, Url};
@@ -75,40 +73,41 @@ impl Document {
         Url::to_file_path(self.uri()).ok()
     }
 
-    pub fn get_trigger_characters(&self) -> Vec<String> {
-        let mut trigger_characters: Vec<String> = Vec::new();
-        self.language_servers().for_each(|language_server| {
+    pub fn get_server_capabilities(&self) -> CustomServerCapabilitiesParams{
+        let mut server_capabilities = CustomServerCapabilitiesParams {
+            uri: self.uri.to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+        };
+
+        self.language_servers().for_each(|ls| {
             if let Some(lsp_types::CompletionOptions {
                 trigger_characters: Some(triggers),
                 ..
-            }) = &language_server.capabilities().completion_provider
+            }) = &ls.capabilities().completion_provider
             {
                 let mut triggers = triggers.clone();
-                trigger_characters.append(&mut triggers);
+                 server_capabilities.trigger_characters.append(&mut triggers);
+            }
+
+            if ls.supports_feature(LanguageServerFeature::InlayHints) {
+                server_capabilities.support_inlay_hints = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::DocumentHighlight) {
+                server_capabilities.support_document_highlight = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::DocumentSymbols) {
+                server_capabilities.support_document_symbols = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
+                server_capabilities.support_signature_help = true;
             }
         });
 
-        trigger_characters
-    }
-
-    pub fn is_has_inlay_hints_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
-    }
-
-    pub fn is_document_highlight_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
-    }
-
-    pub fn is_document_symbols_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentSymbols))
-    }
-
-    pub(crate) fn is_signature_help_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::SignatureHelp))
+        server_capabilities
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
