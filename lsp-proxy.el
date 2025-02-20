@@ -1022,7 +1022,14 @@ Only works when mode is `tick or `alive."
 (defun lsp-proxy-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
   (when (and lsp-proxy--support-document-highlight (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
-    (let ((buf (current-buffer)))
+    (let ((buf (current-buffer))
+          (wins-visible-pos (-map (lambda (win)
+                                   (cons (1- (line-number-at-pos (window-start win) t))
+                                         (1+ (line-number-at-pos (min (window-end win)
+                                                                      (with-current-buffer (window-buffer win)
+                                                                        (buffer-end +1)))
+                                                                 t))))
+                                 (get-buffer-window-list nil nil 'visible))))
       (lsp-proxy--async-request
        'textDocument/documentHighlight
        (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
@@ -1031,16 +1038,23 @@ Only works when mode is `tick or `alive."
          (mapc #'delete-overlay lsp-proxy--highlights)
          (setq lsp-proxy--highlights
                (eglot--when-buffer-window buf
-                 (mapcar (lambda (highlight)
-                           (let* ((range (plist-get highlight :range)))
-                             (pcase-let ((`(,beg . ,end)
-                                          (eglot-range-region range)))
-                               (let ((ov (make-overlay beg end)))
-                                 (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
-                                 (overlay-put ov 'modification-hooks
-                                              `(,(lambda (o &rest _) (delete-overlay o))))
-                                 ov))))
-                         highlights))))
+                 (cl-loop for highlight across highlights
+                          for range = (plist-get highlight :range)
+                          for start = (plist-get range :start)
+                          for start-line = (plist-get start :line)
+                          for end = (plist-get range :end)
+                          for end-line = (plist-get end :line)
+                          when (cl-loop for (start-win . end-win) in wins-visible-pos
+                                        thereis (and (> (1+ start-line) start-win)
+                                                     (< (1+ end-line) end-win)))
+                          collect
+                          (pcase-let ((`(,beg . ,end)
+                                       (eglot-range-region range)))
+                            (let ((ov (make-overlay beg end)))
+                              (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
+                              (overlay-put ov 'modification-hooks
+                                           `(,(lambda (o &rest _) (delete-overlay o))))
+                              ov))))))
        :deferred 'textDocument/documentHighlight)
       nil)
     t))
