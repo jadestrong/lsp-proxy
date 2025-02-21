@@ -1157,13 +1157,17 @@ Only works when mode is `tick or `alive."
   "Handle MSG of type METHOD."
   (when (eql method 'textDocument/publishDiagnostics)
     (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) (plist-get msg :params)
+      (message "uri %s" uri)
+      (message "diagnostics %s" diagnostics)
       (let ((filepath (lsp-proxy--uri-to-path uri)))
+        (message "filepath %s, exist-p %s, find %s" filepath (f-exists-p filepath) (find-file-noselect filepath))
         (when (f-exists-p filepath)
           (with-current-buffer (find-file-noselect filepath)
             (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
                                           (lsp-proxy-project-root)
                                           lsp-proxy--diagnostics-map))
                   (file (lsp-proxy--fix-path-casing filepath)))
+              (message "file %s" file)
               (if (seq-empty-p diagnostics)
                   (remhash file workspace-diagnostics)
                 (puthash file (append diagnostics nil) workspace-diagnostics)))
