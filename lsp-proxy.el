@@ -273,6 +273,9 @@ from language server.")
 (defvar-local lsp-proxy--support-signature-help nil
   "Is there any server associated with this buffer that support `textDocument/signatureHelp' request.")
 
+(defvar-local lsp-proxy--enable-symbol-highlighting t
+  "Automatically disable when the number of  buffer lines exceeds 10000, since the `eglot--lsp-position-to-point' method is costly.")
+
 (defvar lsp-proxy--show-message t
   "If non-nil, show debug message from `lsp-proxy-mode'.")
 
@@ -824,6 +827,7 @@ Only works when mode is `tick or `alive."
     (when (not (f-exists? buffer-file-name))
       (save-buffer))
     (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
+    (setq lsp-proxy--enable-symbol-highlighting (< (line-number-at-pos (point-max)) 10000))
     (lsp-proxy--notify 'textDocument/didOpen
                          (list :textDocument (append (eglot--TextDocumentIdentifier)
                                                      (list
@@ -1018,44 +1022,67 @@ Only works when mode is `tick or `alive."
 ;; symbol highlight
 ;;
 (defvar lsp-proxy--highlights nil "Overlays for textDocument/documentHighlight.")
+(defvar-local lsp-proxy--symbol-bounds-of-last-highlight-invocation nil
+  "The bounds of the symbol from which `lsp-proxy-hover-eldoc-function'
+  most recently requested highlights.")
+
+(defun lsp-proxy--point-on-highlight? ()
+  (-some? (lambda (overlay)
+            (overlay-get overlay 'lsp-proxy-highlight))
+          (overlays-at (point))))
+
+(defun lsp-proxy--cleanup-highlights-if-needed ()
+  (when (and lsp-proxy--highlights
+             (not (lsp-proxy--point-on-highlight?)))
+    (mapc #'delete-overlay lsp-proxy--highlights)
+    (setq lsp-proxy--highlights nil)))
 
 (defun lsp-proxy-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
-  (when (and lsp-proxy--support-document-highlight (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
+  (when (and lsp-proxy--support-document-highlight lsp-proxy--enable-symbol-highlighting (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
     (let ((buf (current-buffer))
-          (wins-visible-pos (-map (lambda (win)
+          (curr-sym-bounds (bounds-of-thing-at-point 'symbol)))
+      (unless (or (looking-at-p "[[:space:]\n]")
+                  (and curr-sym-bounds
+                       (equal curr-sym-bounds
+                              lsp-proxy--symbol-bounds-of-last-highlight-invocation)))
+        (setq lsp-proxy--symbol-bounds-of-last-highlight-invocation curr-sym-bounds)
+        (lsp-proxy--async-request
+         'textDocument/documentHighlight
+         (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+         :success-fn
+         (lambda (highlights)
+           (mapc #'delete-overlay lsp-proxy--highlights)
+           (let ((wins-visible-pos (-map (lambda (win)
                                    (cons (1- (line-number-at-pos (window-start win) t))
                                          (1+ (line-number-at-pos (min (window-end win)
                                                                       (with-current-buffer (window-buffer win)
                                                                         (buffer-end +1)))
                                                                  t))))
                                  (get-buffer-window-list nil nil 'visible))))
-      (lsp-proxy--async-request
-       'textDocument/documentHighlight
-       (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
-       :success-fn
-       (lambda (highlights)
-         (mapc #'delete-overlay lsp-proxy--highlights)
-         (setq lsp-proxy--highlights
-               (eglot--when-buffer-window buf
-                 (cl-loop for highlight across highlights
-                          for range = (plist-get highlight :range)
-                          for start = (plist-get range :start)
-                          for start-line = (plist-get start :line)
-                          for end = (plist-get range :end)
-                          for end-line = (plist-get end :line)
-                          when (cl-loop for (start-win . end-win) in wins-visible-pos
-                                        thereis (and (> (1+ start-line) start-win)
-                                                     (< (1+ end-line) end-win)))
-                          collect
-                          (pcase-let ((`(,beg . ,end)
-                                       (eglot-range-region range)))
-                            (let ((ov (make-overlay beg end)))
-                              (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
-                              (overlay-put ov 'modification-hooks
-                                           `(,(lambda (o &rest _) (delete-overlay o))))
-                              ov))))))
-       :deferred 'textDocument/documentHighlight)
+             (setq lsp-proxy--highlights
+                   (eglot--when-buffer-window buf
+                     (cl-loop for highlight across highlights
+                              for range = (plist-get highlight :range)
+                              for start = (plist-get range :start)
+                              for start-line = (plist-get start :line)
+                              for end = (plist-get range :end)
+                              for end-line = (plist-get end :line)
+                              when (cl-loop for (start-win . end-win) in wins-visible-pos
+                                            thereis (and (> (1+ start-line) start-win)
+                                                         (< (1+ end-line) end-win)))
+                              collect
+                              (pcase-let ((`(,beg . ,end)
+                                           (eglot-range-region range)))
+                                (let ((ov (make-overlay beg end)))
+                                  (overlay-put ov 'face 'lsp-proxy-highlight-symbol-face)
+                                  (overlay-put ov 'modification-hooks
+                                               `(,(lambda (o &rest _) (delete-overlay o))))
+                                  (overlay-put ov 'lsp-proxy-highlight t)
+                                  ov))))))
+           ;; (message "Filter length %s" (length lsp-proxy--highlights))
+           )
+         :deferred 'textDocument/documentHighlight))
       nil)
     t))
 
@@ -2325,6 +2352,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 
 (defun lsp-proxy--post-command-hook ()
   "Post command hook."
+  (lsp-proxy--cleanup-highlights-if-needed)
   (lsp-proxy--idle-reschedule (current-buffer)))
 
 (defun lsp-proxy--mode-off ()
