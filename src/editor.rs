@@ -7,6 +7,7 @@ use crate::{
 use anyhow::Result;
 use log::error;
 use lsp_types::Url;
+use percent_encoding::percent_decode;
 use std::{
     collections::{BTreeMap, HashMap},
     num::NonZeroUsize,
@@ -68,11 +69,27 @@ impl Editor {
     }
 
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
-        self.documents().find(|doc| doc.uri() == uri)
+        if cfg!(target_os = "windows") {
+            let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
+                .decode_utf8_lossy()
+                .to_string();
+            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
+            self.documents().find(|doc| doc.uri() == &decoded_uri)
+        } else {
+            self.documents().find(|doc| doc.uri() == uri)
+        }
     }
 
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
-        self.documents_mut().find(|doc| doc.uri() == uri)
+        if cfg!(target_os = "windows") {
+            let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
+                .decode_utf8_lossy()
+                .to_string();
+            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
+            self.documents_mut().find(|doc| doc.uri() == &decoded_uri)
+        } else {
+            self.documents_mut().find(|doc| doc.uri() == uri)
+        }
     }
 
     pub fn new_document(&mut self, uri: &Url) -> DocumentId {

@@ -135,7 +135,7 @@ where
             }
         }
         None => Err(anyhow::Error::msg(format!(
-            "No language server available. Please check the log file by M-x lsp-copilot-open-log-file."))),
+            "No language server available. Please check the log file by M-x lsp-proxy-open-log-file."))),
     }
 }
 
@@ -183,7 +183,7 @@ where
     } else {
         let ls_names = language_servers.iter().map(|ls| ls.name()).join("、");
         let error_msg = if ls_names.is_empty() {
-            format!("No language server available. Please check the log file by M-x lsp-copilot-open-log-file.")
+            format!("No language server available. Please check the log file by M-x lsp-proxy-open-log-file.")
         } else {
             format!(
                 "Language server {:?} not support {:?}.",

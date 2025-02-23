@@ -51,7 +51,7 @@ pub(crate) fn handle_did_open_text_document(
                     lsp_types::ShowMessageParams {
                         typ: MessageType::INFO,
                         message: if configed_servers.is_empty() {
-                            format!("No language server config found for this file, please check your custom config by M-x lsp-copilot-open-config-file.")
+                            format!("No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.")
                         } else {
                             format!("Connected to {:?}.", configed_servers)
                         }

@@ -537,6 +537,14 @@ case-insensitive.
 On other systems, returns path without change."
   (if (eq system-type 'window-nt) (downcase path) path))
 
+(defun lsp-proxy--normalize-path (path)
+  "On Windows systems, normalize path separators to Unix-style.
+If the system is not Windows, return the original path."
+  (if (eq system-type 'windows-nt)
+      (replace-regexp-in-string "\\\\" "/" path)
+    path))
+
+
 (declare-function w32-long-file-name "w32proc.c" (fn))
 (defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
@@ -1039,7 +1047,7 @@ Only works when mode is `tick or `alive."
   "Return the status of the progress for the current workspaces."
   (when lsp-proxy-mode
     (let ((progress-status
-           (when-let* ((tokens (gethash (lsp-proxy-project-root) lsp-proxy--project-hashmap)))
+           (when-let* ((tokens (gethash (lsp-proxy--fix-path-casing (lsp-proxy-project-root)) lsp-proxy--project-hashmap)))
              (unless (ht-empty? tokens)
                (mapconcat
                 (lambda (value)
@@ -1202,9 +1210,9 @@ Only works when mode is `tick or `alive."
              (value (plist-get params :value))
              (kind (plist-get value :kind)))
         (pcase kind
-          ("begin" (lsp-proxy--set-work-done-token root-path token value))
-          ("report" (lsp-proxy--set-work-done-token root-path token value))
-          ("end" (lsp-proxy--rem-work-done-token root-path token)))))))
+          ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--normalize-path root-path) token value))
+          ("report" (lsp-proxy--set-work-done-token (lsp-proxy--normalize-path root-path) token value))
+          ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--normalize-path root-path) token)))))))
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
