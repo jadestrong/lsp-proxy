@@ -186,7 +186,12 @@ impl Message {
             msg: self.clone(),
         })?;
 
-        match bytecode::generate_bytecode_repl(&json_val, bytecode::BytecodeOptions::default()) {
+        match bytecode::generate_bytecode_repl(&json_val, bytecode::BytecodeOptions {
+            object_type: bytecode::ObjectType::Plist,
+            null_value: bytecode::LispObject::Nil,
+            false_value: bytecode::LispObject::Keyword("json-false".into()),
+
+        }) {
             Ok(bytecode_str) => write_msg_text(w, &bytecode_str),
             Err(err) => {
                 warn!("Failed to convert json to bytecode: {}", err);
