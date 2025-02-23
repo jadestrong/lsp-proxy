@@ -569,7 +569,6 @@ dependencies = [
  "num_cpus",
  "once_cell",
  "parking_lot",
- "percent-encoding",
  "serde",
  "serde_json",
  "smallvec",

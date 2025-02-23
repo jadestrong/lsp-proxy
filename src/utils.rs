@@ -418,3 +418,7 @@ pub fn ensure_parent_dir(path: &Path) {
         }
     }
 }
+
+pub fn uri_to_path(uri: &Url) -> PathBuf {
+    uri.to_file_path().ok().unwrap_or_default()
+}
