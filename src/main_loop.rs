@@ -27,7 +27,7 @@ use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
@@ -589,7 +589,7 @@ impl Application {
             Some(uri) => {
                 if let Some(doc) = self
                     .editor
-                    .document_by_uri(&lsp_types::Url::parse(uri).unwrap())
+                    .document_by_uri(&lsp_types::Uri::from_str(uri).unwrap())
                 {
                     Ok(doc)
                 } else {

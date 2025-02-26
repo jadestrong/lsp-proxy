@@ -8,13 +8,10 @@ use lsp_types as lsp;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::{
-    collections::HashMap,
-    path::PathBuf,
-    process::Stdio,
-    sync::{
+    collections::HashMap, path::PathBuf, process::Stdio, str::FromStr, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    },
+    }
 };
 use tokio::{
     io::{BufReader, BufWriter},
@@ -37,11 +34,12 @@ use crate::{
     utils::{find_lsp_workspace, find_workspace_for_file, get_activate_time, path},
 };
 
-fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
+fn workspace_for_uri(uri: lsp::Uri) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {
         name: uri
-            .path_segments()
-            .and_then(|segments| segments.last())
+            .path()
+            .segments()
+            .last()
             .map(|basename| basename.to_string())
             .unwrap_or_default(),
         uri,
@@ -68,7 +66,7 @@ pub struct Client {
     config: Option<Value>,
     experimental: Option<Value>,
     pub(crate) root_path: std::path::PathBuf,
-    root_uri: Option<lsp::Url>,
+    root_uri: Option<lsp::Uri>,
     workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
     initialize_notify: Arc<Notify>,
     /// workspace folders added while the server is still initializing
@@ -98,8 +96,8 @@ impl Client {
         );
 
         let root_uri = root
-            .as_ref()
-            .and_then(|root| lsp::Url::from_file_path(root).ok());
+            .clone()
+            .and_then(|root| lsp::Uri::from_str(&root.into_os_string().into_string().ok()?).ok());
 
         // 如果 lsp_workspace root 和当前 client 的对的上，就证明这个 client 属于该文件
         if self.root_path == root.unwrap_or(workspace)
@@ -155,7 +153,7 @@ impl Client {
 
     fn add_workspace_folder(
         &self,
-        root_uri: Option<lsp::Url>,
+        root_uri: Option<lsp::Uri>,
         change_notifications: &Option<OneOf<bool, String>>,
     ) {
         // root_uri is None just means that there isn't really any LSP workspace
@@ -231,7 +229,8 @@ impl Client {
         // `root_uri` and `workspace_folder` can be empty is case there is no workspace
         // `root_url` can not, use `workspace` as a fallback
         let root_path = root.clone().unwrap_or_else(|| workspace.clone());
-        let root_uri = root.and_then(|root| lsp::Url::from_file_path(root).ok());
+        let root_uri = root
+            .and_then(|root| lsp::Uri::from_str(&root.into_os_string().into_string().ok()?).ok());
 
         if let Some(features) = features {
             if features.config_files.len() > 0
@@ -758,7 +757,7 @@ impl Client {
 
     pub fn text_document_did_open(
         &self,
-        uri: lsp::Url,
+        uri: lsp::Uri,
         version: i32,
         doc: String,
         language_id: String,

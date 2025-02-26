@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Weak};
+use std::{collections::HashMap, path::PathBuf, str::FromStr, sync::Weak};
 use globset::{GlobBuilder, GlobSetBuilder};
 use tokio::sync::mpsc;
 
@@ -97,7 +97,7 @@ impl Handler {
                             log::warn!("LSP client was dropped: {id}");
                             return false;
                         };
-                        let Ok(uri) = lsp_types::Url::from_file_path(&path) else {
+                        let Ok(uri) = lsp_types::Uri::from_str(&path.to_str().unwrap()) else {
                             return true;
                         };
                         log::debug!(

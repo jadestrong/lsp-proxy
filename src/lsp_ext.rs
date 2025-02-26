@@ -1,6 +1,6 @@
 use crate::msg::RequestId;
 use lsp_types::{
-    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams, Url,
+    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams, Uri,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -37,7 +37,7 @@ impl Notification for DidRecordTriggerCharacters {
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomizeTextDocumentItem {
-    pub uri: Url,
+    pub uri: Uri,
     pub text: String,
 }
 
