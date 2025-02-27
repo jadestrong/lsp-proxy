@@ -464,7 +464,8 @@ FORMAT and ARGS is the same as for `messsage'."
   "Return the project root of current project."
   (if lsp-proxy--cur-project-root
       lsp-proxy--cur-project-root
-    (let* ((root (project-root (project-current)))
+    (let* ((project (project-current))
+           (root (and project (project-root project)))
            (root-path (and root (directory-file-name root))))
       (setq lsp-proxy--cur-project-root root-path)
       root-path)))
