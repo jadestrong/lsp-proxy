@@ -1206,7 +1206,9 @@ Only works when mode is `tick or `alive."
             (setq-local lsp-proxy--completion-trigger-characters trigger-characters)
             (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
             (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
-            (setq-local lsp-proxy--support-document-highlight support-document-highlight)
+            (setq-local lsp-proxy--support-document-highlight
+                        (if (eq support-document-highlight 'json-false) nil
+                          support-document-highlight))
             (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
@@ -1360,7 +1362,10 @@ Only works when mode is `tick or `alive."
 
 (defun lsp-proxy-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
-  (when (and lsp-proxy--support-document-highlight (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
+  (when (and lsp-proxy--support-document-highlight
+             (not (eq lsp-proxy--support-document-highlight ':json-false))
+             (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
+    (message "sending highlight %s" lsp-proxy--support-document-highlight)
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/documentHighlight
