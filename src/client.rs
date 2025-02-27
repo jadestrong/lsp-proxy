@@ -805,18 +805,20 @@ impl Client {
         let capabilities = self.capabilities.get().unwrap();
         let supported_save = match &capabilities.text_document_sync.as_ref() {
             Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => {
-                matches!(*kind, lsp_types::TextDocumentSyncKind::INCREMENTAL | lsp_types::TextDocumentSyncKind::FULL)
+                matches!(
+                    *kind,
+                    lsp_types::TextDocumentSyncKind::INCREMENTAL
+                        | lsp_types::TextDocumentSyncKind::FULL
+                )
             }
-            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
-                options
-                    .save
-                    .as_ref()
-                    .map_or(false, |save_options| match save_options {
-                        lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
-                        lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
-                    })
-            }
-            _ => false
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => options
+                .save
+                .as_ref()
+                .map_or(false, |save_options| match save_options {
+                    lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
+                    lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
+                }),
+            _ => false,
         };
         if supported_save {
             self.notify::<lsp::notification::DidSaveTextDocument>(params)

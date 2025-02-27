@@ -1,8 +1,8 @@
-use std::time::Instant;
 use anyhow::Result;
 use crossbeam_channel::{select, Receiver, Sender};
 use log::{debug, error, info};
 use lsp_types::notification::Notification;
+use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{

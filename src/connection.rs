@@ -1,9 +1,9 @@
+use crate::msg::Message;
+use crossbeam_channel::{bounded, Receiver, Sender};
 use std::{
     io::{self, stdin, stdout},
     thread,
 };
-use crossbeam_channel::{bounded, Receiver, Sender};
-use crate::msg::Message;
 
 pub struct Connection {
     pub sender: Sender<Message>,
