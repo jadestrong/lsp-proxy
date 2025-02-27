@@ -216,7 +216,7 @@ Auto inline complete will be not triggered if any predicates return t."
   "The log file name.")
 
 (defvar lsp-proxy--connection nil
-  "Lsp Proxy agent jsonrcp connection instnace.")
+  "Lsp Proxy agent jsonrpc connection instance.")
 
 (defvar lsp-proxy--opened-buffers nil
   "List of buffers that have been opened in Lsp Proxy.")
