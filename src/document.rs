@@ -110,6 +110,11 @@ impl Document {
             .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
     }
 
+    pub fn has_inline_completion_support(&self) -> bool {
+        self.language_servers()
+            .any(|ls| ls.supports_feature(LanguageServerFeature::InlineCompletion))
+    }
+
     pub fn is_document_highlight_support(&self) -> bool {
         self.language_servers()
             .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
