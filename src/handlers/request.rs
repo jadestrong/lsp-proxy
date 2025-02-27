@@ -432,7 +432,7 @@ pub(crate) async fn handle_completion(
         info!("completion await end {:0.2?}", requst_start.elapsed());
         Ok(resp)
     } else {
-        Err(anyhow::Error::msg("Not get a completion context."))
+        Err(anyhow::anyhow!("Not get a completion context: {:?}.", req))
     }
 }
 
@@ -518,6 +518,87 @@ pub(crate) async fn handle_completion_resolve(
             "No Resolve Context {:?}",
             req.params
         )))
+    }
+}
+
+pub(crate) async fn handle_inline_completion(
+    req: msg::Request,
+    params: lsp_types::InlineCompletionParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    if let Some(Context::InlineCompletionContext(context)) = req.params.context {
+        log::trace!("handing inline completion {:?}", params);
+        if context.trigger_kind == lsp_types::InlineCompletionTriggerKind::Invoked
+            && params.context.trigger_kind != context.trigger_kind
+        {
+            debug!("Skip automatic trigger when triggerKind is manual.");
+            return Ok(Response {
+                id: req.id,
+                result: None,
+                error: None,
+            });
+        }
+        let mut futures: FuturesUnordered<_> = language_servers
+            .iter()
+            .filter(|ls| ls.with_feature(LanguageServerFeature::InlineCompletion))
+            .map(|ls| {
+                let cmp_start = Instant::now();
+                let language_server_name = ls.name().to_owned();
+                let request = ls
+                    .inline_completion(req.id.clone(), params.clone())
+                    .unwrap();
+
+                let id = req.id.clone();
+                async move {
+                    let json = request.await?;
+                    info!(
+                        "{:?} [{:?}] await ${:0.2?}",
+                        language_server_name,
+                        id.clone(),
+                        cmp_start.elapsed()
+                    );
+                    let resp: Option<lsp_types::InlineCompletionResponse> =
+                        serde_json::from_value(json)?;
+
+                    let items = match resp {
+                        Some(lsp_types::InlineCompletionResponse::Array(items)) => items,
+                        Some(lsp_types::InlineCompletionResponse::List(list)) => list.items,
+                        None => Vec::new(),
+                    };
+                    anyhow::Ok(items)
+                }
+            })
+            .collect();
+        let future = async move {
+            let res = async move {
+                let mut items = Vec::new();
+                loop {
+                    match futures.try_next().await {
+                        Ok(Some(mut lsp_items)) => {
+                            items.append(&mut lsp_items);
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            error!("Future Error: {}", e);
+                            continue;
+                        }
+                    }
+                }
+                anyhow::Ok(items)
+            }
+            .await;
+            match res {
+                Ok(res) => Response::new_ok(req.id.clone(), res),
+                Err(e) => create_error_response(&req.id, e.to_string()),
+            }
+        };
+        let requst_start = Instant::now();
+        let resp = future.await;
+        info!("line completion await end {:0.2?}", requst_start.elapsed());
+
+        Ok(resp)
+    } else {
+        Err(anyhow::Error::msg("Not a inline completion context."))
     }
 }
 

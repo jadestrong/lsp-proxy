@@ -387,6 +387,9 @@ impl Client {
                     ..
                 })
             ),
+            LanguageServerFeature::InlineCompletion => {
+                capabilities.inline_completion_provider.is_some()
+            }
             LanguageServerFeature::CodeAction => matches!(
                 capabilities.code_action_provider,
                 Some(
@@ -617,6 +620,9 @@ impl Client {
                         context_support: None, // additional context information Some(true)
                         ..Default::default()
                     }),
+                    inline_completion: Some(lsp::InlineCompletionClientCapabilities {
+                        dynamic_registration: Some(false),
+                    }),
                     hover: Some(lsp::HoverClientCapabilities {
                         // if not specified, rust-analyzer returns plaintext marked as markdown but
                         // badly formatted.
@@ -840,6 +846,17 @@ impl Client {
 
         capabilities.completion_provider.as_ref()?;
         Some(self.call::<lsp::request::Completion>(req_id, parmas))
+    }
+
+    pub fn inline_completion(
+        &self,
+        req_id: RequestId,
+        params: lsp::InlineCompletionParams,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        let capabilities = self.capabilities.get().unwrap();
+
+        capabilities.completion_provider.as_ref()?;
+        Some(self.call::<lsp::request::InlineCompletionRequest>(req_id, params))
     }
 
     // code action

@@ -482,6 +482,9 @@ impl Application {
             )
             .on::<lsp_types::request::References, _, _>(handlers::request::handle_goto_references)
             .on::<lsp_types::request::Completion, _, _>(handlers::request::handle_completion)
+            .on::<lsp_types::request::InlineCompletionRequest, _, _>(
+                handlers::request::handle_inline_completion,
+            )
             .on::<lsp_types::request::ResolveCompletionItem, _, _>(
                 handlers::request::handle_completion_resolve,
             )

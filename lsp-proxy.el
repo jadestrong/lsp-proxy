@@ -142,6 +142,10 @@ the buffer when it becomes large."
           (const :tag "Trace" 3))
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-inline-completion-trigger-kind 1
+  "Describes how an `InlineCompletionItemProvider' was triggered.
+0 means to invoke inline completion manually, 2 means invoke it automatically.")
+
 (defface lsp-proxy-hover-posframe
   '((t :inherit tooltip))
   "Background and foreground for `lsp-proxy-hover-posframe'."
@@ -189,6 +193,9 @@ The value can be:
                                                      (file-name-directory load-file-name)
                                                    default-directory)))
 (defvar-local lsp-proxy--on-idle-timer nil)
+
+(defvar-local lsp-proxy--inline-completion-trigger-by 1
+  "How inline completion is actually triggered.")
 
 (defvar lsp-proxy--log-file nil
   "The log file name.")
@@ -1451,6 +1458,60 @@ Or nil if none."
       (if (looking-back "[a-zA-Z0-9]+-[a-zA-Z0-9-]*" start)
           (cons start end)
         nil))))
+
+;;; textDocument/inlineCompletion return: InlineCompletionItem[]
+;;; 
+(defun lsp-proxy--inline-completion (&optional trigger-kind)
+  ;; TODO implement SelectedCompletionInfo
+  (let ((resp (lsp-proxy--request
+               'textDocument/inlineCompletion
+               (lsp-proxy--request-or-notify-params
+                (append (lsp-proxy--TextDocumentPosition)
+                        `(:context (:triggerKind ,lsp-proxy-inline-completion-trigger-kind)))
+                `(:context
+                  (:triggerKind ,(or trigger-kind lsp-proxy--inline-completion-trigger-by)
+                                :selectedCompletionInfo nil)
+                  )))))
+    (print resp)
+    (--map (let ((text (plist-get it :insertText))
+                 ;; TODO ignore filter-text for now
+                 (filter-text (plist-get it :filter-text?)))
+             text)
+           resp)))
+
+(defun lsp-proxy-completion-preview--update-around-wrapper (orig &rest r)
+    (let ((completion-at-point-functions '(lsp-proxy--inline-capf)))
+      (apply orig r)))
+
+(defun lsp-proxy--inline-capf ()
+  (let* ((start (point))
+         (candidates 'lsp-proxy--inline-completion))
+    (list start start
+          (lambda (probe pred action)
+            (cond
+             ((eq action 'metadata)
+              '(metadata (category . lsp-proxy-inline-capf)
+                         (display-sort-function . identity)
+                         (cycle-sort-function . identity)))
+             ((eq (car-safe action) 'boundaries) nil)
+             (t
+              (complete-with-action action (funcall candidates) probe pred)))))))
+
+;;; FIXME advicing still triggers corfu, need to invesgate
+;;; TODO how should we setup the tab key?
+(define-minor-mode lsp-proxy-inline-completion-mode
+  "Inline completion with preview in virtual text."
+  :lighter nil
+  :group 'lsp-proxy-mode
+  (if lsp-proxy-inline-completion-mode
+      (progn
+        (advice-add 'completion-preview--update
+                    :around 'lsp-proxy-completion-preview--update-around-wrapper)
+        (completion-preview-mode 1))
+    (advice-remove 'completion-preview--update
+                   'lsp-proxy-completion-preview--update-around-wrapper)
+    (completion-preview-mode -1)))
+
 
 (defun lsp-proxy-completion-at-point ()
   "Get lsp completions."
