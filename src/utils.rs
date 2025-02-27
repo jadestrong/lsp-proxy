@@ -2,7 +2,9 @@ use log::{debug, error};
 use lsp_types::{Diagnostic, Uri};
 use serde::de::DeserializeOwned;
 use std::{
-    path::{Path, PathBuf}, str::FromStr, time::{SystemTime, UNIX_EPOCH}
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use stringslice::StringSlice;
 
@@ -14,9 +16,12 @@ pub fn current_working_dir() -> PathBuf {
 }
 
 pub mod path {
-    use std::{borrow::Cow, path::{Component, Path, PathBuf}};
-    use etcetera::home_dir;
     use crate::utils::current_working_dir;
+    use etcetera::home_dir;
+    use std::{
+        borrow::Cow,
+        path::{Component, Path, PathBuf},
+    };
 
     /// Expands tilde `~` into users home directory if available, otherwise returns the path
     /// unchanged. The tilde will only be expanded when present as the first component of the path

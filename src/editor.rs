@@ -9,7 +9,11 @@ use log::error;
 use lsp_types::Uri;
 use percent_encoding::percent_decode;
 use std::{
-    collections::{BTreeMap, HashMap}, num::NonZeroUsize, path::Path, str::FromStr, sync::Arc
+    collections::{BTreeMap, HashMap},
+    num::NonZeroUsize,
+    path::Path,
+    str::FromStr,
+    sync::Arc,
 };
 
 pub struct Editor {
