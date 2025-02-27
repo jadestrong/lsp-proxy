@@ -1198,8 +1198,8 @@ Only works when mode is `tick or `alive."
           (with-current-buffer (find-file-noselect filepath)
             (setq-local lsp-proxy--completion-trigger-characters trigger-characters)
             (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
-            (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
-            (setq-local lsp-proxy--support-document-highlight support-document-highlight)
+            (setq-local lsp-proxy--support-inlay-hints (not (eq support-inlay-hints :json-false)))
+            (setq-local lsp-proxy--support-document-highlight (not (eq support-document-highlight :json-false)))
             (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
