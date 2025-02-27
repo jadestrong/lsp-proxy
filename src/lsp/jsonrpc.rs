@@ -187,6 +187,7 @@ impl From<Params> for Value {
 pub struct MethodCall {
     pub jsonrpc: Option<Version>,
     pub method: String,
+    #[serde(default = "default_params", skip_serializing_if = "Params::is_none")]
     pub params: Params,
     pub id: RequestId,
 }
