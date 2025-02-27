@@ -510,7 +510,8 @@ FORMAT and ARGS is the same as for `messsage'."
   "Return the project root of current project."
   (if lsp-proxy--cur-project-root
       lsp-proxy--cur-project-root
-    (let* ((root (project-root (project-current)))
+    (let* ((project (project-current))
+           (root (and project (project-root project)))
            (root-path (and root (directory-file-name root))))
       (setq lsp-proxy--cur-project-root root-path)
       root-path)))
@@ -1244,10 +1245,8 @@ Only works when mode is `tick or `alive."
           (with-current-buffer (find-file-noselect filepath)
             (setq-local lsp-proxy--completion-trigger-characters trigger-characters)
             (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
-            (setq-local lsp-proxy--support-inlay-hints support-inlay-hints)
-            (setq-local lsp-proxy--support-document-highlight
-                        (if (eq support-document-highlight 'json-false) nil
-                          support-document-highlight))
+            (setq-local lsp-proxy--support-inlay-hints (not (eq support-inlay-hints :json-false)))
+            (setq-local lsp-proxy--support-document-highlight (not (eq support-document-highlight :json-false)))
             (lsp-proxy-activate-inlay-hints-mode)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
