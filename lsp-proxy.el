@@ -1614,7 +1614,8 @@ This command can be used without activating `lsp-proxy-inline-completion-mode'."
     (let* ((ov lsp-proxy--inline-completion-preview-overlay)
            (content (overlay-get ov 'after-string)))
       (insert-and-inherit (substring-no-properties content)))
-    (lsp-proxy--inline-completion-delete-overlay)))
+    (lsp-proxy--inline-completion-delete-overlay))
+  (lsp-proxy--inline-completion-active-mode -1))
 
 ;; NOTE check `completion-preview-active-mode'.
 ;; copilot.el use a 1-width invisible overlay to obtain keymap precedence.
