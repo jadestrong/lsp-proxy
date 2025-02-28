@@ -196,15 +196,13 @@ The value can be:
   "A list of predicate functions with no argument to enable auto inline completion.
 Auto inline complete will be triggered only if all predicates return t."
   :type '(repeat function)
-  :group 'lsp-proxy
-  )
+  :group 'lsp-proxy)
 
 (defcustom lsp-proxy-inline-completion-disable-predicates nil
   "A list of predicate functions with no argument to disable auto inline completion.
-Auto inline complete will be not triggered only if any predicates return t."
+Auto inline complete will be not triggered if any predicates return t."
   :type '(repeat function)
-  :group 'lsp-proxy
-  )
+  :group 'lsp-proxy)
 
 
 (defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
@@ -1644,7 +1642,7 @@ Check `lsp-proxy--inline-completion-active-mode-map' for keys and available comm
     (remove-hook 'post-command-hook 'lsp-proxy--inline-completion-post-command t)
     (when lsp-proxy--inline-completion-active-mode
       (lsp-proxy--inline-completion-active-mode -1))
-    (when timerp lsp-proxy--inline-completion-preview-timer
+    (when (timerp lsp-proxy--inline-completion-preview-timer)
           (cancel-timer lsp-proxy--inline-completion-preview-timer)
           (setq lsp-proxy--inline-completion-preview-timer nil))))
 
