@@ -1398,10 +1398,7 @@ Only works when mode is `tick or `alive."
 
 (defun lsp-proxy-hover-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
-  (when (and lsp-proxy--support-document-highlight
-             (not (eq lsp-proxy--support-document-highlight ':json-false))
-             (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
-    (message "sending highlight %s" lsp-proxy--support-document-highlight)
+  (when (and lsp-proxy--support-document-highlight (not (lsp-proxy--progressing-p (lsp-proxy-project-root))))
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/documentHighlight
