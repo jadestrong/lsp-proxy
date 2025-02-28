@@ -6,12 +6,13 @@ use crate::{
 };
 use anyhow::Result;
 use log::error;
-use lsp_types::Url;
+use lsp_types::Uri;
 use percent_encoding::percent_decode;
 use std::{
     collections::{BTreeMap, HashMap},
     num::NonZeroUsize,
     path::Path,
+    str::FromStr,
     sync::Arc,
 };
 
@@ -36,7 +37,7 @@ impl Editor {
 
     /// If the document already existed, return it
     /// Else create it, and launch langauge server for this document
-    pub fn get(&mut self, uri: &Url) -> Result<DocumentId> {
+    pub fn get(&mut self, uri: &Uri) -> Result<DocumentId> {
         let id = self.document_by_uri(&uri).map(|doc| doc.id);
 
         let id = if let Some(id) = id {
@@ -68,31 +69,31 @@ impl Editor {
             .find(|doc| doc.path().map(|p| p == path.as_ref()).unwrap_or(false))
     }
 
-    pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
+    pub fn document_by_uri(&self, uri: &Uri) -> Option<&Document> {
         if cfg!(target_os = "windows") {
             let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
                 .decode_utf8_lossy()
                 .to_string();
-            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
+            let decoded_uri = Uri::from_str(&decoded_uri_str).unwrap();
             self.documents().find(|doc| doc.uri() == &decoded_uri)
         } else {
             self.documents().find(|doc| doc.uri() == uri)
         }
     }
 
-    pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
+    pub fn document_by_uri_mut(&mut self, uri: &Uri) -> Option<&mut Document> {
         if cfg!(target_os = "windows") {
             let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
                 .decode_utf8_lossy()
                 .to_string();
-            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
+            let decoded_uri = Uri::from_str(&decoded_uri_str).unwrap();
             self.documents_mut().find(|doc| doc.uri() == &decoded_uri)
         } else {
             self.documents_mut().find(|doc| doc.uri() == uri)
         }
     }
 
-    pub fn new_document(&mut self, uri: &Url) -> DocumentId {
+    pub fn new_document(&mut self, uri: &Uri) -> DocumentId {
         let mut doc = Document::new(uri, Some(self.syn_loader.clone()));
         let id = self.next_document_id;
         self.next_document_id =

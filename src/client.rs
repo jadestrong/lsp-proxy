@@ -11,6 +11,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
+    str::FromStr,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
@@ -37,11 +38,12 @@ use crate::{
     utils::{find_lsp_workspace, find_workspace_for_file, get_activate_time, path},
 };
 
-fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
+fn workspace_for_uri(uri: lsp::Uri) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {
         name: uri
-            .path_segments()
-            .and_then(|segments| segments.last())
+            .path()
+            .segments()
+            .last()
             .map(|basename| basename.to_string())
             .unwrap_or_default(),
         uri,
@@ -68,7 +70,7 @@ pub struct Client {
     config: Option<Value>,
     experimental: Option<Value>,
     pub(crate) root_path: std::path::PathBuf,
-    root_uri: Option<lsp::Url>,
+    root_uri: Option<lsp::Uri>,
     workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
     initialize_notify: Arc<Notify>,
     /// workspace folders added while the server is still initializing
@@ -98,8 +100,8 @@ impl Client {
         );
 
         let root_uri = root
-            .as_ref()
-            .and_then(|root| lsp::Url::from_file_path(root).ok());
+            .clone()
+            .and_then(|root| lsp::Uri::from_str(&root.into_os_string().into_string().ok()?).ok());
 
         // 如果 lsp_workspace root 和当前 client 的对的上，就证明这个 client 属于该文件
         if self.root_path == root.unwrap_or(workspace)
@@ -155,7 +157,7 @@ impl Client {
 
     fn add_workspace_folder(
         &self,
-        root_uri: Option<lsp::Url>,
+        root_uri: Option<lsp::Uri>,
         change_notifications: &Option<OneOf<bool, String>>,
     ) {
         // root_uri is None just means that there isn't really any LSP workspace
@@ -231,7 +233,8 @@ impl Client {
         // `root_uri` and `workspace_folder` can be empty is case there is no workspace
         // `root_url` can not, use `workspace` as a fallback
         let root_path = root.clone().unwrap_or_else(|| workspace.clone());
-        let root_uri = root.and_then(|root| lsp::Url::from_file_path(root).ok());
+        let root_uri = root
+            .and_then(|root| lsp::Uri::from_str(&root.into_os_string().into_string().ok()?).ok());
 
         if let Some(features) = features {
             if features.config_files.len() > 0
@@ -388,6 +391,9 @@ impl Client {
                     ..
                 })
             ),
+            LanguageServerFeature::InlineCompletion => {
+                capabilities.inline_completion_provider.is_some()
+            }
             LanguageServerFeature::CodeAction => matches!(
                 capabilities.code_action_provider,
                 Some(
@@ -618,6 +624,9 @@ impl Client {
                         context_support: None, // additional context information Some(true)
                         ..Default::default()
                     }),
+                    inline_completion: Some(lsp::InlineCompletionClientCapabilities {
+                        dynamic_registration: Some(false),
+                    }),
                     hover: Some(lsp::HoverClientCapabilities {
                         // if not specified, rust-analyzer returns plaintext marked as markdown but
                         // badly formatted.
@@ -758,7 +767,7 @@ impl Client {
 
     pub fn text_document_did_open(
         &self,
-        uri: lsp::Url,
+        uri: lsp::Uri,
         version: i32,
         doc: String,
         language_id: String,
@@ -799,18 +808,20 @@ impl Client {
         let capabilities = self.capabilities.get().unwrap();
         let supported_save = match &capabilities.text_document_sync.as_ref() {
             Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => {
-                matches!(*kind, lsp_types::TextDocumentSyncKind::INCREMENTAL | lsp_types::TextDocumentSyncKind::FULL)
+                matches!(
+                    *kind,
+                    lsp_types::TextDocumentSyncKind::INCREMENTAL
+                        | lsp_types::TextDocumentSyncKind::FULL
+                )
             }
-            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
-                options
-                    .save
-                    .as_ref()
-                    .map_or(false, |save_options| match save_options {
-                        lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
-                        lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
-                    })
-            }
-            _ => false
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => options
+                .save
+                .as_ref()
+                .map_or(false, |save_options| match save_options {
+                    lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
+                    lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
+                }),
+            _ => false,
         };
         if supported_save {
             self.notify::<lsp::notification::DidSaveTextDocument>(params)
@@ -841,6 +852,17 @@ impl Client {
 
         capabilities.completion_provider.as_ref()?;
         Some(self.call::<lsp::request::Completion>(req_id, parmas))
+    }
+
+    pub fn inline_completion(
+        &self,
+        req_id: RequestId,
+        params: lsp::InlineCompletionParams,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        let capabilities = self.capabilities.get().unwrap();
+
+        capabilities.completion_provider.as_ref()?;
+        Some(self.call::<lsp::request::InlineCompletionRequest>(req_id, params))
     }
 
     // code action

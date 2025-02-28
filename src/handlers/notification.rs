@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use crate::{application::Application, document::DocumentId, lsp_ext, utils::get_activate_time};
 use anyhow::Result;
 use itertools::Itertools;
@@ -155,7 +157,7 @@ pub(crate) fn handle_cancel(
     let uri = &params.uri.as_ref().unwrap();
     let doc = app
         .editor
-        .document_by_uri(&lsp_types::Url::parse(uri).unwrap());
+        .document_by_uri(&lsp_types::Uri::from_str(uri).unwrap());
     if let Some(doc) = doc {
         doc.language_servers().for_each(|ls| {
             ls.cancel(lsp_types::CancelParams {

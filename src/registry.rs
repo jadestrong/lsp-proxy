@@ -1,12 +1,3 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
-use anyhow::anyhow;
-use futures_util::stream::SelectAll;
-use log::{debug, error};
-use lsp::notification::Notification;
-use lsp_types as lsp;
-use thiserror::Error;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use crate::{
     client::Client,
     lsp::{
@@ -17,6 +8,15 @@ use crate::{
     syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
     utils::path,
 };
+use anyhow::anyhow;
+use futures_util::stream::SelectAll;
+use log::{debug, error};
+use lsp::notification::Notification;
+use lsp_types as lsp;
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use thiserror::Error;
+use tokio::sync::mpsc::UnboundedReceiver;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub type LanguageServerName = String;
 struct NewClient(Arc<Client>, UnboundedReceiver<(usize, Call)>);

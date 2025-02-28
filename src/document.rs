@@ -4,7 +4,7 @@ use crate::{
     syntax::{self, LanguageConfiguration, LanguageServerFeature},
 };
 use lsp::Diagnostic;
-use lsp_types::{self as lsp, Url};
+use lsp_types::{self as lsp, Uri};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
@@ -34,7 +34,7 @@ pub struct DiagnosticItem {
 #[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
-    pub uri: Url,
+    pub uri: Uri,
     /// Corresponding language scope name. Usually `source.<lang>`.
     pub language_config: Option<Arc<LanguageConfiguration>>,
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
@@ -43,7 +43,7 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>) -> Self {
+    pub fn new(uri: &Uri, config_loader: Option<Arc<syntax::Loader>>) -> Self {
         let mut doc = Document {
             id: DocumentId::default(),
             uri: uri.clone(),
@@ -66,13 +66,13 @@ impl Document {
 
     #[inline]
     /// File url
-    pub fn uri(&self) -> &Url {
+    pub fn uri(&self) -> &Uri {
         &self.uri
     }
 
-    /// A Url to file path
+    /// A Uri to file path
     pub fn path(&self) -> Option<PathBuf> {
-        Url::to_file_path(self.uri()).ok()
+        Some(PathBuf::from(self.uri.as_str()))
     }
 
     pub fn get_trigger_characters(&self) -> Vec<String> {
@@ -108,6 +108,11 @@ impl Document {
     pub fn is_has_inlay_hints_support(&self) -> bool {
         self.language_servers()
             .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
+    }
+
+    pub fn has_inline_completion_support(&self) -> bool {
+        self.language_servers()
+            .any(|ls| ls.supports_feature(LanguageServerFeature::InlineCompletion))
     }
 
     pub fn is_document_highlight_support(&self) -> bool {

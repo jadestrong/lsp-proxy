@@ -142,6 +142,10 @@ the buffer when it becomes large."
           (const :tag "Trace" 3))
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-inline-completion-trigger-kind 1
+  "Describes how an `InlineCompletionItemProvider' was triggered.
+0 means to invoke inline completion manually, 2 means invoke it automatically.")
+
 (defface lsp-proxy-hover-posframe
   '((t :inherit tooltip))
   "Background and foreground for `lsp-proxy-hover-posframe'."
@@ -182,6 +186,25 @@ The value can be:
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-inline-completion-idle-delay
+  0.5 ;; maybe use lsp-proxy-idle-delay as default?
+  "Idle delay for inline-completion."
+  :type 'number
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-inline-completion-enable-predicates '(evil-insert-state-p)
+  "A list of predicate functions with no argument to enable auto inline completion.
+Auto inline complete will be triggered only if all predicates return t."
+  :type '(repeat function)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-inline-completion-disable-predicates nil
+  "A list of predicate functions with no argument to disable auto inline completion.
+Auto inline complete will be not triggered if any predicates return t."
+  :type '(repeat function)
+  :group 'lsp-proxy)
+
+
 (defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
                                                      "./lsp-proxy.exe"
                                                    "./lsp-proxy")
@@ -189,6 +212,9 @@ The value can be:
                                                      (file-name-directory load-file-name)
                                                    default-directory)))
 (defvar-local lsp-proxy--on-idle-timer nil)
+
+(defvar-local lsp-proxy--inline-completion-trigger-by 1
+  "How inline completion is actually triggered.")
 
 (defvar lsp-proxy--log-file nil
   "The log file name.")
@@ -199,11 +225,29 @@ The value can be:
 (defvar lsp-proxy--opened-buffers nil
   "List of buffers that have been opened in Lsp Proxy.")
 
+(defvar lsp-proxy--inline-completion-commands
+  '(lsp-proxy-inline-completion-complete
+    lsp-proxy-inline-completion-trigger
+    lsp-proxy-inline-completion-cancel
+    )
+  "Completion commands that needs to be ignored in `lsp-proxy--inline-completion-post-command'.")
+
+(defvar-keymap lsp-proxy--inline-completion-active-mode-map
+  "M-i" 'lsp-proxy-inline-completion-complete
+  "C-i" 'lsp-proxy-inline-completion-trigger
+  )
+
 (defvar-local lsp-proxy--doc-version 0
   "The document version of the current buffer. Incremented after each change.")
 
 (defvar-local lsp-proxy--recent-changes nil
   "Recent buffer changes as collected by `lsp-proxy--before-change'.")
+
+(defvar-local lsp-proxy--inline-completion-preview-overlay nil
+  "Overlay used by `lsp-proxy-inline-completion-mode'.")
+
+(defvar-local lsp-proxy--inline-completion-preview-timer nil
+  "Timer used by `lsp-proxy-inline-completion-mode'.")
 
 (defvar-local lsp-proxy--change-idle-timer nil
   "Idle timer for didChange signals.")
@@ -1452,6 +1496,157 @@ Or nil if none."
       (if (looking-back "[a-zA-Z0-9]+-[a-zA-Z0-9-]*" start)
           (cons start end)
         nil))))
+
+;;; inline completion
+
+(defface lsp-proxy-inline-completion-overlay
+  '((t :inherit shadow))
+  "Face for displaying inline completion."
+  :group 'lsp-proxy)
+
+;; these functions are copied from copilot.el
+(defmacro lsp-proxy--satisfy-predicates (enable disable)
+  "Return t if satisfy all predicates in ENABLE and none in DISABLE."
+  `(and (cl-every (lambda (pred)
+                    (if (functionp pred) (funcall pred) t))
+                  ,enable)
+        (cl-notany (lambda (pred)
+                     (if (functionp pred) (funcall pred) nil))
+                   ,disable)))
+
+(defun lsp-proxy--inline-completion-satisfy-predicates ()
+  (lsp-proxy--satisfy-predicates lsp-proxy-inline-completion-enable-predicates
+                                 lsp-proxy-inline-completion-disable-predicates))
+
+
+(defun lsp-proxy--inline-completion-delete-overlay ()
+  (when lsp-proxy--inline-completion-preview-overlay
+    (delete-overlay lsp-proxy--inline-completion-preview-overlay)
+    (setq-local lsp-proxy--inline-completion-preview-overlay nil)))
+
+(defun lsp-proxy--inline-completion-overlay-avaible ()
+  (and lsp-proxy--inline-completion-preview-overlay
+       (overlayp lsp-proxy--inline-completion-preview-overlay)
+       (overlay-buffer lsp-proxy--inline-completion-preview-overlay)))
+
+;; TODO implement SelectedCompletionInfo
+(defun lsp-proxy--inline-completion (&optional trigger-kind)
+  (lsp-proxy--async-request
+   'textDocument/inlineCompletion
+   (lsp-proxy--request-or-notify-params
+    (append (lsp-proxy--TextDocumentPosition)
+            `(:context (:triggerKind ,lsp-proxy-inline-completion-trigger-kind)))
+    `(:context
+      (:triggerKind ,(or trigger-kind lsp-proxy--inline-completion-trigger-by)
+                    :selectedCompletionInfo nil)))
+   :success-fn
+   (lambda (resp)
+     (let* ((cands (--map (plist-get it :insertText) resp))
+            (cand (car cands))) ;; TODO make all candidates available
+       (when cand (lsp-proxy--inline-completion-update-overlay cand))))))
+
+(defun lsp-proxy--inline-completion-update-overlay (&optional cand)
+  "Updates the inline preview overlay.
+Update existing overlay when inserting new character,or make a new one
+if CAND is non-nil."
+  (if cand
+      (let* ((pos (point))
+             (ov (make-overlay pos pos)))
+        (add-text-properties 0 (length cand) '(cursor 1) cand)
+        (add-text-properties 0 (length cand)
+                             '(face lsp-proxy-inline-completion-overlay) cand)
+        (overlay-put ov 'after-string cand)
+        (lsp-proxy--inline-completion-delete-overlay)
+        (setq-local lsp-proxy--inline-completion-preview-overlay ov))
+
+    (when (and (eq this-command 'self-insert-command)
+               (overlayp lsp-proxy--inline-completion-preview-overlay))
+      (let* ((ov lsp-proxy--inline-completion-preview-overlay)
+             (completion (overlay-get ov 'after-string)))
+        (when (eq last-command-event (elt completion 0))
+              (if (= (length completion) 1)
+                  (lsp-proxy--inline-completion-delete-overlay) ;; completion complete
+                (move-overlay ov (point) (point))
+                (overlay-put ov 'after-string (substring cand 1)))))))
+
+  (if (lsp-proxy--inline-completion-overlay-avaible)
+      (lsp-proxy--inline-completion-active-mode 1)))
+
+(defun lsp-proxy--inline-completion-post-command ()
+  (let ((internal-p (and (memq this-command lsp-proxy--inline-completion-commands))))
+
+    (unless internal-p
+      (lsp-proxy--inline-completion-update-overlay)
+      (lsp-proxy--inline-completion-active-mode -1))
+
+    (when (timerp lsp-proxy--inline-completion-preview-timer)
+      (cancel-timer lsp-proxy--inline-completion-preview-timer)
+      (setq lsp-proxy--inline-completion-preview-timer nil))
+
+    (when (and (numberp lsp-proxy-inline-completion-idle-delay)
+               (lsp-proxy--inline-completion-satisfy-predicates))
+      (setq lsp-proxy--inline-completion-preview-timer
+            (run-with-idle-timer lsp-proxy-inline-completion-idle-delay
+                                 nil
+                                 'lsp-proxy--inline-completion
+                                 2
+                                 )))))
+
+;;;###autoload
+(defun lsp-proxy-inline-completion-trigger ()
+  "Manually trigger inline completion.
+This command can be used without activating `lsp-proxy-inline-completion-mode'."
+  (interactive)
+  (lsp-proxy--inline-completion 1))
+
+;;;###autoload
+(defun lsp-proxy-inline-completion-cancel ()
+  "Cancel current inline completion, if any."
+  (lsp-proxy--inline-completion-delete-overlay)
+  (lsp-proxy--inline-completion-active-mode -1))
+
+;; TODO accept word-wise, line-wise, etc
+;;;###autoload
+(defun lsp-proxy-inline-completion-complete ()
+  "Complete shown text."
+  (interactive)
+  (when (overlayp lsp-proxy--inline-completion-preview-overlay)
+    (let* ((ov lsp-proxy--inline-completion-preview-overlay)
+           (content (overlay-get ov 'after-string)))
+      (insert-and-inherit (substring-no-properties content)))
+    (lsp-proxy--inline-completion-delete-overlay))
+  (lsp-proxy--inline-completion-active-mode -1))
+
+;; NOTE check `completion-preview-active-mode'.
+;; copilot.el use a 1-width invisible overlay to obtain keymap precedence.
+;; See discussions at https://github.com/copilot-emacs/copilot.el/issues/251.
+;; I prefer to create a new minor-mode to do this, as `completion-preview-mode'
+;; and `corfu-mode'.
+(define-minor-mode lsp-proxy--inline-completion-active-mode
+  "Active mode for inline-completion.
+This is used for keymapping."
+  :interactive nil
+  (if lsp-proxy--inline-completion-active-mode
+      (progn
+        (setf (alist-get 'lsp-proxy--inline-completion-active-mode
+                         minor-mode-overriding-map-alist)
+              lsp-proxy--inline-completion-active-mode-map))
+    (lsp-proxy--inline-completion-delete-overlay)))
+
+;;;###autoload
+(define-minor-mode lsp-proxy-inline-completion-mode
+  "Auto inline complete mode.
+Check `lsp-proxy--inline-completion-active-mode-map' for keys and available commands."
+  :lighter "CP"
+  (if lsp-proxy-inline-completion-mode
+      (add-hook 'post-command-hook 'lsp-proxy--inline-completion-post-command nil t)
+    (remove-hook 'post-command-hook 'lsp-proxy--inline-completion-post-command t)
+    (when lsp-proxy--inline-completion-active-mode
+      (lsp-proxy--inline-completion-active-mode -1))
+    (when (timerp lsp-proxy--inline-completion-preview-timer)
+          (cancel-timer lsp-proxy--inline-completion-preview-timer)
+          (setq lsp-proxy--inline-completion-preview-timer nil))))
+
 
 (defun lsp-proxy-completion-at-point ()
   "Get lsp completions."

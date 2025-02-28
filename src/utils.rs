@@ -1,8 +1,9 @@
 use log::{debug, error};
-use lsp_types::{Diagnostic, Url};
+use lsp_types::{Diagnostic, Uri};
 use serde::de::DeserializeOwned;
 use std::{
     path::{Path, PathBuf},
+    str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
 use stringslice::StringSlice;
@@ -15,9 +16,12 @@ pub fn current_working_dir() -> PathBuf {
 }
 
 pub mod path {
-    use std::{borrow::Cow, path::{Component, Path, PathBuf}};
-    use etcetera::home_dir;
     use crate::utils::current_working_dir;
+    use etcetera::home_dir;
+    use std::{
+        borrow::Cow,
+        path::{Component, Path, PathBuf},
+    };
 
     /// Expands tilde `~` into users home directory if available, otherwise returns the path
     /// unchanged. The tilde will only be expanded when present as the first component of the path
@@ -194,17 +198,18 @@ pub fn find_workspace_for_file(filepath: &PathBuf) -> (PathBuf, bool) {
 /// * If we stoped at `workspace` instead and `workspace_is_cwd == true` return `workspace`
 /// * Copied from helix: <https://github.com/helix-editor/helix/blob/9ba691cd3a8ffb021cb194bd3185317a65c3194a/helix-lsp/src/lib.rs#L938>
 pub fn find_lsp_workspace(
-    file: &str,
+    file_str: &str,
     root_markers: &[String],
     workspace: &Path,
     workspace_is_cwd: bool,
 ) -> Option<PathBuf> {
-    let file = std::path::Path::new(file);
+    let file = Uri::from_str(file_str).unwrap();
+    let file = std::path::Path::new(file.path().as_str());
     // 将 file 参数格式化成一个绝对路径的格式
     let mut file = if file.is_absolute() {
         file.to_path_buf()
     } else {
-        error!("Not support relative path");
+        error!("Not supported relative path: {}", file_str);
         let current_dir = current_working_dir();
         current_dir.join(file)
     };
@@ -237,8 +242,8 @@ pub fn find_lsp_workspace(
     None
 }
 
-pub fn find_workspace_folder_for_uri(uri: &lsp_types::Url) -> Option<(String, String)> {
-    let current_dir = uri.to_file_path();
+pub fn find_workspace_folder_for_uri(uri: &lsp_types::Uri) -> Option<(String, String)> {
+    let current_dir = anyhow::Ok(PathBuf::from(uri.as_str()));
     if let Ok(current_dir) = current_dir {
         for ancestor in current_dir.ancestors() {
             if ancestor.join(".git").exists() {
@@ -247,8 +252,8 @@ pub fn find_workspace_folder_for_uri(uri: &lsp_types::Url) -> Option<(String, St
                     .file_name()
                     .map(|f| f.to_string_lossy().to_string())
                     .expect("ancestor's filename");
-                // let url = Url::parse(filepath);
-                let url = Url::from_file_path(filepath);
+                // let url = Uri::parse(filepath);
+                let url = Uri::from_str(filepath);
                 return match url {
                     Ok(val) => Some((val.to_string(), filename)),
                     Err(_) => None,
