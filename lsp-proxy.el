@@ -86,6 +86,11 @@ the buffer when it becomes large."
           (integer :tag "lines")
           (const :tag "Unlimited" t)))
 
+(defcustom lsp-proxy-max-completion-item 20
+  "Maximum numbers of completion sent and by server."
+  :group 'lsp-proxy
+  :type 'number)
+
 (defcustom lsp-proxy--send-changes-idle-time 0
   "Don't tell server of changes before Emacs's been idle for this many seconds."
   :group 'lsp-proxy
@@ -766,7 +771,7 @@ Only works when mode is `tick or `alive."
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
-                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file)
+                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" lsp-proxy-max-completion-item)
                                          :coding 'utf-8-emacs-unix
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
