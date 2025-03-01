@@ -69,6 +69,7 @@ fn try_main() -> Result<()> {
         std::process::exit(1);
     }
     
+    handlers::request::set_max_completion_items(args.max_item_num);
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
     
