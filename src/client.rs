@@ -436,7 +436,7 @@ impl Client {
         false
     }
 
-    async fn request<R: lsp::request::Request>(&self, params: R::Params) -> Result<R::Result>
+    pub async fn request<R: lsp::request::Request>(&self, params: R::Params) -> Result<R::Result>
     where
         R::Params: serde::Serialize,
         R::Result: core::fmt::Debug, // TODO temporary
