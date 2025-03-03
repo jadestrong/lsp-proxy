@@ -325,7 +325,8 @@ impl Application {
                                         signature_trigger_characters: doc
                                             .get_signature_trigger_characters(),
                                         support_inlay_hints: doc.is_has_inlay_hints_support(),
-                                        support_document_highlight: doc.is_document_highlight_support(),
+                                        support_document_highlight: doc
+                                            .is_document_highlight_support(),
                                     },
                                 )
                             });
@@ -482,6 +483,9 @@ impl Application {
             )
             .on::<lsp_types::request::References, _, _>(handlers::request::handle_goto_references)
             .on::<lsp_types::request::Completion, _, _>(handlers::request::handle_completion)
+            .on::<lsp_types::request::InlineCompletionRequest, _, _>(
+                handlers::request::handle_inline_completion,
+            )
             .on::<lsp_types::request::ResolveCompletionItem, _, _>(
                 handlers::request::handle_completion_resolve,
             )

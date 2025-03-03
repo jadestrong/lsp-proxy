@@ -388,6 +388,9 @@ impl Client {
                     ..
                 })
             ),
+            LanguageServerFeature::InlineCompletion => {
+                capabilities.inline_completion_provider.is_some()
+            }
             LanguageServerFeature::CodeAction => matches!(
                 capabilities.code_action_provider,
                 Some(
@@ -618,6 +621,9 @@ impl Client {
                         context_support: None, // additional context information Some(true)
                         ..Default::default()
                     }),
+                    inline_completion: Some(lsp::InlineCompletionClientCapabilities {
+                        dynamic_registration: Some(false),
+                    }),
                     hover: Some(lsp::HoverClientCapabilities {
                         // if not specified, rust-analyzer returns plaintext marked as markdown but
                         // badly formatted.
@@ -799,18 +805,20 @@ impl Client {
         let capabilities = self.capabilities.get().unwrap();
         let supported_save = match &capabilities.text_document_sync.as_ref() {
             Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => {
-                matches!(*kind, lsp_types::TextDocumentSyncKind::INCREMENTAL | lsp_types::TextDocumentSyncKind::FULL)
+                matches!(
+                    *kind,
+                    lsp_types::TextDocumentSyncKind::INCREMENTAL
+                        | lsp_types::TextDocumentSyncKind::FULL
+                )
             }
-            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
-                options
-                    .save
-                    .as_ref()
-                    .map_or(false, |save_options| match save_options {
-                        lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
-                        lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
-                    })
-            }
-            _ => false
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => options
+                .save
+                .as_ref()
+                .map_or(false, |save_options| match save_options {
+                    lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
+                    lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
+                }),
+            _ => false,
         };
         if supported_save {
             self.notify::<lsp::notification::DidSaveTextDocument>(params)
@@ -841,6 +849,17 @@ impl Client {
 
         capabilities.completion_provider.as_ref()?;
         Some(self.call::<lsp::request::Completion>(req_id, parmas))
+    }
+
+    pub fn inline_completion(
+        &self,
+        req_id: RequestId,
+        params: lsp::InlineCompletionParams,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        let capabilities = self.capabilities.get().unwrap();
+
+        capabilities.completion_provider.as_ref()?;
+        Some(self.call::<lsp::request::InlineCompletionRequest>(req_id, params))
     }
 
     // code action
