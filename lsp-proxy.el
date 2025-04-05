@@ -202,11 +202,11 @@ Auto inline complete will be not triggered if any predicates return t."
   :type 'string)
 
 (defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
-                                                     "./lsp-proxy.exe"
-                                                   "./lsp-proxy")
-                                                 (if load-file-name
-                                                     (file-name-directory load-file-name)
-                                                   default-directory)))
+                                                   "./lsp-proxy.exe"
+                                                 "./lsp-proxy")
+                                               (if load-file-name
+                                                   (file-name-directory load-file-name)
+                                                 default-directory)))
 (defvar-local lsp-proxy--on-idle-timer nil)
 
 (defvar-local lsp-proxy--inline-completion-trigger-by 1
@@ -341,10 +341,10 @@ from language server.")
   (when lsp-proxy--on-idle-timer
     (cancel-timer lsp-proxy--on-idle-timer))
   (setq-local lsp-proxy--on-idle-timer (run-with-idle-timer
-                                          lsp-proxy-idle-delay
-                                          nil
-                                          #'lsp-proxy--on-idle
-                                          buffer)))
+                                        lsp-proxy-idle-delay
+                                        nil
+                                        #'lsp-proxy--on-idle
+                                        buffer)))
 (defun lsp-proxy--on-idle (buffer)
   "Start post command loop on current BUFFER."
   (when (and (buffer-live-p buffer)
@@ -816,7 +816,7 @@ Only works when mode is `tick or `alive."
   (when (and lsp-proxy-mode (eq window (selected-window)))
     (if (-contains-p lsp-proxy--opened-buffers (current-buffer))
         (lsp-proxy--notify ':textDocument/didFocus
-                             (list :textDocument (eglot--TextDocumentIdentifier)))
+                           (list :textDocument (eglot--TextDocumentIdentifier)))
       (lsp-proxy--on-doc-open))))
 
 (defun lsp-proxy--on-doc-open ()
@@ -829,48 +829,48 @@ Only works when mode is `tick or `alive."
     (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
     (setq lsp-proxy--enable-symbol-highlighting (< (line-number-at-pos (point-max)) 10000))
     (lsp-proxy--notify 'textDocument/didOpen
-                         (list :textDocument (append (eglot--TextDocumentIdentifier)
-                                                     (list
-                                                      :text (eglot--widening
-                                                             (buffer-substring-no-properties (point-min) (point-max)))
-                                                      :languageId ""
-                                                      :version eglot--versioned-identifier))))))
+                       (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                   (list
+                                                    :text (eglot--widening
+                                                           (buffer-substring-no-properties (point-min) (point-max)))
+                                                    :languageId ""
+                                                    :version eglot--versioned-identifier))))))
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
   (when (-contains-p lsp-proxy--opened-buffers (current-buffer))
     (lsp-proxy--notify 'textDocument/didClose
-                         (list :textDocument (eglot--TextDocumentIdentifier)))
+                       (list :textDocument (eglot--TextDocumentIdentifier)))
     (setq lsp-proxy--opened-buffers (delete (current-buffer) lsp-proxy--opened-buffers))))
 
 
 (defun lsp-proxy--will-save ()
   "Send textDocument/willSave notification."
   (lsp-proxy--notify 'textDocument/willSave
-                       ;; 1 Manual, 2 AfterDelay, 3 FocusOut
-                       (list :textDocument (eglot--TextDocumentIdentifier) :reason 1 )))
+                     ;; 1 Manual, 2 AfterDelay, 3 FocusOut
+                     (list :textDocument (eglot--TextDocumentIdentifier) :reason 1 )))
 
 (defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
   (lsp-proxy--notify 'textDocument/didSave
-                       (list :textDocument (eglot--TextDocumentIdentifier))))
+                     (list :textDocument (eglot--TextDocumentIdentifier))))
 
 (defun lsp-proxy--send-did-change ()
   "Send textDocument/didChange to server."
   (when lsp-proxy--recent-changes
     (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
       (lsp-proxy--notify 'textDocument/didChange
-                           (list :textDocument
-                                 (eglot--VersionedTextDocumentIdentifier)
-                                 :contentChanges
-                                 (if full-sync-p
-                                     (vector (list :text (eglot--widening
-                                                           (buffer-substring-no-properties (point-min)
-                                                                                           (point-max)))))
-                                   (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
-                                            when (numberp len)
-                                            vconcat `[,(list :range `(:start ,beg :end ,end)
-                                                             :rangeLength len :text text)]))))
+                         (list :textDocument
+                               (eglot--VersionedTextDocumentIdentifier)
+                               :contentChanges
+                               (if full-sync-p
+                                   (vector (list :text (eglot--widening
+                                                        (buffer-substring-no-properties (point-min)
+                                                                                        (point-max)))))
+                                 (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
+                                          when (numberp len)
+                                          vconcat `[,(list :range `(:start ,beg :end ,end)
+                                                           :rangeLength len :text text)]))))
       (setq lsp-proxy--recent-changes nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; xref integration ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -1054,12 +1054,12 @@ Only works when mode is `tick or `alive."
          (lambda (highlights)
            (mapc #'delete-overlay lsp-proxy--highlights)
            (let ((wins-visible-pos (-map (lambda (win)
-                                   (cons (1- (line-number-at-pos (window-start win) t))
-                                         (1+ (line-number-at-pos (min (window-end win)
-                                                                      (with-current-buffer (window-buffer win)
-                                                                        (buffer-end +1)))
-                                                                 t))))
-                                 (get-buffer-window-list nil nil 'visible))))
+                                           (cons (1- (line-number-at-pos (window-start win) t))
+                                                 (1+ (line-number-at-pos (min (window-end win)
+                                                                              (with-current-buffer (window-buffer win)
+                                                                                (buffer-end +1)))
+                                                                         t))))
+                                         (get-buffer-window-list nil nil 'visible))))
              (setq lsp-proxy--highlights
                    (eglot--when-buffer-window buf
                      (cl-loop for highlight across highlights
@@ -1269,8 +1269,8 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
     (lsp-proxy--indent-lines startPoint (point) insertTextMode)
     (when (eq insertTextFormat 2)
       (lsp-proxy--expand-snippet (buffer-substring startPoint (point))
-                                   startPoint
-                                   (point)))
+                                 startPoint
+                                 (point)))
     (if (cl-plusp (length additionalTextEdits))
         (eglot--apply-text-edits additionalTextEdits)
       (if-let* ((resolved-item (get-text-property 0 'resolved-item candidate)))
@@ -1358,11 +1358,11 @@ The CLEANUP-FN will be called to cleanup."
 (defcustom lsp-proxy-inline-completion-overlay-priority 9000
   "The priority of the overlay."
   :type '(choice (const :tag "No Priority" nil)
-                 (integer :tag "Simple, Overriding Priority")
-                 (cons :tag "Composite"
-                       (choice (integer :tag "Primary")
-                               (const :tag "Primary Unset" nil))
-                       (integer :tag "Secondary")))
+          (integer :tag "Simple, Overriding Priority")
+          (cons :tag "Composite"
+                (choice (integer :tag "Primary")
+                        (const :tag "Primary Unset" nil))
+                (integer :tag "Secondary")))
   :group 'lsp-proxy)
 
 (defface lsp-proxy-inline-completion-overlay-face
@@ -1622,8 +1622,8 @@ The CLEANUP-FN will be called to cleanup."
     (when (eq kind 'snippet)
       (let ((end-marker (set-marker (make-marker) (point))))
         (lsp-proxy--expand-snippet (buffer-substring text-insert-start text-insert-end)
-                             text-insert-start
-                             text-insert-end)
+                                   text-insert-start
+                                   text-insert-end)
         (setq text-insert-end (marker-position end-marker))
         (set-marker end-marker nil)))
 
@@ -1873,9 +1873,9 @@ CALLBACK is the status callback passed by Flycheck."
                            (setq start-point (car region)
                                  end-point (cdr region))
                          (eglot--widening
-                           (goto-char (point-min))
-                           (setq start-point (line-beginning-position (1+ start-line))
-                                 end-point (line-end-position (1+ end-line))))))
+                          (goto-char (point-min))
+                          (setq start-point (line-beginning-position (1+ start-line))
+                                end-point (line-end-position (1+ end-line))))))
                      (flymake-make-diagnostic (current-buffer)
                                               start-point
                                               end-point
@@ -2125,7 +2125,7 @@ Update the range of `(FROM TO)'."
                            ;; Possible Emacs bug, but this fixes it.
                            (unless (equal last-region region)
                              (lsp-proxy--update-hints-1 (max (car region) (point-min))
-                                                          (min (cdr region) (point-max)))
+                                                        (min (cdr region) (point-max)))
                              (setq last-region region))
                            (setq region (cons nil nil)
                                  timer nil))))))))))
@@ -2231,7 +2231,7 @@ if `lsp-proxy-inlay-hints-mode-config` allows it."
 
 ;; imenu
 (cl-defun lsp-proxy-imenu ()
-    "Lsp-Proxy's `imenu-create-index-function'.
+  "Lsp-Proxy's `imenu-create-index-function'.
 Returns a list as described in docstring of `imenu--index-alist'."
   (unless lsp-proxy--support-document-symbols
     (cl-return-from lsp-proxy-imenu))
