@@ -1211,20 +1211,22 @@ Only works when mode is `tick or `alive."
   (when (eql method 'textDocument/publishDiagnostics)
     (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) (plist-get msg :params)
       (let ((filepath (lsp-proxy--uri-to-path uri)))
-        (when (f-exists-p filepath)
-          (with-current-buffer (find-file-noselect filepath)
-            (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
-                                          (lsp-proxy-project-root)
-                                          lsp-proxy--diagnostics-map))
-                  (file (lsp-proxy--fix-path-casing filepath)))
-              (if (seq-empty-p diagnostics)
-                  (remhash file workspace-diagnostics)
-                (puthash file (append diagnostics nil) workspace-diagnostics)))
-            (cond (lsp-proxy-diagnostics--flycheck-enabled
-                   (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
-                   (lsp-proxy--idle-reschedule (current-buffer)))
-                  (lsp-proxy-diagnostics--flymake-enabled
-                   (lsp-proxy-diagnostics--flymake-after-diagnostics))))))))
+        (if (f-exists-p filepath)
+            (with-current-buffer (find-file-noselect filepath)
+              (let ((workspace-diagnostics (lsp-proxy--get-or-create-project
+                                            (lsp-proxy-project-root)
+                                            lsp-proxy--diagnostics-map))
+                    (file (lsp-proxy--fix-path-casing filepath)))
+                (if (seq-empty-p diagnostics)
+                    (remhash file workspace-diagnostics)
+                  (puthash file (append diagnostics nil) workspace-diagnostics)))
+              (cond (lsp-proxy-diagnostics--flycheck-enabled
+                     (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
+                     (lsp-proxy--idle-reschedule (current-buffer)))
+                    (lsp-proxy-diagnostics--flymake-enabled
+                     (lsp-proxy-diagnostics--flymake-after-diagnostics))
+                    (t (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active."))))
+          (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri)))))
   (when  (eql method 'window/logMessage)
     (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
       (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
@@ -3026,6 +3028,62 @@ textDocument/didOpen for the new file."
   (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
   (lsp-proxy--on-doc-focus (selected-window))
   (message "[LSP-PROXY] Process restarted."))
+
+(defun lsp-proxy-doctor ()
+  "Check diagnostics functionality and print system debug information."
+  (interactive)
+  (let ((debug-buffer (get-buffer-create "*lsp-proxy-doctor*"))
+        (buffer (current-buffer)))
+    (with-current-buffer buffer
+      (with-current-buffer debug-buffer
+        (erase-buffer)
+        (insert (format "LSP Proxy Doctor Report - %s\n\n" (current-time-string)))
+
+        ;; System information
+        (insert "=== System Information ===\n")
+        (insert (format "Emacs Version: %s\n" emacs-version))
+        (insert (format "System Type: %s\n" system-type))
+        (insert (format "Window System: %s\n" window-system))
+        (insert "\n"))
+
+      (let ((enable (if (bound-and-true-p lsp-proxy-mode) "Enabled" "Disabled"))
+            (alive (if (lsp-proxy--connection-alivep) "Alive" "Not Alive"))
+            (diagnostics (if (and (hash-table-p lsp-proxy--diagnostics-map)
+                                  (> (hash-table-count lsp-proxy--diagnostics-map) 0))
+                             "Contains diagnostics" "Empty"))
+            (flymake-status (if (bound-and-true-p lsp-proxy-diagnostics--flymake-enabled) "Yes" "No"))
+            (flycheck-status (if (bound-and-true-p lsp-proxy-diagnostics--flycheck-enabled) "Yes" "No")))
+        (with-current-buffer debug-buffer
+          ;; LSP Proxy configuration
+          (insert "=== LSP Proxy Configuration ===\n")
+          (insert (format "lsp-proxy-mode: %s\n" enable))
+          (insert (format "lsp-proxy--connection: %s\n" alive))
+          (insert (format "lsp-proxy--diagnostics-map: %s\n" diagnostics))
+          (insert "\n")
+          ;; Diagnostics status
+          (insert "=== Diagnostics Status ===\n")
+          (insert (format "Flycheck Enabled: %s\n" flycheck-status))
+          (insert (format "Flymake Enabled: %s\n" flymake-status))))
+
+
+      ;; Print diagnostics for current buffer if available
+      (when (and buffer-file-name (hash-table-p lsp-proxy--diagnostics-map))
+        (let* ((file (lsp-proxy--fix-path-casing buffer-file-name))
+               (diagnostics (gethash file (lsp-proxy--get-or-create-project
+                                           (lsp-proxy-project-root)
+                                           lsp-proxy--diagnostics-map))))
+          (with-current-buffer debug-buffer
+            (insert (format "\nCurrent Buffer Diagnostics (%s):\n" file))
+            (if diagnostics
+                (dolist (diag diagnostics)
+                  (insert (format "- %s: %s\n"
+                                  (plist-get diag :severity)
+                                  (plist-get diag :message))))
+              (insert "No diagnostics found\n"))
+            (insert "\n=== End of Report ===\n")
+            ;; (view-mode 1)
+            ))))
+    (display-buffer debug-buffer)))
 
 (defun lsp-proxy-toggle-trace-io ()
   "Toggle jsonrpc logging."
