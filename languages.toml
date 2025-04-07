@@ -99,7 +99,7 @@ command = "vscode-eslint-language-server"
 args = ["--stdio"]
 
 [language-server.eslint.config]
-validate = "probe"
+validate = "on"
 packageManager = "npm"
 useESLintClass = false
 codeAction = { disableRuleComment = { enable = true, location = "separateLine" }, showDocumentation = { enable = true } }
@@ -140,7 +140,7 @@ language-servers = [
   #   "format",
   # ] },
   { name = "vtsls", except-features = [ "format" ] },
-  { name = "eslint", support-workspace = true },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"] },
 ]
 
 [[language]]
@@ -153,7 +153,7 @@ language-servers = [
   #   "format",
   # ] },
   { name = "vtsls", except-features = [ "format" ] },
-  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"] },
 ]
 
 [[language]]
@@ -166,7 +166,7 @@ language-servers = [
   #   "format",
   # ] },
   { name = "vtsls", except-features = [ "format" ] },
-  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"] },
 ]
 
 [[language]]
@@ -179,8 +179,8 @@ language-servers = [
   # { name = "typescript-language-server", except-features = [
   #   "format",
   # ] },
-  { name = "tailwindcss-ls", config-files = ["tailwind.config.js", "tailwind.config.ts"] },
-  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json"] },
+  { name = "tailwindcss-ls" },
+  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json", "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"] },
 ]
 
 [[language]]
