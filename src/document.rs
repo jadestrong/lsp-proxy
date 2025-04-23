@@ -40,6 +40,8 @@ pub struct Document {
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
     pub(crate) diagnostics: Option<Vec<DiagnosticItem>>,
     pub version: i32,
+
+    pub previous_diagnostic_id: Option<String>,
 }
 
 impl Document {
@@ -51,6 +53,7 @@ impl Document {
             language_servers: HashMap::new(),
             version: 0,
             diagnostics: None,
+            previous_diagnostic_id: None,
         };
 
         if let Some(loader) = config_loader {
@@ -120,6 +123,11 @@ impl Document {
             .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
     }
 
+    pub fn is_pull_diagnostic_support(&self) -> bool {
+        self.language_servers()
+            .any(|ls| ls.supports_feature(LanguageServerFeature::PullDiagnostics))
+    }
+
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
         let language_config =
             config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
@@ -178,6 +186,25 @@ impl Document {
                 config.language_servers.iter().filter_map(move |features| {
                     let ls = self.language_servers.get(&features.name).cloned()?;
                     if ls.is_initialized() {
+                        Some(ls)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect()
+    }
+
+    pub fn language_servers_with_feature(
+        &self,
+        feature: LanguageServerFeature,
+    ) -> Vec<Arc<Client>> {
+        self.language_config()
+            .into_iter()
+            .flat_map(move |config| {
+                config.language_servers.iter().filter_map(move |features| {
+                    let ls = self.language_servers.get(&features.name).cloned()?;
+                    if ls.is_initialized() && ls.with_feature(feature) {
                         Some(ls)
                     } else {
                         None

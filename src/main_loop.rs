@@ -7,7 +7,10 @@ use crate::{
     document::{DiagnosticItem, Document, DocumentId},
     handlers::{
         self,
-        request::{create_error_response, handle_code_action},
+        request::{
+            create_error_response, handle_code_action, handle_pull_diagnostic_response,
+            pull_diagnostics_for_document,
+        },
     },
     lsp::{
         self,
@@ -19,7 +22,7 @@ use crate::{
     registry::NotificationFromServer,
     syntax::{self},
     thread,
-    utils::{find_workspace_folder_for_uri, is_diagnostic_vectors_equal},
+    utils::{find_workspace_folder_for_uri, from_json, is_diagnostic_vectors_equal},
 };
 use anyhow::{Error, Result};
 use crossbeam_channel::{bounded, Sender};
@@ -69,6 +72,10 @@ impl Application {
                 }
                 Some(msg) = rx.recv() => {
                     self.send(msg);
+                }
+                Some(callback) = self.jobs.callbacks.recv() => {
+                    log::debug!("Got a callback");
+                    self.jobs.handle_callback(&mut self.editor, Ok(Some(callback)));
                 }
             }
         }
@@ -287,7 +294,10 @@ impl Application {
                 let notification = match NotificationFromServer::parse(&method, params) {
                     Ok(notification) => notification,
                     Err(crate::registry::Error::Unhandled) => {
-                        info!("Ignoring unhandled notification from Language Server");
+                        info!(
+                            "Ignoring unhandled notification from Language Server {:?}",
+                            method
+                        );
                         return;
                     }
                     Err(err) => {
@@ -327,6 +337,7 @@ impl Application {
                                         support_inlay_hints: doc.is_has_inlay_hints_support(),
                                         support_document_highlight: doc
                                             .is_document_highlight_support(),
+                                        support_pull_diagnostic: doc.is_pull_diagnostic_support(),
                                     },
                                 )
                             });
@@ -438,6 +449,54 @@ impl Application {
                                 None => vec![],
                             },
                         ));
+                    }
+                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                }
+            }
+            Message::Request(req)
+                if req.method == lsp_types::request::DocumentDiagnosticRequest::METHOD =>
+            {
+                // return a None response becuase we do all things here
+                self.respond(Response {
+                    id: req.id.clone(),
+                    result: None,
+                    error: None,
+                });
+                match self.get_working_document(&req) {
+                    Ok(doc) => {
+                        let language_servers = doc.language_servers_with_feature(
+                            syntax::LanguageServerFeature::PullDiagnostics,
+                        );
+                        let sender = self.sender.clone();
+                        let doc_id = doc.id().clone();
+                        let previous_result_id = doc.previous_diagnostic_id.clone();
+                        // let req = req.clone();
+                        tokio::spawn(async move {
+                            for language_server in language_servers {
+                                let params = from_json(
+                                    lsp_types::request::DocumentDiagnosticRequest::METHOD,
+                                    &req.params.params,
+                                )
+                                .unwrap();
+                                let response = pull_diagnostics_for_document(
+                                    req.clone(),
+                                    previous_result_id.to_owned(),
+                                    params,
+                                    &language_server,
+                                )
+                                .await;
+
+                                if let Some(result) = response {
+                                    let _ = handle_pull_diagnostic_response(
+                                        sender.clone(),
+                                        language_server.id(),
+                                        result,
+                                        doc_id.clone(),
+                                    )
+                                    .await;
+                                }
+                            }
+                        });
                     }
                     Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
                 }

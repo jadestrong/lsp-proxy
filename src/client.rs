@@ -418,6 +418,7 @@ impl Client {
                 capabilities.inlay_hint_provider,
                 Some(OneOf::Left(true) | OneOf::Right(InlayHintServerCapabilities::Options(_)))
             ),
+            LanguageServerFeature::PullDiagnostics => capabilities.diagnostic_provider.is_some(),
         }
     }
 
@@ -672,6 +673,10 @@ impl Client {
                         }),
                         ..Default::default()
                     }),
+                    diagnostic: Some(lsp::DiagnosticClientCapabilities {
+                        dynamic_registration: Some(false),
+                        related_document_support: Some(true),
+                    }),
                     publish_diagnostics: Some(lsp::PublishDiagnosticsClientCapabilities {
                         version_support: Some(true),
                         ..Default::default()
@@ -843,12 +848,12 @@ impl Client {
     pub fn completion(
         &self,
         req_id: RequestId,
-        parmas: lsp::CompletionParams,
+        params: lsp::CompletionParams,
     ) -> Option<impl Future<Output = Result<Value>>> {
         let capabilities = self.capabilities.get().unwrap();
 
         capabilities.completion_provider.as_ref()?;
-        Some(self.call::<lsp::request::Completion>(req_id, parmas))
+        Some(self.call::<lsp::request::Completion>(req_id, params))
     }
 
     pub fn inline_completion(
@@ -879,5 +884,31 @@ impl Client {
         }
 
         Some(self.call::<lsp_types::request::CodeActionRequest>(req_id, params))
+    }
+
+    pub fn text_document_diagnostic(
+        &self,
+        req_id: RequestId,
+        previous_result_id: Option<String>,
+        params: lsp::DocumentDiagnosticParams,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        let capabilities = self.capabilities();
+
+        let identifier = match capabilities.diagnostic_provider.as_ref()? {
+            lsp::DiagnosticServerCapabilities::Options(cap) => cap.identifier.clone(),
+            lsp::DiagnosticServerCapabilities::RegistrationOptions(cap) => {
+                cap.diagnostic_options.identifier.clone()
+            }
+        };
+
+        let pull_params = lsp::DocumentDiagnosticParams {
+            identifier,
+            previous_result_id,
+            work_done_progress_params: lsp::WorkDoneProgressParams::default(),
+            partial_result_params: lsp::PartialResultParams::default(),
+            ..params
+        };
+
+        Some(self.call::<lsp::request::DocumentDiagnosticRequest>(req_id, pull_params))
     }
 }

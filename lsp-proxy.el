@@ -283,6 +283,9 @@ from language server.")
 (defvar-local lsp-proxy--support-document-highlight nil
   "Is there any server associated with this buffer that support `textDocument/documentHighlight' request.")
 
+(defvar-local lsp-proxy--support-pull-diagnostic nil
+  "Is there any server associated with this buffer that support `textDocument/diagnostic' request.")
+
 (defvar lsp-proxy--show-message t
   "If non-nil, show debug message from `lsp-proxy-mode'.")
 
@@ -1122,8 +1125,8 @@ Only works when mode is `tick or `alive."
   "Default handler for error message.")
 
 (defconst lsp-proxy--show-timeout
-  (lambda ()
-    (lsp-proxy--error "%s" "Request timeout"))
+  (lambda (method)
+    (lsp-proxy--error "%s(%s)" "Request timeout" method))
   "Default handler for timeout.")
 
 (defsubst lsp-proxy--connection-alivep ()
@@ -1157,7 +1160,8 @@ Only works when mode is `tick or `alive."
   `(progn
      (unless (lsp-proxy--connection-alivep)
        (lsp-proxy--start-agent))
-     (lsp-proxy--send-did-change)
+     (if (not (eq ,method 'textDocument/diagnostic))
+         (lsp-proxy--send-did-change))
      (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
        (lsp-proxy--on-doc-open))
      ;; jsonrpc will use temp buffer for callbacks, so we nned to save the current buffer and restore it inside callback
@@ -1171,7 +1175,7 @@ Only works when mode is `tick or `alive."
                                           (funcall ,error-fn err))
                               :timeout-fn (lambda ()
                                             (with-current-buffer buf
-                                              (funcall ,timeout-fn)))
+                                              (funcall ,timeout-fn ,method)))
                               ,@args))))
 
 (defun lsp-proxy--make-connection ()
@@ -1226,7 +1230,8 @@ Only works when mode is `tick or `alive."
                     (lsp-proxy-diagnostics--flymake-enabled
                      (lsp-proxy-diagnostics--flymake-after-diagnostics))
                     (t (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active."))))
-          (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri)))))
+          (if (> lsp-proxy-log-level 1)
+              (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
   (when  (eql method 'window/logMessage)
     (lsp-proxy--dbind (:type type :message message) (plist-get msg :params)
       (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
@@ -1235,10 +1240,11 @@ Only works when mode is `tick or `alive."
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
   (when (eql method 'emacs/triggerCharacters)
     (lsp-proxy--dbind (:uri uri
-                         :triggerCharacters trigger-characters
-                         :signatureTriggerCharacters signature-trigger-characters
-                         :supportInlayHints support-inlay-hints
-                         :supportDocumentHighlight support-document-highlight)
+                       :triggerCharacters trigger-characters
+                       :signatureTriggerCharacters signature-trigger-characters
+                       :supportInlayHints support-inlay-hints
+                       :supportDocumentHighlight support-document-highlight
+                       :supportPullDiagnostic support-pull-diagnostic)
         (plist-get msg :params)
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (f-exists? filepath)
@@ -1247,7 +1253,9 @@ Only works when mode is `tick or `alive."
             (setq-local lsp-proxy--signature-trigger-characters signature-trigger-characters)
             (setq-local lsp-proxy--support-inlay-hints (not (eq support-inlay-hints :json-false)))
             (setq-local lsp-proxy--support-document-highlight (not (eq support-document-highlight :json-false)))
+            (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (lsp-proxy-activate-inlay-hints-mode)
+            (lsp-proxy-diagnostics--request-pull-diagnostics)
             ;; TODO when support and enable, add a idle hook and reschedule this buffer
             )))))
   (when (eql method '$/progress)
@@ -1324,17 +1332,18 @@ Only works when mode is `tick or `alive."
   (when lsp-proxy--recent-changes
     (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
       (lsp-proxy--notify 'textDocument/didChange
-                           (list :textDocument
-                                 (list :uri (lsp-proxy--get-uri) :version lsp-proxy--doc-version)
-                                 :contentChanges
-                                 (if full-sync-p
-                                     (vector (list :text (lsp-proxy--save-restriction-and-excursion
-                                                           (buffer-substring-no-properties (point-min)
-                                                                                           (point-max)))))
-                                   (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
-                                            when (numberp len)
-                                            vconcat `[,(list :range `(:start ,beg :end ,end)
-                                                             :rangeLength len :text text)]))))
+                         (list :textDocument
+                               (list :uri (lsp-proxy--get-uri) :version lsp-proxy--doc-version)
+                               :contentChanges
+                               (if full-sync-p
+                                   (vector (list :text (lsp-proxy--save-restriction-and-excursion
+                                                         (buffer-substring-no-properties (point-min)
+                                                                                         (point-max)))))
+                                 (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
+                                          when (numberp len)
+                                          vconcat `[,(list :range `(:start ,beg :end ,end)
+                                                           :rangeLength len :text text)]))))
+      (lsp-proxy-diagnostics--request-pull-diagnostics)
       (setq lsp-proxy--recent-changes nil))))
 
 (defun lsp-proxy-find-definition ()
@@ -2232,6 +2241,16 @@ relied upon."
                  (if edits
                      (lsp-proxy--apply-workspace-edit edits t)
                    (lsp-proxy--warn "%s" "Server does not support rename.")))))
+
+;;
+;; PullDiagnostic
+;;
+(defun lsp-proxy-diagnostics--request-pull-diagnostics ()
+  (when lsp-proxy--support-pull-diagnostic
+    (lsp-proxy--async-request
+     'textDocument/diagnostic
+     (lsp-proxy--request-or-notify-params
+      (lsp-proxy--TextDocumentIdentifier)))))
 
 ;;
 ;; Flycheck

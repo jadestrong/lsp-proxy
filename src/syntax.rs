@@ -143,6 +143,7 @@ pub enum LanguageServerFeature {
     Diagnostics,
     RenameSymbol,
     InlayHints,
+    PullDiagnostics,
 }
 
 impl Display for LanguageServerFeature {
@@ -168,6 +169,7 @@ impl Display for LanguageServerFeature {
             Diagnostics => "diagnostics",
             RenameSymbol => "rename-symbol",
             InlayHints => "inlay-hints",
+            PullDiagnostics => "pull-diagnostics",
         };
         write!(f, "{feature}",)
     }
@@ -288,7 +290,7 @@ pub struct LanguageServerConfiguration {
 }
 
 fn default_timeout() -> u64 {
-    8
+    20
 }
 
 fn deserialize_lsp_config<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error>

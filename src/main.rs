@@ -22,6 +22,7 @@ mod req_queue;
 mod syntax;
 mod thread;
 mod utils;
+mod job;
 
 use anyhow::{Context, Result};
 use args::Args;

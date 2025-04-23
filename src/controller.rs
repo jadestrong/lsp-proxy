@@ -14,7 +14,7 @@ use crate::{
 pub(crate) type ReqHandler = fn(Response);
 type ReqQueue = req_queue::ReqQueue<(String, Instant, Request), ReqHandler>;
 
-const REQUEST_WHITELIST: &[&str] = &["textDocument/signatureHelp", "emacs/workspaceRestart"];
+const REQUEST_WHITELIST: &[&str] = &["textDocument/signatureHelp", "emacs/workspaceRestart", "textDocument/diagnostic"];
 
 pub struct Controller {
     sender_for_server: UnboundedSender<Message>,

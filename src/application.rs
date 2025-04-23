@@ -1,5 +1,6 @@
 use crate::{
     editor::Editor,
+    job::Jobs,
     msg::{Message, Notification, Response},
     req_queue, syntax,
 };
@@ -13,6 +14,7 @@ pub(crate) struct Application {
     pub sender: Sender<Message>,
     req_queue: ReqQueue,
     pub editor: Editor,
+    pub jobs: Jobs,
 }
 
 impl Application {
@@ -29,11 +31,12 @@ impl Application {
             sender,
             req_queue: ReqQueue::default(),
             editor,
+            jobs: Jobs::new(),
         }
     }
 
     // 发送响应给 emacs
-    pub(crate) fn respond(&mut self, response: Response) {
+    pub(crate) fn respond(&self, response: Response) {
         self.send(response.into());
     }
 

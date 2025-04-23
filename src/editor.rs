@@ -49,6 +49,11 @@ impl Editor {
     }
 
     #[inline]
+    pub fn document_mut(&mut self, id: DocumentId) -> Option<&mut Document> {
+        self.documents.get_mut(&id)
+    }
+
+    #[inline]
     pub fn documents(&self) -> impl Iterator<Item = &Document> {
         self.documents.values()
     }
