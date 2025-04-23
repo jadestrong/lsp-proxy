@@ -66,7 +66,7 @@ The application cannot be opened because it is from an unidentified developer. Y
 * Add a new language
 Performed simple tests on Windows 11 and Arch Linux, it works properly. I have tested it on macOS and use it for daily development in JavaScript, Rust, etc. Therefore, tools like vtsls, typescript-language-server, eslint, tailwindcss, css, and others work fine
 - JavaScript/Typescript: [[https://github.com/yioneko/vtsls][vtsls]] (built-in)、[[https://github.com/typescript-language-server/typescript-language-server][typescript-language-server]]
-- eslint、html、css、html: [[https://github.com/hrsh7th/vscode-langservers-extracted][vscode-langservers-extracted]] ，the latest vscode-eslint has removed the publishDiagnostics method and only supports the pullDiagnostics method, so currently we can only use `vscode-langservers-extracted@4.8`.
+- eslint、html、css、html: [[https://github.com/hrsh7th/vscode-langservers-extracted][vscode-langservers-extracted]] +the latest vscode-eslint has removed the publishDiagnostics method and only supports the pullDiagnostics method, so currently we can only use `vscode-langservers-extracted@4.8`+.
 - tailwindcss: [[https://www.npmjs.com/package/@tailwindcss/language-server][@tailwindcss/language-server]]
 
 The configuration for a new language can refer to the [[https://github.com/helix-editor/helix/blob/master/languages.toml][Helix configuration]]. Supported fields are based on [[https://github.com/jadestrong/lsp-copilot/blob/main/languages.toml][the built-in configuration file]], and only LSP-related fields are supported.
