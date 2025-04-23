@@ -24,10 +24,23 @@ impl std::fmt::Display for DocumentId {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// This type is cheap to clone: all data is either `Copy` or wrapped in an `Arc`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DiagnosticProvider {
+    pub server_id: usize,
+    /// `identifier` is a field from the LSP "Pull Diagnostics" feature meant to provide an
+    /// optional "namespace" for diagnostics: a language server can respond to a diagnostics
+    /// pull request with an identifier and these diagnostics should be treated as separate
+    /// from push diagnostics. Rust-analyzer uses this feature for example to provide Cargo
+    /// diagnostics with push and internal diagnostics with pull. The push diagnostics should
+    /// not clear the pull diagnostics and vice-versa.
+    pub identifier: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DiagnosticItem {
     pub item: Diagnostic,
-    pub language_server_id: usize,
+    pub provider: DiagnosticProvider,
     pub file_path: String,
 }
 
@@ -222,9 +235,9 @@ impl Document {
     pub fn replace_diagnostics(
         &mut self,
         mut diagnostics: Vec<DiagnosticItem>,
-        language_server_id: usize,
+        provider: &DiagnosticProvider,
     ) {
-        self.clear_diagnostics(language_server_id);
+        self.clear_diagnostics(provider);
         match self.diagnostics.as_mut() {
             Some(diags) => {
                 diags.append(&mut diagnostics);
@@ -244,21 +257,27 @@ impl Document {
         }
     }
 
-    pub fn clear_diagnostics(&mut self, language_server_id: usize) {
+    pub fn clear_diagnostics(&mut self, provider: &DiagnosticProvider) {
         if let Some(diagnostics) = self.diagnostics.as_mut() {
-            diagnostics.retain(|d| d.language_server_id != language_server_id);
+            diagnostics.retain(|d| d.provider != *provider);
         }
     }
 
-    pub fn get_diagnostics_by_language_server_id(
+    pub fn clear_all_diagnostics(&mut self, server_id: usize) {
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            diagnostics.retain(|d| d.provider.server_id != server_id);
+        }
+    }
+
+    pub fn get_diagnostics_by_provider(
         &self,
-        language_server_id: usize,
+        provider: &DiagnosticProvider,
     ) -> Option<Vec<&Diagnostic>> {
         self.diagnostics.as_ref().and_then(|diags| {
             let items: Vec<&Diagnostic> = diags
                 .iter()
                 .filter_map(|diagnostic| {
-                    if diagnostic.language_server_id == language_server_id {
+                    if diagnostic.provider == *provider {
                         return Some(&diagnostic.item);
                     }
                     None

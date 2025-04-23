@@ -17,7 +17,7 @@ use crate::{
         action_category, action_fixes_diagnostics, action_preferred, CodeActionOrCommandItem,
     },
     completion_cache::CompletionCache,
-    document::{DiagnosticItem, DocumentId},
+    document::{DiagnosticItem, DiagnosticProvider, DocumentId},
     fuzzy, job,
     lsp::jsonrpc,
     lsp_ext::{self, CommandItem, CompletionItem},
@@ -823,7 +823,7 @@ pub(crate) async fn handle_code_action(
                         diagnostics: diagnostics
                             .iter()
                             .filter(|&diag| {
-                                diag.language_server_id == language_server_id
+                                diag.provider.server_id == language_server_id
                                     && diag.item.range.start.line >= range.start.line
                                     && diag.item.range.start.line <= range.end.line
                             })
@@ -1012,13 +1012,17 @@ pub(crate) async fn handle_rename(
 
 pub(crate) async fn pull_diagnostics_for_document(
     req: msg::Request,
+    identifier: Option<String>,
     previous_result_id: Option<String>,
     params: lsp_types::DocumentDiagnosticParams,
     language_server: &Arc<Client>,
 ) -> Option<lsp_types::DocumentDiagnosticReportResult> {
-    let Some(future) =
-        language_server.text_document_diagnostic(req.id.clone(), previous_result_id, params)
-    else {
+    let Some(future) = language_server.text_document_diagnostic(
+        req.id.clone(),
+        identifier,
+        previous_result_id,
+        params,
+    ) else {
         return None;
     };
 
@@ -1036,7 +1040,7 @@ pub(crate) async fn pull_diagnostics_for_document(
 
 pub(crate) async fn handle_pull_diagnostic_response(
     sender: Sender<Message>,
-    language_server_id: usize,
+    provider: DiagnosticProvider,
     result: lsp_types::DocumentDiagnosticReportResult,
     document_id: DocumentId,
 ) {
@@ -1062,8 +1066,7 @@ pub(crate) async fn handle_pull_diagnostic_response(
                 if let Some(doc) = editor.document_mut(document_id) {
                     doc.previous_diagnostic_id = result_id;
                     if let Some(diags) = diagnostics {
-                        let old_diags =
-                            doc.get_diagnostics_by_language_server_id(language_server_id);
+                        let old_diags = doc.get_diagnostics_by_provider(&provider);
                         if old_diags.is_none()
                             || !is_diagnostic_vectors_equal(&old_diags.as_ref().unwrap(), &diags)
                         {
@@ -1071,14 +1074,14 @@ pub(crate) async fn handle_pull_diagnostic_response(
                                 .iter()
                                 .map(|diag| DiagnosticItem {
                                     item: diag.to_owned(),
-                                    language_server_id,
+                                    provider: provider.clone(),
                                     file_path: doc
                                         .path()
                                         .map(|p| p.to_string_lossy().to_string())
                                         .unwrap_or("".to_string()),
                                 })
                                 .collect();
-                            doc.replace_diagnostics(diagnostics, language_server_id);
+                            doc.replace_diagnostics(diagnostics, &provider);
                             let diagnostics: Vec<lsp_types::Diagnostic> = match doc
                                 .diagnostics()
                                 .as_ref()
@@ -1118,22 +1121,22 @@ pub(crate) async fn handle_pull_diagnostic_response(
                 doc.previous_diagnostic_id = result_id;
                 // handle lsp diagnostics
                 if let Some(diags) = diags {
-                    let old_diags = doc.get_diagnostics_by_language_server_id(language_server_id);
+                    let old_diags = doc.get_diagnostics_by_provider(&provider);
                     if old_diags.is_none()
-                        || !is_diagnostic_vectors_equal(&old_diags.as_ref().unwrap(), &report.items)
+                        || !is_diagnostic_vectors_equal(&old_diags.as_ref().unwrap(), &diags)
                     {
                         let diagnostics: Vec<DiagnosticItem> = diags
                             .iter()
                             .map(|diag| DiagnosticItem {
                                 item: diag.to_owned(),
-                                language_server_id,
+                                provider: provider.clone(),
                                 file_path: doc
                                     .path()
                                     .map(|p| p.to_string_lossy().to_string())
                                     .unwrap_or("".to_string()),
                             })
                             .collect();
-                        doc.replace_diagnostics(diagnostics, language_server_id);
+                        doc.replace_diagnostics(diagnostics, &provider);
                     }
                 }
                 // When open the corresponse doc, then publish the diags

@@ -4,7 +4,7 @@ use crate::{
     connection::Connection,
     controller::Controller,
     dispatch::{NotificationDispatcher, RequestDispatcher},
-    document::{DiagnosticItem, Document, DocumentId},
+    document::{DiagnosticItem, DiagnosticProvider, Document, DocumentId},
     handlers::{
         self,
         request::{
@@ -344,7 +344,7 @@ impl Application {
                     }
                     NotificationFromServer::Exit => {
                         for doc in self.editor.documents_mut() {
-                            doc.clear_diagnostics(server_id);
+                            doc.clear_all_diagnostics(server_id);
                         }
                         // Remove the language server from the registry
                         self.editor.language_servers.remove_by_id(server_id);
@@ -365,10 +365,14 @@ impl Application {
 
                             true
                         });
+                        let provider = DiagnosticProvider {
+                            server_id,
+                            identifier: None,
+                        };
                         if let Some(doc) = doc {
                             let version = doc.version;
-                            let old_diagnostics =
-                                doc.get_diagnostics_by_language_server_id(server_id);
+                            let old_diagnostics = doc
+                                .get_diagnostics_by_provider(&provider);
                             if old_diagnostics.is_none()
                                 || !is_diagnostic_vectors_equal(
                                     &old_diagnostics.as_ref().unwrap(),
@@ -380,14 +384,14 @@ impl Application {
                                     .iter()
                                     .map(|diagnostic| DiagnosticItem {
                                         item: diagnostic.to_owned(),
-                                        language_server_id: server_id,
+                                        provider: provider.clone(),
                                         file_path: doc
                                             .path()
                                             .map(|p| p.to_string_lossy().to_string())
                                             .unwrap_or("".to_string()),
                                     })
                                     .collect();
-                                doc.replace_diagnostics(diagnostics, server_id);
+                                doc.replace_diagnostics(diagnostics, &provider);
                                 let diagnostics: Vec<lsp_types::Diagnostic> =
                                     match doc.diagnostics().as_ref() {
                                         Some(diags) => {
@@ -478,18 +482,38 @@ impl Application {
                                     &req.params.params,
                                 )
                                 .unwrap();
+
+                                let identifier = language_server
+                                    .capabilities()
+                                    .diagnostic_provider
+                                    .as_ref()
+                                    .and_then(|diagnostic_provider| match diagnostic_provider {
+                                        lsp_types::DiagnosticServerCapabilities::Options(options) => {
+                                            options.identifier.clone()
+                                        }
+                                        lsp_types::DiagnosticServerCapabilities::RegistrationOptions(
+                                            options,
+                                        ) => options.diagnostic_options.identifier.clone(),
+                                    });
+
                                 let response = pull_diagnostics_for_document(
                                     req.clone(),
+                                    identifier.clone(),
                                     previous_result_id.to_owned(),
                                     params,
                                     &language_server,
                                 )
                                 .await;
 
+                                let provider = DiagnosticProvider {
+                                    server_id: language_server.id(),
+                                    identifier: identifier.clone(),
+                                };
+
                                 if let Some(result) = response {
                                     let _ = handle_pull_diagnostic_response(
                                         sender.clone(),
-                                        language_server.id(),
+                                        provider,
                                         result,
                                         doc_id.clone(),
                                     )

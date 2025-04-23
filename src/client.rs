@@ -889,18 +889,10 @@ impl Client {
     pub fn text_document_diagnostic(
         &self,
         req_id: RequestId,
+        identifier: Option<String>,
         previous_result_id: Option<String>,
         params: lsp::DocumentDiagnosticParams,
     ) -> Option<impl Future<Output = Result<Value>>> {
-        let capabilities = self.capabilities();
-
-        let identifier = match capabilities.diagnostic_provider.as_ref()? {
-            lsp::DiagnosticServerCapabilities::Options(cap) => cap.identifier.clone(),
-            lsp::DiagnosticServerCapabilities::RegistrationOptions(cap) => {
-                cap.diagnostic_options.identifier.clone()
-            }
-        };
-
         let pull_params = lsp::DocumentDiagnosticParams {
             identifier,
             previous_result_id,
