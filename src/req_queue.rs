@@ -38,6 +38,7 @@ pub struct Outgoing<O> {
     pending: HashMap<RequestId, O>,
 }
 
+#[allow(dead_code)]
 impl<I> Incoming<I> {
     pub fn register(&mut self, id: RequestId, data: I) {
         self.pending.insert(id, data);

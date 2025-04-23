@@ -1,11 +1,11 @@
 use crate::{
     client::Client,
+    lsp_ext::CustomServerCapabilitiesParams,
     registry::LanguageServerName,
     syntax::{self, LanguageConfiguration, LanguageServerFeature},
 };
 use lsp::Diagnostic;
 use lsp_types::{self as lsp, Url};
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -91,54 +91,46 @@ impl Document {
         Url::to_file_path(self.uri()).ok()
     }
 
-    pub fn get_trigger_characters(&self) -> Vec<String> {
-        let mut trigger_characters: Vec<String> = Vec::new();
-        self.language_servers().for_each(|language_server| {
+    pub fn get_server_capabilities(&self) -> CustomServerCapabilitiesParams {
+        let mut server_capabilities = CustomServerCapabilitiesParams {
+            uri: self.uri.to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+            support_pull_diagnostic: false,
+        };
+
+        self.language_servers().for_each(|ls| {
             if let Some(lsp_types::CompletionOptions {
                 trigger_characters: Some(triggers),
                 ..
-            }) = &language_server.capabilities().completion_provider
+            }) = &ls.capabilities().completion_provider
             {
                 let mut triggers = triggers.clone();
-                trigger_characters.append(&mut triggers);
+                server_capabilities.trigger_characters.append(&mut triggers);
+            }
+
+            if ls.supports_feature(LanguageServerFeature::InlayHints) {
+                server_capabilities.support_inlay_hints = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::DocumentHighlight) {
+                server_capabilities.support_document_highlight = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::DocumentSymbols) {
+                server_capabilities.support_document_symbols = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
+                server_capabilities.support_signature_help = true;
+            }
+
+            if ls.supports_feature(LanguageServerFeature::PullDiagnostics) {
+                server_capabilities.support_pull_diagnostic = true;
             }
         });
 
-        trigger_characters
-    }
-
-    pub fn get_signature_trigger_characters(&self) -> Vec<String> {
-        let mut signature_trigger_characters = vec![];
-        self.language_servers().for_each(|ls| {
-            if let Some(lsp_types::SignatureHelpOptions {
-                trigger_characters: Some(characters),
-                ..
-            }) = &ls.capabilities().signature_help_provider
-            {
-                signature_trigger_characters.append(&mut characters.to_owned());
-            }
-        });
-        signature_trigger_characters
-    }
-
-    pub fn is_has_inlay_hints_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::InlayHints))
-    }
-
-    pub fn has_inline_completion_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::InlineCompletion))
-    }
-
-    pub fn is_document_highlight_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::DocumentHighlight))
-    }
-
-    pub fn is_pull_diagnostic_support(&self) -> bool {
-        self.language_servers()
-            .any(|ls| ls.supports_feature(LanguageServerFeature::PullDiagnostics))
+        server_capabilities
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
@@ -185,13 +177,6 @@ impl Document {
         })
     }
 
-    // -- LSP methods
-
-    #[inline]
-    pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
-        lsp::TextDocumentIdentifier::new(self.uri.clone())
-    }
-
     pub fn get_all_language_servers(&self) -> Vec<Arc<Client>> {
         self.language_config()
             .into_iter()
@@ -225,6 +210,13 @@ impl Document {
                 })
             })
             .collect()
+    }
+
+    // -- LSP methods
+
+    #[inline]
+    pub fn identifier(&self) -> lsp::TextDocumentIdentifier {
+        lsp::TextDocumentIdentifier::new(self.uri.clone())
     }
 
     #[inline]

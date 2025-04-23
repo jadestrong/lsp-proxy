@@ -1010,6 +1010,22 @@ pub(crate) async fn handle_rename(
     .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
 }
 
+pub(crate) async fn handle_document_symbols(
+    req: msg::Request,
+    params: lsp_types::DocumentSymbolParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    call_single_language_server::<lsp_types::request::DocumentSymbolRequest>(
+        &req,
+        params,
+        &language_servers,
+        Some(LanguageServerFeature::DocumentSymbols),
+        None,
+    )
+    .await
+    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+}
+
 pub(crate) async fn pull_diagnostics_for_document(
     req: msg::Request,
     identifier: Option<String>,

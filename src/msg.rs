@@ -31,6 +31,48 @@ impl From<Notification> for Message {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OutRequest {
+    pub id: RequestId,
+    pub method: String,
+    #[serde(default = "serde_json::Value::default")]
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OutNotification {
+    pub method: String,
+    #[serde(default = "serde_json::Value::default")]
+    #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum OutMessage {
+    Request(OutRequest),
+    Response(Response),
+    Notification(OutNotification),
+}
+
+impl From<Message> for OutMessage {
+    fn from(msg: Message) -> Self {
+        match msg {
+            Message::Request(req) => OutMessage::Request(OutRequest {
+                id: req.id,
+                method: req.method,
+                params: req.params.params,
+            }),
+            Message::Response(res) => OutMessage::Response(res),
+            Message::Notification(notif) => OutMessage::Notification(OutNotification {
+                method: notif.method,
+                params: notif.params.params,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[serde(untagged)]
 enum IdRepr {
@@ -186,11 +228,12 @@ impl Message {
         struct JsonRpc {
             jsonrpc: &'static str,
             #[serde(flatten)]
-            msg: Message,
+            msg: OutMessage,
         }
+        let out_msg: OutMessage = self.into();
         let json_val = serde_json::to_value(&JsonRpc {
             jsonrpc: "2.0",
-            msg: self.clone(),
+            msg: out_msg.clone(),
         })?;
 
         match bytecode::generate_bytecode_repl(
@@ -206,7 +249,7 @@ impl Message {
                 warn!("Failed to convert json to bytecode: {}", err);
                 let text = serde_json::to_string(&JsonRpc {
                     jsonrpc: "2.0",
-                    msg: self,
+                    msg: out_msg,
                 })?;
                 write_msg_text(w, &text)
             }
@@ -282,6 +325,7 @@ impl Notification {
         self.method == "exit"
     }
 }
+
 
 fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {

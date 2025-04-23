@@ -3,11 +3,11 @@ use crate::{
     document::{Document, DocumentId},
     registry::Registry,
     syntax,
+    utils::uri_to_path,
 };
 use anyhow::Result;
 use log::error;
 use lsp_types::Url;
-use percent_encoding::percent_decode;
 use std::{
     collections::{BTreeMap, HashMap},
     num::NonZeroUsize,
@@ -22,6 +22,7 @@ pub struct Editor {
     pub syn_loader: Arc<syntax::Loader>,
 }
 
+#[allow(dead_code)]
 impl Editor {
     pub fn new(syn_loader: Arc<syntax::Loader>) -> Self {
         let language_servers = Registry::new(syn_loader.clone());
@@ -75,11 +76,8 @@ impl Editor {
 
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
         if cfg!(target_os = "windows") {
-            let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
-                .decode_utf8_lossy()
-                .to_string();
-            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
-            self.documents().find(|doc| doc.uri() == &decoded_uri)
+            self.documents()
+                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(&uri))
         } else {
             self.documents().find(|doc| doc.uri() == uri)
         }
@@ -87,11 +85,8 @@ impl Editor {
 
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
         if cfg!(target_os = "windows") {
-            let decoded_uri_str = percent_decode(uri.as_str().as_bytes())
-                .decode_utf8_lossy()
-                .to_string();
-            let decoded_uri = Url::parse(&decoded_uri_str).unwrap();
-            self.documents_mut().find(|doc| doc.uri() == &decoded_uri)
+            self.documents_mut()
+                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(&uri))
         } else {
             self.documents_mut().find(|doc| doc.uri() == uri)
         }

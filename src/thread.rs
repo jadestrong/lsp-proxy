@@ -22,27 +22,6 @@ impl Builder {
         }
     }
 
-    pub fn name(self, name: String) -> Builder {
-        Builder {
-            inner: self.inner.name(name),
-            ..self
-        }
-    }
-
-    pub fn stack_size(self, size: usize) -> Builder {
-        Builder {
-            inner: self.inner.stack_size(size),
-            ..self
-        }
-    }
-
-    pub fn allow_leak(self, b: bool) -> Builder {
-        Builder {
-            allow_leak: b,
-            ..self
-        }
-    }
-
     pub fn spawn<F, T>(self, f: F) -> std::io::Result<JoinHandle<T>>
     where
         F: FnOnce() -> T,

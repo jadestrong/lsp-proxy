@@ -1,6 +1,6 @@
 use crate::msg::RequestId;
 use lsp_types::{
-    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams, Url,
+    notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -14,48 +14,28 @@ pub struct CompletionItem {
     pub end: i32,
 }
 
+// emacs/serverCapabilities
 #[derive(Debug)]
-pub enum DidRecordTriggerCharacters {}
+pub enum CustomServerCapabilities {}
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DidRecordTriggerCharactersParams {
+pub struct CustomServerCapabilitiesParams {
     pub uri: String,
     pub trigger_characters: Vec<String>,
-    pub signature_trigger_characters: Vec<String>,
     pub support_inlay_hints: bool,
     pub support_document_highlight: bool,
+    pub support_document_symbols: bool,
+    pub support_signature_help: bool,
     pub support_pull_diagnostic: bool,
 }
 
-impl Notification for DidRecordTriggerCharacters {
-    type Params = DidRecordTriggerCharactersParams;
-    const METHOD: &'static str = "emacs/triggerCharacters";
+impl Notification for CustomServerCapabilities {
+    type Params = CustomServerCapabilitiesParams;
+    const METHOD: &'static str = "emacs/serverCapabilities";
 }
 
-// customize did open
-
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomizeTextDocumentItem {
-    pub uri: Url,
-    pub text: String,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomizeDidOpenTextDocumentParams {
-    pub text_document: CustomizeTextDocumentItem,
-}
-
-#[derive(Debug)]
-pub enum CustomizeDidOpenTextDocument {}
-
-impl Notification for CustomizeDidOpenTextDocument {
-    type Params = CustomizeDidOpenTextDocumentParams;
-    const METHOD: &'static str = "textDocument/didOpen";
-}
-
+// $/cancelRequest
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CustomizeCancelParams {
@@ -152,6 +132,7 @@ impl Notification for CustomProgress {
     const METHOD: &'static str = "$/progress";
 }
 
+// didFocus
 pub enum DidFocusTextDocument {}
 
 impl Notification for DidFocusTextDocument {
