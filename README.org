@@ -20,6 +20,9 @@ The features it supports are:
 
 [[file:images/show.gif]]
 
+* Prerequisites
+** Emacs30.1 or 29 + eglot@latest (Reused some capabilities of eglot to reduce code duplication.)
+
 * Installation
 Before installing LSP-PROXY, you should install rust and cargo first.
 ** Manually
