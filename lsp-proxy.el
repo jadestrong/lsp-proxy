@@ -1413,7 +1413,6 @@ The CLEANUP-FN will be called to cleanup."
   (when (and lsp-proxy-inline-completion-mode
              (buffer-live-p buffer)
              (equal buffer (current-buffer)))
-
     (when lsp-proxy--inline-completion-preview-timer
       (cancel-timer lsp-proxy--inline-completion-preview-timer))
 
@@ -1422,7 +1421,8 @@ The CLEANUP-FN will be called to cleanup."
       (lsp-proxy-inline-completion--maybe-display original-buffer original-point))))
 
 (defun lsp-proxy-inline-completion--maybe-display (original-buffer original-point)
-  "This is executed on an idle timer -- ensure ORIGINAL-BUFFER and ORIGINAL-POINT did not change before displaying."
+  "This is executed on an idle timer.
+Ensure ORIGINAL-BUFFER and ORIGINAL-POINT did not change before displaying."
   (when (and (buffer-live-p original-buffer)
              (eq (current-buffer) original-buffer)
              (eq (point) original-point))
@@ -1452,7 +1452,7 @@ The CLEANUP-FN will be called to cleanup."
     (t (lsp-proxy--error "Could not fetch completions: %s" err))))
 
 (defun lsp-proxy-inline-completion-show-overlay ()
-  "Makes the suggestion overlay visible."
+  "Make the suggestion overlay visible."
   (unless (and lsp-proxy-inline-completion--items
                (> (length lsp-proxy-inline-completion--items) 0)
                (numberp lsp-proxy-inline-completion--current))
@@ -1471,33 +1471,21 @@ The CLEANUP-FN will be called to cleanup."
                             (and (not (bolp)) (eolp))))
           (beg (if showing-at-eol (1- start-point) start-point))
           (end-point (if end (eglot--lsp-position-to-point end) (1+ beg)))
-          ;; TODO markup content insertText
-          (propertized-text (concat
-                             (buffer-substring beg start-point)
-                             (propertize insert-text 'face 'lsp-proxy-inline-completion-overlay-face)))
           (ov (lsp-proxy-inline-completion--get-overlay beg end-point))
           display-str after-str target-position)
-
     (goto-char beg)
-
-    (put-text-property 0 (length propertized-text) 'cursor t propertized-text)
-
     (if (string-prefix-p
          (buffer-substring-no-properties beg lsp-proxy-inline-completion--start-point)
          insert-text)
         (progn
           ;; Show the prefix as `display'
-          (setq display-str (substring propertized-text 0 (- lsp-proxy-inline-completion--start-point beg)))
-          (setq after-str (substring propertized-text (- lsp-proxy-inline-completion--start-point beg) nil))
+          (setq display-str (buffer-substring-no-properties beg lsp-proxy-inline-completion--start-point))
+          (setq after-str (propertize (substring insert-text (- lsp-proxy-inline-completion--start-point beg)) 'face 'lsp-proxy-inline-completion-overlay-face))
           (setq target-position lsp-proxy-inline-completion--start-point))
-      (setq display-str (substring propertized-text 0 1))
-      (setq after-str (substring propertized-text 1))
+      (setq display-str (buffer-substring-no-properties beg (1+ beg)))
+      (setq after-str (propertize (substring insert-text 1) 'face 'lsp-proxy-inline-completion-overlay-face))
       (setq target-position beg))
-    ;; (message "insert-text %s" insert-text)
-    ;; (message "display-str %s" display-str)
-    ;; (message "after-str %s" after-str)
-    ;; (message "showing-at-eol %s" showing-at-eol)
-    ;; (message "point %s %s" beg start-point)
+    (put-text-property 0 (length after-str) 'cursor t after-str)
 
     (and display-str (overlay-put ov 'display display-str))
     (and after-str (overlay-put ov 'after-string after-str))
@@ -1507,8 +1495,7 @@ The CLEANUP-FN will be called to cleanup."
     (lsp-proxy-inline-completion--show-keys)))
 
 (defun lsp-proxy-inline-completion--show-keys ()
-  "Shows active keymap hints in the minibuffer."
-
+  "Show active keymap hints in the minibuffer."
   (unless (and lsp-proxy-inline-completion--items
                (numberp lsp-proxy-inline-completion--current))
     (error "No completions to show"))
@@ -2249,9 +2236,9 @@ Returns a list as described in docstring of `imenu--index-alist'."
 
 (defvar lsp-proxy--on-change-timer nil)
 (defvar-local lsp-proxy--after-change-vals nil
-  "plist that stores the buffer state when `lsp-proxy--after-change' has ben activated. Since the
-functions `lsp-proxy--inline-completion--after-change' are called with a timer, mouse
-movements may have changed the position")
+  "Plist that stores the buffer state when `lsp-proxy--after-change' has ben activated.
+Since the functions `lsp-proxy--inline-completion--after-change' are called with a timer,
+mouse movements may have changed the position")
 
 (defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
