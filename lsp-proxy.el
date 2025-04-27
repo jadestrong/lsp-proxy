@@ -1465,12 +1465,12 @@ The CLEANUP-FN will be called to cleanup."
           (range (plist-get suggestion :range))
           (start (and range (plist-get range :start)))
           (end (and range (plist-get range :end)))
-          (start-point (if start (lsp-proxy--position-point start) (point)))
+          (start-point (if start (eglot--lsp-position-to-point start) (point)))
           (showing-at-eol (save-excursion
                             (goto-char start-point)
                             (and (not (bolp)) (eolp))))
           (beg (if showing-at-eol (1- start-point) start-point))
-          (end-point (if end (lsp-proxy--position-point end) (1+ beg)))
+          (end-point (if end (eglot--lsp-position-to-point end) (1+ beg)))
           ;; TODO markup content insertText
           (propertized-text (concat
                              (buffer-substring beg start-point)
@@ -1580,8 +1580,8 @@ The CLEANUP-FN will be called to cleanup."
           (range (plist-get suggestion :range))
           (command (plist-get suggestion :command))
           ((kind . text) (cons 'text insert-text))
-          ((start . end) (when range (cons (lsp-proxy--position-point (plist-get range :start))
-                                           (lsp-proxy--position-point (plist-get range :end))))))
+          ((start . end) (when range (cons (eglot--lsp-position-to-point (plist-get range :start))
+                                           (eglot--lsp-position-to-point (plist-get range :end))))))
     (with-no-warnings
       (with-undo-amalgamate
         (lsp-proxy-inline-completion--insert-suggestion text kind start end command)))))
