@@ -2536,10 +2536,15 @@ textDocument/didOpen for the new file."
     (with-temp-buffer lsp-proxy--log-file))
   (find-file lsp-proxy--log-file))
 
+(defvar lsp-proxy-mode-map (make-sparse-keymap)
+  "Keymap for lsp proxy minor mode.
+Use this for custom bindings in `lsp-prox-mode'.")
+
 ;;;###autoload
 (define-minor-mode lsp-proxy-mode
   "Minor mode for Lsp-Proxy."
   :init-value nil
+  :map lsp-proxy-mode-map
   :lighter " Lsp Proxy"
   (if lsp-proxy-mode
       (lsp-proxy--mode-enter)
