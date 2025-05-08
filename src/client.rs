@@ -6,7 +6,7 @@ use lsp::{
 };
 use lsp_types as lsp;
 use parking_lot::Mutex;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -34,8 +34,11 @@ use crate::{
     msg::RequestId,
     registry,
     syntax::{LanguageServerFeature, LanguageServerFeatures},
-    utils::{find_lsp_workspace, find_workspace_for_file, get_activate_time, path},
+    utils::{
+        defer, find_lsp_workspace, find_workspace_for_file, get_activate_time, path,
+    },
 };
+
 
 fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {
@@ -486,10 +489,26 @@ impl Client {
                 })
                 .map_err(|e| Error::Other(e.into()))?;
 
-            timeout(Duration::from_secs(timeout_secs), rx.recv())
-                .await
-                .map_err(|_| Error::Timeout(format!("{}({})", R::METHOD, req_id)))?
-                .ok_or(Error::StreamClosed)?
+            let cancel_id = req_id.clone();
+            let cancel_on_drop = defer(move || {
+                let _ = server_tx.send(Payload::Notification(jsonrpc::Notification {
+                    jsonrpc: Some(jsonrpc::Version::V2),
+                    method: "$/cancelRequest".to_string(),
+                    params: Self::value_into_params(json!({
+                        "id": cancel_id,
+                    })),
+                }));
+            });
+
+            let result = timeout(Duration::from_secs(timeout_secs), rx.recv()).await;
+            match result {
+                Ok(Some(res)) => {
+                    cancel_on_drop.abort();
+                    Ok(res.map_err(|e| Error::Other(e.into()))?)
+                }
+                Ok(None) => Err(Error::StreamClosed),
+                Err(_) => Err(Error::Timeout(format!("{}({})", R::METHOD, req_id))),
+            }
         }
     }
 
