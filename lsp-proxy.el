@@ -171,8 +171,13 @@ Example: `(`emacs-lisp-mode' `python-mode')'"
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-inline-completion-idle-delay 0
-  "Idle delay for inline-completion."
-  :type 'number
+  "Idle delay for inline-completion.
+
+Complete immediately if set to 0.
+Disable idle completion if set to nil."
+  :type '(choice
+          (number :tag "Seconds of delay")
+          (const :tag "Idle completion disabled" nil))
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-enable-imenu t
@@ -1339,18 +1344,17 @@ The CLEANUP-FN will be called to cleanup."
 ;;;
 ;;; inline completion
 ;;;
-(defcustom lsp-proxy-inline-completion-enable-predicates '(evil-insert-state-p copilot--buffer-changed)
-  "A list of predicate functions with no argument to enable Copilot.
-Copilot will be triggered only if all predicates return t."
+(defcustom lsp-proxy-inline-completion-enable-predicates '(evil-insert-state-p)
+  "A list of predicate functions with no argument to enable inlineCompletion.
+InlineCompletion will be triggered only if all predicates return t."
   :type '(repeat function)
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-inline-completion-disable-predicates nil
-  "A list of predicate functions with no argument to disable Copilot.
-Copilot will not be triggered if any predicate returns t."
+  "A list of predicate functions with no argument to disable inlineCompletion.
+InlineCompletion will not be triggered if any predicate returns t."
   :type '(repeat function)
-  :group 'copilot
-  :package-version '(copilot . "0.1"))
+  :group 'lsp-proxy)
 
 (defface lsp-proxy-inline-completion-overlay-face
   '((t :inherit shadow))
@@ -1396,7 +1400,7 @@ Copilot will not be triggered if any predicate returns t."
   "Keymap active when showing inline code suggestions.")
 
 (defvar-local lsp-proxy-inline-completion--keymap-overlay nil
-  "Overlay used to surround point and make copilot-completion-keymap activate.")
+  "Overlay used to surround point and make lsp-proxy-inline-completion-active-map activate.")
 
 (defsubst lsp-proxy-inline-completion--overlay-visible ()
   "Return whether the `overlay' is avaiable."
@@ -1413,7 +1417,7 @@ Copilot will not be triggered if any predicate returns t."
   (setq-local lsp-proxy-inline-completion--overlay nil))
 
 (defun lsp-proxy-inline-completion--get-or-create-keymap-overlay ()
-  "Make or return the local copilot--keymap-overlay."
+  "Make or return the local lsp-proxy-inline-completion--keymap-overlay."
   (unless (overlayp lsp-proxy-inline-completion--keymap-overlay)
     (setq lsp-proxy-inline-completion--keymap-overlay (make-overlay 1 1 nil nil t))
     (overlay-put lsp-proxy-inline-completion--keymap-overlay 'keymap lsp-proxy-inline-completion-active-map)
@@ -1554,7 +1558,7 @@ To work around posn problems with after-string property.")
   "Set overlay OV with COMPLETION."
   (move-overlay ov (point) (line-end-position))
 
-  ;; set overlay position for the keymap, to activate copilot-completion-map
+  ;; set overlay position for the keymap, to activate lsp-proxy-inline-completion-active-map
   ;;
   ;; if the point is at the end of the buffer, we will create a
   ;; 0-length buffer. But this is ok, since the keymap will still
@@ -2364,22 +2368,21 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                        (or (string-prefix-p "lsp-proxy-inline-completion-" (symbol-name this-command))
                            (lsp-proxy-inline-completion--self-insert this-command)))))
     (lsp-proxy-inline-completion--clear-overlay)
-    ;; trigger inline-completion
     (when lsp-proxy--inline-completion-debounce-timer
       (cancel-timer lsp-proxy--inline-completion-debounce-timer))
-    ;; TODO disable
-    (let ((buf (current-buffer)))
+    (when (numberp lsp-proxy-inline-completion-idle-delay)
       (setq lsp-proxy--inline-completion-debounce-timer
             (run-with-idle-timer
              lsp-proxy-inline-completion-idle-delay
              nil
              #'lsp-proxy-inline-completion--post-command-debounce
-             buf)))))
+             (current-buffer))))))
 
 (defun lsp-proxy--mode-off ()
   "Turn off `lsp-proxy-mode' unconditionally."
   (remove-overlays nil nil 'lsp-proxy--overlay t)
   (lsp-proxy-inlay-hints-mode -1)
+  (lsp-proxy-inline-completion-mode -1)
   (lsp-proxy-mode -1))
 
 (defconst lsp-proxy--internal-hooks
