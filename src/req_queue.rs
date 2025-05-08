@@ -44,22 +44,22 @@ impl<I> Incoming<I> {
         self.pending.insert(id, data);
     }
 
-    pub fn cancel(&mut self, id: RequestId) -> Option<Response> {
-        let _data = self.complete(id.clone())?;
+    pub fn cancel(&mut self, id: &RequestId) -> Option<Response> {
+        let _data = self.complete(id)?;
         let error = jsonrpc::Error {
             code: jsonrpc::ErrorCode::RequestCanceled,
             message: "canceled by client".to_string(),
             data: None,
         };
         Some(Response {
-            id,
+            id: id.to_owned(),
             result: None,
             error: Some(error),
         })
     }
 
-    pub fn complete(&mut self, id: RequestId) -> Option<I> {
-        self.pending.remove(&id)
+    pub fn complete(&mut self, id: &RequestId) -> Option<I> {
+        self.pending.remove(id)
     }
 
     pub fn is_completed(&self, id: &RequestId) -> bool {

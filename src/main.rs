@@ -13,6 +13,7 @@ mod editor;
 mod error;
 mod fuzzy;
 mod handlers;
+mod job;
 mod lsp;
 mod lsp_ext;
 mod main_loop;
@@ -22,7 +23,6 @@ mod req_queue;
 mod syntax;
 mod thread;
 mod utils;
-mod job;
 
 use anyhow::{Context, Result};
 use args::Args;
