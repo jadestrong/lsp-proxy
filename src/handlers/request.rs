@@ -1,7 +1,7 @@
 use anyhow::Result;
 use core::fmt;
 use crossbeam_channel::Sender;
-use futures_util::{stream::FuturesUnordered, TryStreamExt};
+use futures_util::{stream::FuturesUnordered, FutureExt, TryStreamExt};
 use itertools::Itertools;
 use lazy_static::lazy_static;
 use log::{debug, error, info};
@@ -518,87 +518,6 @@ pub(crate) async fn handle_completion_resolve(
             "No Resolve Context {:?}",
             req.params
         )))
-    }
-}
-
-pub(crate) async fn handle_inline_completion(
-    req: msg::Request,
-    params: lsp_types::InlineCompletionParams,
-    language_servers: Vec<Arc<Client>>,
-) -> Result<Response> {
-    if let Some(Context::InlineCompletionContext(context)) = req.params.context {
-        log::trace!("handing inline completion {:?}", params);
-        if context.trigger_kind == lsp_types::InlineCompletionTriggerKind::Invoked
-            && params.context.trigger_kind != context.trigger_kind
-        {
-            debug!("Skip automatic trigger when triggerKind is manual.");
-            return Ok(Response {
-                id: req.id,
-                result: None,
-                error: None,
-            });
-        }
-        let mut futures: FuturesUnordered<_> = language_servers
-            .iter()
-            .filter(|ls| ls.with_feature(LanguageServerFeature::InlineCompletion))
-            .map(|ls| {
-                let cmp_start = Instant::now();
-                let language_server_name = ls.name().to_owned();
-                let request = ls
-                    .inline_completion(req.id.clone(), params.clone())
-                    .unwrap();
-
-                let id = req.id.clone();
-                async move {
-                    let json = request.await?;
-                    info!(
-                        "{:?} [{:?}] await ${:0.2?}",
-                        language_server_name,
-                        id.clone(),
-                        cmp_start.elapsed()
-                    );
-                    let resp: Option<lsp_types::InlineCompletionResponse> =
-                        serde_json::from_value(json)?;
-
-                    let items = match resp {
-                        Some(lsp_types::InlineCompletionResponse::Array(items)) => items,
-                        Some(lsp_types::InlineCompletionResponse::List(list)) => list.items,
-                        None => Vec::new(),
-                    };
-                    anyhow::Ok(items)
-                }
-            })
-            .collect();
-        let future = async move {
-            let res = async move {
-                let mut items = Vec::new();
-                loop {
-                    match futures.try_next().await {
-                        Ok(Some(mut lsp_items)) => {
-                            items.append(&mut lsp_items);
-                        }
-                        Ok(None) => break,
-                        Err(e) => {
-                            error!("Future Error: {}", e);
-                            continue;
-                        }
-                    }
-                }
-                anyhow::Ok(items)
-            }
-            .await;
-            match res {
-                Ok(res) => Response::new_ok(req.id.clone(), res),
-                Err(e) => create_error_response(&req.id, e.to_string()),
-            }
-        };
-        let requst_start = Instant::now();
-        let resp = future.await;
-        info!("line completion await end {:0.2?}", requst_start.elapsed());
-
-        Ok(resp)
-    } else {
-        Err(anyhow::Error::msg("Not a inline completion context."))
     }
 }
 
@@ -1160,4 +1079,76 @@ pub(crate) async fn handle_pull_diagnostic_response(
         }
     })
     .await;
+}
+
+pub(crate) async fn handle_inline_completion(
+    req: msg::Request,
+    language_server: Arc<Client>,
+    language_id: String,
+    response_sender: Sender<Message>,
+) {
+    if let Some(Context::InlineCompletionContext(context)) = req.params.context {
+        match serde_json::from_value::<lsp_types::InlineCompletionParams>(req.params.params) {
+            Ok(params) => {
+                if context.trigger_kind == lsp_types::InlineCompletionTriggerKind::Invoked
+                    && params.context.trigger_kind != context.trigger_kind
+                {
+                    debug!("Skip automatic trigger when triggerKind is manual.");
+                    response_sender
+                        .send(
+                            Response {
+                                id: req.id,
+                                result: None,
+                                error: None,
+                            }
+                            .into(),
+                        )
+                        .unwrap();
+                    return;
+                }
+                let doc_version = context.doc_version;
+                let language = language_id.clone();
+                let future = match language_server.name() {
+                    _ => {
+                        let request = language_server
+                            .inline_completion(req.id.clone(), params.clone())
+                            .unwrap();
+                        async move {
+                            let json = request.await?;
+                            let resp: Option<lsp_types::InlineCompletionResponse> =
+                                serde_json::from_value(json)?;
+                            let items = match resp {
+                                Some(lsp_types::InlineCompletionResponse::Array(items)) => items,
+                                Some(lsp_types::InlineCompletionResponse::List(list)) => list.items,
+                                None => Vec::new(),
+                            };
+                            anyhow::Ok(items)
+                        }
+                        .boxed()
+                    }
+                };
+                let res = match future.await {
+                    Ok(lsp_items) => Response::new_ok(
+                        req.id.clone(),
+                        lsp_ext::VersionInlineCompletionResult {
+                            doc_version,
+                            items: lsp_items,
+                        },
+                    ),
+                    Err(e) => create_error_response(&req.id, e.to_string()),
+                };
+                response_sender.send(res.into()).unwrap();
+            }
+            Err(e) => {
+                let resp = create_error_response(
+                    &req.id,
+                    format!("parse inline completion error {}", e.to_string()),
+                );
+                response_sender.send(resp.into()).unwrap();
+            }
+        }
+    } else {
+        let resp = create_error_response(&req.id, format!("Not a inline completion context"));
+        response_sender.send(resp.into()).unwrap();
+    }
 }

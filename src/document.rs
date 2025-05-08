@@ -100,6 +100,7 @@ impl Document {
             support_document_symbols: false,
             support_signature_help: false,
             support_pull_diagnostic: false,
+            support_inline_completion: false,
         };
 
         self.language_servers().for_each(|ls| {
@@ -127,6 +128,10 @@ impl Document {
 
             if ls.supports_feature(LanguageServerFeature::PullDiagnostics) {
                 server_capabilities.support_pull_diagnostic = true;
+            }
+
+            if ls.supports_feature(LanguageServerFeature::InlineCompletion) {
+                server_capabilities.support_inline_completion = true;
             }
         });
 

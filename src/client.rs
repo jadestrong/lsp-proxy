@@ -480,7 +480,6 @@ impl Client {
                 method: R::METHOD.to_string(),
                 params: Self::value_into_params(params),
             };
-
             let (tx, mut rx) = channel::<Result<Value>>(1);
             server_tx
                 .send(Payload::Request {
@@ -881,9 +880,6 @@ impl Client {
         req_id: RequestId,
         params: lsp::InlineCompletionParams,
     ) -> Option<impl Future<Output = Result<Value>>> {
-        let capabilities = self.capabilities.get().unwrap();
-
-        capabilities.completion_provider.as_ref()?;
         Some(self.call::<lsp::request::InlineCompletionRequest>(req_id, params))
     }
 

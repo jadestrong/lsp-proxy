@@ -8,8 +8,8 @@ use crate::{
     handlers::{
         self,
         request::{
-            create_error_response, handle_code_action, handle_pull_diagnostic_response,
-            pull_diagnostics_for_document,
+            create_error_response, handle_code_action, handle_inline_completion,
+            handle_pull_diagnostic_response, pull_diagnostics_for_document,
         },
     },
     lsp::{
@@ -362,8 +362,7 @@ impl Application {
                         };
                         if let Some(doc) = doc {
                             let version = doc.version;
-                            let old_diagnostics = doc
-                                .get_diagnostics_by_provider(&provider);
+                            let old_diagnostics = doc.get_diagnostics_by_provider(&provider);
                             if old_diagnostics.is_none()
                                 || !is_diagnostic_vectors_equal(
                                     &old_diagnostics.as_ref().unwrap(),
@@ -516,6 +515,28 @@ impl Application {
                     Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
                 }
             }
+            Message::Request(req)
+                if req.method == lsp_types::request::InlineCompletionRequest::METHOD =>
+            {
+                match self.get_working_document(&req) {
+                    Ok(doc) => {
+                        let language_servers = doc.get_all_language_servers();
+                        let language_server = language_servers.into_iter().find(|ls| {
+                            ls.with_feature(syntax::LanguageServerFeature::InlineCompletion)
+                        });
+                        if let Some(ls) = language_server {
+                            let language_id = doc.language_id().unwrap().to_owned();
+                            tokio::spawn(handle_inline_completion(
+                                req,
+                                ls,
+                                language_id,
+                                self.sender.clone(),
+                            ));
+                        }
+                    }
+                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                }
+            }
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
             }
@@ -557,9 +578,6 @@ impl Application {
             )
             .on::<lsp_types::request::References, _, _>(handlers::request::handle_goto_references)
             .on::<lsp_types::request::Completion, _, _>(handlers::request::handle_completion)
-            .on::<lsp_types::request::InlineCompletionRequest, _, _>(
-                handlers::request::handle_inline_completion,
-            )
             .on::<lsp_types::request::ResolveCompletionItem, _, _>(
                 handlers::request::handle_completion_resolve,
             )

@@ -133,6 +133,9 @@ pub struct CompletionContext {
 pub struct InlineCompletionContext {
     #[serde(rename = "triggerKind")]
     pub trigger_kind: lsp_types::InlineCompletionTriggerKind,
+    #[serde(rename = "docVersion")]
+    pub doc_version: i32,
+    pub line: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -169,7 +172,6 @@ pub enum Context {
     CommonContext(CommonContext),
     WorkspaceContext(WorkspaceContext),
     InlineCompletionContext(InlineCompletionContext),
-    // SignatureHelpContext(SignatureHelpContext),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -325,7 +327,6 @@ impl Notification {
         self.method == "exit"
     }
 }
-
 
 fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> io::Error {

@@ -28,6 +28,7 @@ pub struct CustomServerCapabilitiesParams {
     pub support_document_symbols: bool,
     pub support_signature_help: bool,
     pub support_pull_diagnostic: bool,
+    pub support_inline_completion: bool,
 }
 
 impl Notification for CustomServerCapabilities {
@@ -162,4 +163,11 @@ impl Request for RustAnalyzerReloadWorkspace {
     type Params = ();
     type Result = ();
     const METHOD: &'static str = "rust-analyzer/reloadWorkspace";
+}
+/// Add version to inline completion
+#[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionInlineCompletionResult {
+    pub doc_version: i32,
+    pub items: Vec<lsp_types::InlineCompletionItem>,
 }
