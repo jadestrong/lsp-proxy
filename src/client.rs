@@ -4,7 +4,7 @@ use lsp::{
     notification::DidChangeWorkspaceFolders, request::Request, DidChangeWorkspaceFoldersParams,
     OneOf, WorkspaceFolder, WorkspaceFoldersChangeEvent,
 };
-use lsp_types as lsp;
+use lsp_types::{self as lsp, DocumentSymbolClientCapabilities};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::{
@@ -707,6 +707,10 @@ impl Client {
                     definition: Some(lsp::GotoCapability {
                         dynamic_registration: Some(true),
                         link_support: Some(true),
+                    }),
+                    document_symbol: Some(lsp::DocumentSymbolClientCapabilities {
+                        hierarchical_document_symbol_support: Some(true),
+                        ..DocumentSymbolClientCapabilities::default()
                     }),
                     ..Default::default()
                 }),

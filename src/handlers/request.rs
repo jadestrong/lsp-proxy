@@ -23,7 +23,10 @@ use crate::{
     lsp_ext::{self, CommandItem, CompletionItem},
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
-    utils::{is_diagnostic_vectors_equal, truncate_completion_item},
+    utils::{
+        is_diagnostic_vectors_equal, lsp_symbols_to_imenu,
+        truncate_completion_item,
+    },
 };
 
 pub fn create_error_response(id: &RequestId, message: String) -> Response {
@@ -942,7 +945,10 @@ pub(crate) async fn handle_document_symbols(
         None,
     )
     .await
-    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+    .and_then(|(resp, _)| {
+        let result = lsp_symbols_to_imenu(resp);
+        Ok(Response::new_ok(req.id.clone(), result))
+    })
 }
 
 pub(crate) async fn pull_diagnostics_for_document(

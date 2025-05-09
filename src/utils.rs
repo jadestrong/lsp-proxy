@@ -1,6 +1,6 @@
 use log::{debug, error};
-use lsp_types::{Diagnostic, Url};
-use serde::de::DeserializeOwned;
+use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, Range, SymbolInformation, Url};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -442,5 +442,55 @@ impl<F: FnOnce()> Drop for Deferred<F> {
 #[must_use]
 pub fn defer<F: FnOnce()>(f: F) -> Deferred<F> {
     Deferred(Some(f))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ImenuEntry {
+    Group(Vec<(String, ImenuEntry)>),
+    Position((u32, u32)), // (line, character)
+}
+
+pub fn lsp_symbols_to_imenu(response: Option<DocumentSymbolResponse>) -> Vec<(String, ImenuEntry)> {
+    response.map_or(Vec::new(), |symbols| match symbols {
+        DocumentSymbolResponse::Flat(symbols) => flat_symbols_to_imenu(&symbols),
+        DocumentSymbolResponse::Nested(symbols) => nested_symbols_to_imenu(&symbols),
+    })
+}
+
+// Process Nested DocumentSymbols
+fn nested_symbols_to_imenu(symbols: &[DocumentSymbol]) -> Vec<(String, ImenuEntry)> {
+    symbols
+        .iter()
+        .map(|sym| {
+            let name = sym.name.clone();
+            sym.children.as_ref().map_or_else(
+                || {
+                    let lsp_types::Position { line, character } = sym.range.start;
+                    (name.clone(), ImenuEntry::Position((line, character)))
+                },
+                |children| {
+                    if children.is_empty() {
+                        let lsp_types::Position { line, character } = sym.range.start;
+                        return (name.clone(), ImenuEntry::Position((line, character)));
+                    } else {
+                        let children = nested_symbols_to_imenu(&children);
+                        (name.clone(), ImenuEntry::Group(children))
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+// Process Flat SymbolInformation
+fn flat_symbols_to_imenu(symbols: &[SymbolInformation]) -> Vec<(String, ImenuEntry)> {
+    symbols
+        .iter()
+        .map(|sym| {
+            let name = sym.name.clone();
+            let lsp_types::Position { line, character } = sym.location.range.start;
+            (name, ImenuEntry::Position((line, character)))
+        })
+        .collect()
 }
 

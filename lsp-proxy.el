@@ -2264,11 +2264,41 @@ Returns a list as described in docstring of `imenu--index-alist'."
   (let* ((res (lsp-proxy--request 'textDocument/documentSymbol
                                   (lsp-proxy--request-or-notify-params (list :textDocument (eglot--TextDocumentIdentifier)))
                                   :cancel-on-input non-essential))
-         (head (and (cl-plusp (length res)) (elt res 0))))
-    (when head
-      (eglot--dcase head
-        (((SymbolInformation)) (eglot--imenu-SymbolInformation res))
-        (((DocumentSymbol)) (eglot--imenu-DocumentSymbol res))))))
+         ;; (head (and (cl-plusp (length res)) (elt res 0)))
+         )
+    ;; (when head
+    ;;   (eglot--dcase head
+    ;;     (((SymbolInformation)) (eglot--imenu-SymbolInformation res))
+    ;;     (((DocumentSymbol)) (eglot--imenu-DocumentSymbol res))))
+    (lsp-proxy--convert-imenu-format res)))
+
+(defun lsp-proxy--convert-imenu-format (symbols)
+  "Convert custom parsed LSP-style SYMBOLS into imenu-compatible cons cell format."
+  (mapcar
+   (lambda (item)
+     (let* ((name (aref item 0))
+            (content (aref item 1))
+            (group (plist-get content :Group))
+            (pos (plist-get content :Position)))
+       (cond
+        (group
+         (cons name (lsp-proxy--convert-imenu-format group)))
+        (pos
+         (cons name (cons (aref pos 0) (aref pos 1))))
+        (t
+         (cons name content)))))
+   symbols))
+
+(defun lsp-proxy--imenu-lsp-goto (name pos)
+  "Jump to the position specified by POS.
+If POS is in LSP format (line . column), convert and jump to that position.
+Otherwise use the original imenu goto function.
+NAME is the imenu item name."
+  (if (and (consp pos) (numberp (car pos)) (numberp (cdr pos)))
+      ;; LSP format position (line . column)
+      (goto-char (eglot--lsp-position-to-point (list :line (car pos) :character (cdr pos))))
+    ;; Regular point position, use original imenu goto function
+    (funcall #'imenu-default-goto-function name pos)))
 
 ;;
 ;; commands
@@ -2441,8 +2471,11 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
             lsp-proxy-passthrough-all-completions
             "Passthrough completion."))
     (if lsp-proxy-enable-imenu
-        (add-function :before-until (local 'imenu-create-index-function)
-                      #'lsp-proxy-imenu))
+        (progn
+          (add-function :before-until (local 'imenu-create-index-function)
+                        #'lsp-proxy-imenu)
+          ;; Register imenu goto function
+          (setq-local imenu-default-goto-function #'lsp-proxy--imenu-lsp-goto)))
     (cond
      ((and (or
             (and (eq lsp-proxy-diagnostics-provider :auto)
@@ -2478,6 +2511,8 @@ Return non nil if `lsp-proxy--on-doc-focus' was run for the buffer."
   (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
   (remove-hook 'eldoc-documentation-functions #'lsp-proxy-signature-eldoc-function 'local)
   (remove-function (local 'imenu-create-index-function) #'lsp-proxy-imenu)
+  ;; Reset imenu goto function
+  (kill-local-variable 'imenu-default-goto-function)
   (setq-local completion-category-defaults
               (cl-remove 'lsp-proxy-capf completion-category-defaults :key #'cl-first))
   (setq-local completion-styles-alist
