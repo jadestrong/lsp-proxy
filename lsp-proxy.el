@@ -1771,7 +1771,9 @@ To work around posn problems with after-string property.")
     (lsp-proxy--async-request
      'textDocument/diagnostic
      (lsp-proxy--request-or-notify-params
-      (list :textDocument (eglot--TextDocumentIdentifier))))))
+      (list :textDocument (eglot--TextDocumentIdentifier)))
+     :timeout-fn #'ignore)))
+
 
 ;;
 ;; Flycheck

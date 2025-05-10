@@ -450,12 +450,6 @@ impl Application {
             Message::Request(req)
                 if req.method == lsp_types::request::DocumentDiagnosticRequest::METHOD =>
             {
-                // return a None response becuase we do all things here
-                self.respond(Response {
-                    id: req.id.clone(),
-                    result: None,
-                    error: None,
-                });
                 match self.get_working_document(&req) {
                     Ok(doc) => {
                         let language_servers = doc.language_servers_with_feature(
