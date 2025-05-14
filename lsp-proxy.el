@@ -180,6 +180,11 @@ Disable idle completion if set to nil."
           (const :tag "Idle completion disabled" nil))
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-inline-completion-trigger-characters '(?\( ?\" ?\' ?\{)
+  "Inline Completion trigger characters."
+  :type '(repeat character)
+  :group 'lsp-proxy)
+
 (defcustom lsp-proxy-enable-imenu t
   "Enable imenu."
   :type 'boolean
@@ -1440,12 +1445,16 @@ in `post-command-hook'."
     (let* ((ov lsp-proxy-inline-completion--overlay)
            (completion (overlay-get ov 'completion))
            (completion-end (overlay-get lsp-proxy-inline-completion--overlay 'completion-end))
-           (completion-start (overlay-get lsp-proxy-inline-completion--overlay 'completion-start)))
-      (when (eq last-command-event (elt completion 0))
+           (completion-start (overlay-get lsp-proxy-inline-completion--overlay 'completion-start))
+           ;; the last point before self-insert
+           (prev-point (max (point-min) (1- (point)))))
+      (when (and (eq last-command-event (elt completion 0)) (not (memq last-command-event lsp-proxy-inline-completion-trigger-characters)))
         (if (= (length completion) 1)
             ;; If there is only one char in the completion, accept it
-            (lsp-proxy-inline-completion-accept)
-          (when (and (> completion-end (point)) (>= completion-start (point)))
+            (progn
+              (overlay-put ov 'completion (substring completion 1))
+              (lsp-proxy-inline-completion-accept))
+          (when (and (> completion-end prev-point) (>= completion-start prev-point))
             (message "Wrong~~")
             (overlay-put ov 'completion-start (+ completion-start 1))
             (overlay-put ov 'completion-end (+ completion-end 1)))
