@@ -446,6 +446,7 @@ pub(crate) async fn handle_completion_resolve(
 ) -> Result<Response> {
     if let Some(Context::ResolveContext(context)) = &req.params.context {
         let params_detail = params.detail.clone();
+        let params_text_edit = params.text_edit.clone();
         call_single_language_server::<lsp_types::request::ResolveCompletionItem>(
             &req,
             params,
@@ -493,7 +494,9 @@ pub(crate) async fn handle_completion_resolve(
                 }
             }
 
-            if let Some(text_edit) = &resp.text_edit {
+            if let Some(text_edit) = params_text_edit {
+                resp.text_edit = Some(text_edit.to_owned());
+            } else if let Some(text_edit) = &resp.text_edit {
                 if let lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit) =
                     text_edit
                 {
