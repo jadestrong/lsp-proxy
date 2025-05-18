@@ -1392,6 +1392,9 @@ InlineCompletion will not be triggered if any predicate returns t."
     (define-key map (kbd "C-<return>") #'lsp-proxy-inline-completion-accept)
     (define-key map (kbd "<tab>") #'lsp-proxy-inline-completion-accept)
     (define-key map (kbd "TAB") #'lsp-proxy-inline-completion-accept)
+    (define-key map (kbd "C-<tab>") #'lsp-proxy-inline-completion-accept-by-word)
+    (define-key map (kbd "C-TAB") #'lsp-proxy-inline-completion-accept-by-word)
+    (define-key map (kbd "<backtab>") #'lsp-proxy-inline-completion-accept-by-line)
     ;; navigate
     (define-key map (kbd "C-n") #'lsp-proxy-inline-completion-next)
     (define-key map (kbd "C-p") #'lsp-proxy-inline-completion-prev)
@@ -1405,7 +1408,8 @@ InlineCompletion will not be triggered if any predicate returns t."
   "Keymap active when showing inline code suggestions.")
 
 (defvar-local lsp-proxy-inline-completion--keymap-overlay nil
-  "Overlay used to surround point and make lsp-proxy-inline-completion-active-map activate.")
+  "Overlay used to surround point.
+Make lsp-proxy-inline-completion-active-map activate.")
 
 (defsubst lsp-proxy-inline-completion--overlay-visible ()
   "Return whether the `overlay' is avaiable."
@@ -1418,8 +1422,7 @@ InlineCompletion will not be triggered if any predicate returns t."
   (when (lsp-proxy-inline-completion--overlay-visible)
     (delete-overlay lsp-proxy-inline-completion--keymap-overlay)
     (delete-overlay lsp-proxy-inline-completion--overlay))
-  (setq-local lsp-proxy-inline-completion--real-posn nil)
-  (setq-local lsp-proxy-inline-completion--overlay nil))
+  (setq-local lsp-proxy-inline-completion--real-posn nil))
 
 (defun lsp-proxy-inline-completion--get-or-create-keymap-overlay ()
   "Make or return the local lsp-proxy-inline-completion--keymap-overlay."
@@ -1646,22 +1649,44 @@ To work around posn problems with after-string property.")
     (when lsp-proxy-inline-completion--start-point
       (goto-char lsp-proxy-inline-completion--start-point))))
 
-(defun lsp-proxy-inline-completion-accept ()
-  "Accept the current suggestion."
+(defun lsp-proxy-inline-completion-accept (&optional transform-fn)
+  "Accept the current suggestion.
+Return t if there is a completion. Use TRANSFORM-FN to transform completion if
+provided."
   (interactive)
   (unless (lsp-proxy-inline-completion--overlay-visible)
     (error "Not showing suggestions"))
   (-let* (
           ;; (suggestion (elt lsp-proxy-inline-completion--items lsp-proxy-inline-completion--current))
           (insert-text (overlay-get lsp-proxy-inline-completion--overlay 'completion))
+          (t-insert-text (funcall (or transform-fn #'identity) insert-text))
           ;; (start (overlay-get lsp-proxy-inline-completion--overlay 'start))
           ;; (end (lsp-proxy-inline-completion--overlay-end lsp-proxy-inline-completion--overlay))
           (completion-start (overlay-get lsp-proxy-inline-completion--overlay 'completion-start))
           (completion-end (overlay-get lsp-proxy-inline-completion--overlay 'completion-end)))
     (delete-region completion-start completion-end)
-    (insert insert-text)
+    (insert t-insert-text)
     (lsp-proxy-inline-completion--clear-overlay)
+    ;; if it is a partial completion
+    (when (and (string-prefix-p t-insert-text insert-text)
+               (not (string-equal t-insert-text insert-text)))
+      (lsp-proxy-inline-completion--set-overlay-text (lsp-proxy-inline-completion--get-overlay) (string-remove-prefix t-insert-text insert-text)))
     t))
+
+(defmacro lsp-proxy-inline-completion--define-accept-completion-by-action (func-name action)
+  "Define function FUNC-NAME to accept completion by ACTION."
+  `(defun ,func-name (&optional n)
+     (interactive "p")
+     (setq n (or n 1))
+     (lsp-proxy-inline-completion-accept (lambda (completion)
+                                  (with-temp-buffer
+                                    (insert completion)
+                                    (goto-char (point-min))
+                                    (funcall ,action n)
+                                    (buffer-substring-no-properties (point-min) (point)))))))
+
+(lsp-proxy-inline-completion--define-accept-completion-by-action lsp-proxy-inline-completion-accept-by-word #'forward-word)
+(lsp-proxy-inline-completion--define-accept-completion-by-action lsp-proxy-inline-completion-accept-by-line #'forward-line)
 
 ;; (defun lsp-proxy-inline-completion--insert-suggestion (text kind start end command?)
 ;;   (let* ((text-insert-start (or start lsp-proxy-inline-completion--start-point))
