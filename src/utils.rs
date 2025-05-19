@@ -1,5 +1,5 @@
 use log::{debug, error};
-use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, Range, SymbolInformation, Url};
+use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},

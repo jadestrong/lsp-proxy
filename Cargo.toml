@@ -1,7 +1,13 @@
 [package]
 name = "lsp-proxy"
-version = "0.1.0"
+description = "An LSP client for Emacs implemented in Rust."
+homepage = "https://github.com/jadestrong/lsp-proxy"
+repository = "https://github.com/jadestrong/lsp-proxy"
+readme = "README.org"
+version = "0.4.4"
 edition = "2021"
+keywords = ["emacs", "lsp", "proxy"]
+categories = ["command-line-utilities"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

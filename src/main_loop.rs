@@ -74,7 +74,6 @@ impl Application {
                     self.send(msg);
                 }
                 Some(callback) = self.jobs.callbacks.recv() => {
-                    log::debug!("Got a callback");
                     self.jobs.handle_callback(&mut self.editor, Ok(Some(callback)));
                 }
             }
@@ -346,61 +345,54 @@ impl Application {
                             log::error!("Discarding pushlishDiagnostic notification sent by uninitialized server: {}", language_server.name());
                             return;
                         }
-                        let doc = self.editor.document_by_uri_mut(&params.uri).filter(|doc| {
-                            if let Some(version) = params.version {
-                                if version != doc.version {
-                                    error!("Version ({version}) is out of date for {:?} (expected ({}), dropping PublishDiagnostic notification", params.uri, doc.version());
-                                    return false;
-                                }
+                        let doc = self.editor.get(&params.uri);
+                        if let Some(version) = params.version {
+                            if version != doc.version {
+                                log::error!("Version ({version}) is out of date for {:?} (expected ({}), dropping PublishDiagnostic notification", params.uri, doc.version());
+                                return;
                             }
-
-                            true
-                        });
+                        }
                         let provider = DiagnosticProvider {
                             server_id,
                             identifier: None,
                         };
-                        if let Some(doc) = doc {
-                            let version = doc.version;
-                            let old_diagnostics = doc.get_diagnostics_by_provider(&provider);
-                            if old_diagnostics.is_none()
-                                || !is_diagnostic_vectors_equal(
-                                    &old_diagnostics.as_ref().unwrap(),
-                                    &params.diagnostics,
-                                )
+                        let version = doc.version;
+                        let old_diagnostics = doc.get_diagnostics_by_provider(&provider);
+                        if old_diagnostics.is_none()
+                            || !is_diagnostic_vectors_equal(
+                                &old_diagnostics.as_ref().unwrap(),
+                                &params.diagnostics,
+                            )
+                        {
+                            let diagnostics: Vec<DiagnosticItem> = params
+                                .diagnostics
+                                .iter()
+                                .map(|diagnostic| DiagnosticItem {
+                                    item: diagnostic.to_owned(),
+                                    provider: provider.clone(),
+                                    file_path: doc
+                                        .path()
+                                        .map(|p| p.to_string_lossy().to_string())
+                                        .unwrap_or("".to_string()),
+                                })
+                                .collect();
+                            doc.replace_diagnostics(diagnostics, &provider);
+                            let diagnostics: Vec<lsp_types::Diagnostic> = match doc
+                                .diagnostics()
+                                .as_ref()
                             {
-                                let diagnostics: Vec<DiagnosticItem> = params
-                                    .diagnostics
-                                    .iter()
-                                    .map(|diagnostic| DiagnosticItem {
-                                        item: diagnostic.to_owned(),
-                                        provider: provider.clone(),
-                                        file_path: doc
-                                            .path()
-                                            .map(|p| p.to_string_lossy().to_string())
-                                            .unwrap_or("".to_string()),
-                                    })
-                                    .collect();
-                                doc.replace_diagnostics(diagnostics, &provider);
-                                let diagnostics: Vec<lsp_types::Diagnostic> =
-                                    match doc.diagnostics().as_ref() {
-                                        Some(diags) => {
-                                            diags.iter().map(|diag| diag.item.clone()).collect()
-                                        }
-                                        None => vec![],
-                                    };
-                                self.send_notification::<lsp_types::notification::PublishDiagnostics>(
-                                    lsp_types::PublishDiagnosticsParams {
-                                        version: Some(version),
-                                        uri: params.uri,
-                                        diagnostics,
-                                    },
-                                )
-                            } else {
-                                debug!("old and new equal, ignore");
-                            }
+                                Some(diags) => diags.iter().map(|diag| diag.item.clone()).collect(),
+                                None => vec![],
+                            };
+                            self.send_notification::<lsp_types::notification::PublishDiagnostics>(
+                                lsp_types::PublishDiagnosticsParams {
+                                    version: Some(version),
+                                    uri: params.uri,
+                                    diagnostics,
+                                },
+                            )
                         } else {
-                            debug!("document {:?} not found, maybe close/removed.", params.uri);
+                            debug!("old and new equal, ignore");
                         }
                     }
                     NotificationFromServer::ShowMessage(params) => {
@@ -491,7 +483,9 @@ impl Application {
 
                                 let provider = DiagnosticProvider {
                                     server_id: language_server.id(),
-                                    identifier: identifier.clone(),
+                                    identifier: Some(
+                                        identifier.unwrap_or(language_server.name().to_string()),
+                                    ),
                                 };
 
                                 if let Some(result) = response {

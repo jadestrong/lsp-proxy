@@ -5,7 +5,6 @@ use crate::{
     syntax,
     utils::uri_to_path,
 };
-use anyhow::Result;
 use log::error;
 use lsp_types::Url;
 use std::{
@@ -37,16 +36,13 @@ impl Editor {
 
     /// If the document already existed, return it
     /// Else create it, and launch langauge server for this document
-    pub fn get(&mut self, uri: &Url) -> Result<DocumentId> {
-        let id = self.document_by_uri(&uri).map(|doc| doc.id);
+    pub fn get(&mut self, uri: &Url) -> &mut Document {
+        let doc_id = self
+            .document_by_uri(&uri)
+            .map(|doc| doc.id)
+            .unwrap_or_else(|| self.new_document(uri).id);
 
-        let id = if let Some(id) = id {
-            id
-        } else {
-            self.new_document(uri)
-        };
-
-        Ok(id)
+        self.documents.get_mut(&doc_id).unwrap()
     }
 
     #[inline]
@@ -92,14 +88,14 @@ impl Editor {
         }
     }
 
-    pub fn new_document(&mut self, uri: &Url) -> DocumentId {
+    pub fn new_document(&mut self, uri: &Url) -> &Document {
         let mut doc = Document::new(uri, Some(self.syn_loader.clone()));
         let id = self.next_document_id;
         self.next_document_id =
             DocumentId(unsafe { NonZeroUsize::new_unchecked(self.next_document_id.0.get() + 1) });
         doc.id = id;
         self.documents.insert(id, doc);
-        id
+        self.documents.get(&id).unwrap()
     }
 
     pub fn launch_langauge_servers(&mut self, doc_id: DocumentId) {

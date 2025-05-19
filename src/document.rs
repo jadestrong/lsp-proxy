@@ -283,4 +283,12 @@ impl Document {
             Some(items)
         })
     }
+
+    /// Reset document state including version, diagnostics, language config and language servers
+    pub fn reset(&mut self) {
+        self.version = 0;
+        self.diagnostics = None;
+        self.previous_diagnostic_id = None;
+        self.language_servers.clear();
+    }
 }

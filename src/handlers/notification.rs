@@ -1,4 +1,4 @@
-use crate::{application::Application, document::DocumentId, lsp_ext, utils::get_activate_time};
+use crate::{application::Application, lsp_ext, utils::get_activate_time};
 use anyhow::Result;
 use itertools::Itertools;
 use log::error;
@@ -12,36 +12,36 @@ pub(crate) fn handle_did_open_text_document(
     params: lsp_types::DidOpenTextDocumentParams,
 ) -> Result<()> {
     let doc = app.editor.document_by_uri(&params.text_document.uri);
-    match doc {
-        Some(doc) => {
-            error!("duplicate DidOpenTextDocument: {:?}", doc.id);
-            // send did change !!!
-        }
+    let doc_id = match doc {
+        Some(doc) => doc.id,
         None => {
-            let doc_id = app.editor.new_document(&params.text_document.uri);
-            let uri = params.text_document.uri.to_owned();
-            let text = params.text_document.text.to_owned();
-            app.editor.launch_langauge_servers(doc_id);
-            let doc = app.editor.document_by_uri(&uri);
-            if let Some(doc) = doc {
-                // send didOpen notification directly, notifies will pending until server initialized.
-                let language_id = doc.language_id().to_owned().unwrap_or_default();
-                doc.language_servers.values().for_each(|ls| {
-                    ls.text_document_did_open(
-                        uri.clone(),
-                        doc.version(),
-                        text.clone(),
-                        language_id.to_string(),
-                    )
-                    .unwrap();
-                });
-                if doc.language_servers.values().any(|ls| ls.is_initialized()) {
-                    app.send_notification::<lsp_ext::CustomServerCapabilities>(
-                        doc.get_server_capabilities()
-                    );
-                }
-                let configed_servers = doc.language_servers.keys().join("、");
-                app.send_notification::<lsp_types::notification::ShowMessage>(
+            let doc = app.editor.new_document(&params.text_document.uri);
+            doc.id()
+        }
+    };
+    let uri = params.text_document.uri.to_owned();
+    let text = params.text_document.text.to_owned();
+    app.editor.launch_langauge_servers(doc_id);
+    let doc = app.editor.document_by_uri(&uri);
+    if let Some(doc) = doc {
+        // send didOpen notification directly, notifies will pending until server initialized.
+        let language_id = doc.language_id().to_owned().unwrap_or_default();
+        doc.language_servers.values().for_each(|ls| {
+            ls.text_document_did_open(
+                uri.clone(),
+                doc.version(),
+                text.clone(),
+                language_id.to_string(),
+            )
+            .unwrap();
+        });
+        if doc.language_servers.values().any(|ls| ls.is_initialized()) {
+            app.send_notification::<lsp_ext::CustomServerCapabilities>(
+                doc.get_server_capabilities(),
+            );
+        }
+        let configed_servers = doc.language_servers.keys().join("、");
+        app.send_notification::<lsp_types::notification::ShowMessage>(
                     lsp_types::ShowMessageParams {
                         typ: MessageType::INFO,
                         message: if configed_servers.is_empty() {
@@ -51,10 +51,8 @@ pub(crate) fn handle_did_open_text_document(
                         }
                     },
                 )
-            } else {
-                error!("No doc to send trigger characters");
-            }
-        }
+    } else {
+        error!("No doc to send trigger characters");
     }
 
     Ok(())
@@ -116,28 +114,16 @@ pub(crate) fn handle_did_close_text_document(
     params: DidCloseTextDocumentParams,
 ) -> Result<()> {
     let editor = &mut app.editor;
-    let id: Option<DocumentId>;
     {
         let doc = editor.document_by_uri_mut(&params.text_document.uri);
-        id = match doc {
-            Some(doc) => {
-                for language_server in doc.language_servers() {
-                    // tokio::spawn();
-                    language_server
-                        .text_document_did_close(params.clone())
-                        .unwrap();
-                }
-                Some(doc.id)
+        if let Some(doc) = doc {
+            for language_server in doc.language_servers() {
+                language_server
+                    .text_document_did_close(params.clone())
+                    .unwrap();
             }
-            None => {
-                error!("no corresponding doc found for did close request.");
-                None
-            }
+            doc.reset();
         }
-    }
-    if let Some(doc_id) = id {
-        log::debug!("remove {} document successed.", doc_id);
-        editor.documents.remove(&doc_id);
     }
     Ok(())
 }
