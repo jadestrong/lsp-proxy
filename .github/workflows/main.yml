@@ -3,29 +3,45 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+
 jobs:
   build:
     name: build
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [linux, macos, windows]
         include:
-          - build: linux
+          # Linux x86_64
+          - build: linux-x86_64
             os: ubuntu-latest
             rust: nightly
             target: x86_64-unknown-linux-musl
-            archive-name: lsp-proxy-linux.tar.gz
-          - build: macos
+            archive-name: lsp-proxy-linux-x86_64.tar.gz
+          # Linux ARM64
+          - build: linux-arm64
+            os: ubuntu-latest
+            rust: nightly
+            target: aarch64-unknown-linux-musl
+            archive-name: lsp-proxy-linux-arm64.tar.gz
+          # macOS x86_64
+          - build: macos-x86_64
             os: macos-latest
             rust: nightly
             target: x86_64-apple-darwin
-            archive-name: lsp-proxy-macos.tar.gz
-          - build: windows
+            archive-name: lsp-proxy-macos-x86_64.tar.gz
+          # macOS ARM64 (Apple Silicon)
+          - build: macos-arm64
+            os: macos-latest
+            rust: nightly
+            target: aarch64-apple-darwin
+            archive-name: lsp-proxy-macos-arm64.tar.gz
+          # Windows x86_64
+          - build: windows-x86_64
             os: windows-latest
             rust: nightly-x86_64-msvc
             target: x86_64-pc-windows-msvc
-            archive-name: lsp-proxy-windows.7z
+            archive-name: lsp-proxy-windows-x86_64.7z
       fail-fast: false
 
     steps:
@@ -46,52 +62,116 @@ jobs:
           RUST_BACKTRACE: 1
 
       - name: Strip binary (linux and macos)
-        if: matrix.build == 'linux' || matrix.build == 'macos'
+        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-arm64' || matrix.build == 'macos-x86_64' || matrix.build == 'macos-arm64'
         run: strip "target/${{ matrix.target }}/release/lsp-proxy"
 
       - name: Build archive
         shell: bash
         run: |
-          mkdir archive
-          cp LICENSE README.org lsp-proxy.el archive/
-          cd archive
-          if [ "${{ matrix.build }}" = "windows" ]; then
-            cp "../target/${{ matrix.target }}/release/lsp-proxy.exe" ./
-            7z a "${{ matrix.archive-name }}" LICENSE README.org lsp-proxy.el lsp-proxy.exe
+          set -e
+          # Define directories
+          RELEASE_ARCHIVE_DIR="release-archive"
+          NPM_DIR="npm"
+
+          # Create directories
+          mkdir -p "$RELEASE_ARCHIVE_DIR"
+          mkdir -p "$NPM_DIR/@emacs-lsp-proxy"
+
+          # Copy common files to release archive directory
+          cp LICENSE README.org lsp-proxy.el "$RELEASE_ARCHIVE_DIR/"
+
+          # Handle platform-specific copying and archiving
+          if [[ "${{ matrix.build }}" == windows* ]]; then
+            WIN_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/win32-x64"
+            mkdir -p "$WIN_PLATFORM_DIR"
+            # Copy binary to release archive directory
+            cp "target/${{ matrix.target }}/release/lsp-proxy.exe" "$RELEASE_ARCHIVE_DIR/"
+            # Copy binary to npm package directory
+            cp "target/${{ matrix.target }}/release/lsp-proxy.exe" "$WIN_PLATFORM_DIR/"
+            # Create release archive
+            7z a "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" "$RELEASE_ARCHIVE_DIR/LICENSE" "$RELEASE_ARCHIVE_DIR/README.org" "$RELEASE_ARCHIVE_DIR/lsp-proxy.el" "$RELEASE_ARCHIVE_DIR/lsp-proxy.exe"
           else
-            cp "../target/${{ matrix.target }}/release/lsp-proxy" ./
-            tar -czf "${{ matrix.archive-name }}" LICENSE README.org lsp-proxy.el lsp-proxy
+            LINUX_MACOS_PLATFORM_DIR=""
+            if [[ "${{ matrix.build }}" == linux-x86_64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/linux-x64/bin"; fi
+            if [[ "${{ matrix.build }}" == linux-arm64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/linux-arm64/bin"; fi
+            if [[ "${{ matrix.build }}" == macos-x86_64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/darwin-x64/bin"; fi
+            if [[ "${{ matrix.build }}" == macos-arm64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/darwin-arm64/bin"; fi
+            
+            mkdir -p "$LINUX_MACOS_PLATFORM_DIR"
+            # Copy binary to release archive directory
+            cp "target/${{ matrix.target }}/release/lsp-proxy" "$RELEASE_ARCHIVE_DIR/"
+            # Copy binary to npm package directory
+            cp "target/${{ matrix.target }}/release/lsp-proxy" "$LINUX_MACOS_PLATFORM_DIR/"
+            chmod +x "$LINUX_MACOS_PLATFORM_DIR/lsp-proxy"
+            # Create release archive
+            tar -czf "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" -C "$RELEASE_ARCHIVE_DIR" LICENSE README.org lsp-proxy.el lsp-proxy
           fi
-      - name: Upload archive
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive-name }}
-          path: archive
+          name: build-artifacts-${{ matrix.build }}
+          path: |
+            release-archive/${{ matrix.archive-name }}
+            npm/@emacs-lsp-proxy
+
+  publish-npm:
+    name: Publish npm packages
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          cd artifacts/npm/@emacs-lsp-proxy/linux-x64 && npm publish --access public
+          cd ../../linux-arm64 && npm publish --access public
+          cd ../../darwin-x64 && npm publish --access public
+          cd ../../darwin-arm64 && npm publish --access public
+          cd ../../win32-x64 && npm publish --access public
+
   release:
-      name: Release
-      needs: build
-      runs-on: ubuntu-latest
+    name: Release
+    needs: publish-npm
+    runs-on: ubuntu-latest
 
-      steps:
-        - name: Checkout repository
-          uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        - name: Download artifacts
-          uses: actions/download-artifact@v4
-          with:
-            path: assets
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
 
-        - name: Create GitHub Release
-          uses: softprops/action-gh-release@v2
-          if: startsWith(github.ref, 'refs/tags/')
-          with:
-            files: |
-                   ./assets/lsp-proxy-linux.tar.gz/lsp-proxy-linux.tar.gz
-                   ./assets/lsp-proxy-macos.tar.gz/lsp-proxy-macos.tar.gz
-                   ./assets/lsp-proxy-windows.7z/lsp-proxy-windows.7z
-            body: |
-              Automated release for build artifacts.
-            draft: false
-            prerelease: false
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ./assets/build-artifacts-linux-x86_64/release-archive/lsp-proxy-linux-x86_64.tar.gz
+            ./assets/build-artifacts-linux-arm64/release-archive/lsp-proxy-linux-arm64.tar.gz
+            ./assets/build-artifacts-macos-x86_64/release-archive/lsp-proxy-macos-x86_64.tar.gz
+            ./assets/build-artifacts-macos-arm64/release-archive/lsp-proxy-macos-arm64.tar.gz
+            ./assets/build-artifacts-windows-x86_64/release-archive/lsp-proxy-windows-x86_64.7z
+          body: |
+            Automated release for build artifacts.
+            
+            ## Supported Platforms
+            
+            - Linux (x86_64, ARM64)
+            - macOS (x86_64, ARM64/Apple Silicon)
+            - Windows (x86_64)
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -196,8 +196,8 @@ Disable idle completion if set to nil."
   :type 'string)
 
 (defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
-                                                   "./lsp-proxy.exe"
-                                                 "./lsp-proxy")
+                                                   "./emacs-lsp-proxy.exe"
+                                                 "./emacs-lsp-proxy")
                                                (if load-file-name
                                                    (file-name-directory load-file-name)
                                                  default-directory)))

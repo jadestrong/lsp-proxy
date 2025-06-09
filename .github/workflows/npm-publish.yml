@@ -1,0 +1,54 @@
+name: npm-publish
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  prepare-npm:
+    name: Prepare npm packages
+    runs-on: ubuntu-latest
+    needs: [build]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Unpack and copy binaries to npm packages
+        run: |
+          set -e
+          # Linux x64
+          mkdir -p npm/@emacs-lsp-proxy/linux-x64/bin
+          tar -xzf artifacts/lsp-proxy-linux-x86_64.tar.gz/lsp-proxy-linux-x86_64.tar.gz -C npm/@emacs-lsp-proxy/linux-x64/bin lsp-proxy
+          chmod +x npm/@emacs-lsp-proxy/linux-x64/bin/lsp-proxy
+          # Linux arm64
+          mkdir -p npm/@emacs-lsp-proxy/linux-arm64/bin
+          tar -xzf artifacts/lsp-proxy-linux-arm64.tar.gz/lsp-proxy-linux-arm64.tar.gz -C npm/@emacs-lsp-proxy/linux-arm64/bin lsp-proxy
+          chmod +x npm/@emacs-lsp-proxy/linux-arm64/bin/lsp-proxy
+          # macOS x64
+          mkdir -p npm/@emacs-lsp-proxy/darwin-x64/bin
+          tar -xzf artifacts/lsp-proxy-macos-x86_64.tar.gz/lsp-proxy-macos-x86_64.tar.gz -C npm/@emacs-lsp-proxy/darwin-x64/bin lsp-proxy
+          chmod +x npm/@emacs-lsp-proxy/darwin-x64/bin/lsp-proxy
+          # macOS arm64
+          mkdir -p npm/@emacs-lsp-proxy/darwin-arm64/bin
+          tar -xzf artifacts/lsp-proxy-macos-arm64.tar.gz/lsp-proxy-macos-arm64.tar.gz -C npm/@emacs-lsp-proxy/darwin-arm64/bin lsp-proxy
+          chmod +x npm/@emacs-lsp-proxy/darwin-arm64/bin/lsp-proxy
+          # Windows x64
+          7z x artifacts/lsp-proxy-windows-x86_64.7z/lsp-proxy-windows-x86_64.7z -obin
+          mv bin/lsp-proxy.exe npm/@emacs-lsp-proxy/win32-x64/lsp-proxy.exe
+
+      - name: Publish npm packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -e
+          cd npm/@emacs-lsp-proxy/linux-x64 && npm publish --access public
+          cd ../../linux-arm64 && npm publish --access public
+          cd ../../darwin-x64 && npm publish --access public
+          cd ../../darwin-arm64 && npm publish --access public
+          cd ../../win32-x64 && npm publish --access public
