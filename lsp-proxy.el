@@ -910,6 +910,14 @@ Only works when mode is `tick or `alive."
                       `(auto-jump . ,xref-auto-jump-to-first-definition)))))
     (xref--show-xrefs xrefs display-action)))
 
+(defcustom lsp-proxy-lazy-xref-threshold 10000
+  "Threshold for using lazy xref evaluation.
+Files with more than this many lines will use lazy evaluation to improve performance.
+Set to nil to always use lazy evaluation, or a very large number to disable it."
+  :type '(choice (const :tag "Always lazy" nil)
+                 (integer :tag "Line count threshold"))
+  :group 'lsp-proxy)
+
 ;; Custom xref location class for lazy evaluation
 (cl-defstruct (lsp-proxy--lazy-location
                (:constructor lsp-proxy--lazy-location-create)
@@ -938,28 +946,82 @@ Only works when mode is `tick or `alive."
          (start (plist-get range :start)))
     (1+ (plist-get start :line))))
 
+(defun lsp-proxy--should-use-lazy-xref-p (filepath)
+  "Determine if FILEPATH should use lazy xref evaluation based on file size."
+  (and lsp-proxy-lazy-xref-threshold
+       (file-exists-p filepath)
+       (let ((visiting (find-buffer-visiting filepath)))
+         (cond
+          (visiting
+           ;; If buffer is already open, check line count directly
+           (with-current-buffer visiting
+             (> (line-number-at-pos (point-max)) lsp-proxy-lazy-xref-threshold)))
+          (t
+           ;; For unopened files, estimate based on file size (rough heuristic)
+           ;; Assume average ~50 characters per line
+           (> (/ (nth 7 (file-attributes filepath)) 50) lsp-proxy-lazy-xref-threshold))))))
+
+(defun lsp-proxy--process-location-eager (location-data)
+  "Process a single location using eager evaluation (original method)."
+  (let* ((uri (plist-get location-data :uri))
+         (filepath (lsp-proxy--uri-to-path uri))
+         (visiting (find-buffer-visiting filepath))
+         (range (plist-get location-data :range))
+         (start (plist-get range :start))
+         (end (plist-get range :end))
+         (start-line (plist-get start :line))
+         (start-column (plist-get start :character))
+         (collect (lambda ()
+                    (save-excursion
+                      (save-restriction
+                        (widen)
+                        (let* ((beg (eglot--lsp-position-to-point start))
+                               (end-pos (eglot--lsp-position-to-point end))
+                               (bol (progn (goto-char beg) (line-beginning-position)))
+                               (summary (buffer-substring bol (line-end-position)))
+                               (hi-beg (- beg bol))
+                               (hi-end (- (min (line-end-position) end-pos) bol)))
+                          (when summary
+                            (add-face-text-property hi-beg hi-end 'xref-match t summary))
+                          (xref-make summary
+                                     (xref-make-file-location filepath (1+ start-line) start-column))))))))
+    (cond
+     (visiting (with-current-buffer visiting (funcall collect)))
+     ((file-readable-p filepath)
+      (with-temp-buffer
+        (insert-file-contents-literally filepath)
+        (funcall collect)))
+     (t (lsp-proxy--warn "Failed to process xref entry for file %s" filepath)
+        nil))))
+
+(defun lsp-proxy--process-location-lazy (location-data)
+  "Process a single location using lazy evaluation."
+  (let* ((uri (plist-get location-data :uri))
+         (filepath (lsp-proxy--uri-to-path uri))
+         (range (plist-get location-data :range))
+         (start (plist-get range :start))
+         (start-line (plist-get start :line))
+         (start-column (plist-get start :character))
+         (location (lsp-proxy--lazy-location-create
+                    :filepath filepath
+                    :range range))
+         (summary (format "%s:%d:%d" 
+                         (file-name-nondirectory filepath)
+                         (1+ start-line) 
+                         (1+ start-column))))
+    (when (file-exists-p filepath)
+      (xref-make summary location))))
 
 (defun lsp-proxy--process-locations (locations)
-  "Process LOCATIONS and show xrefs with lazy evaluation."
+  "Process LOCATIONS and show xrefs, using lazy evaluation for large files."
   (if (seq-empty-p locations)
       (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
     (when-let* ((locs (cl-mapcar (lambda (it)
                                    (let* ((uri (plist-get it :uri))
-                                          (filepath (lsp-proxy--uri-to-path uri))
-                                          (range (plist-get it :range))
-                                          (start (plist-get range :start))
-                                          (start-line (plist-get start :line))
-                                          (start-column (plist-get start :character))
-                                          (location (lsp-proxy--lazy-location-create
-                                                     :filepath filepath
-                                                     :range range))
-                                          ;; Simple summary showing file and line - no expensive computation
-                                          (summary (format "%s:%d:%d" 
-                                                          (file-name-nondirectory filepath)
-                                                          (1+ start-line) 
-                                                          (1+ start-column))))
-                                     (when (file-exists-p filepath)
-                                       (xref-make summary location))))
+                                          (filepath (lsp-proxy--uri-to-path uri)))
+                                     (if (lsp-proxy--should-use-lazy-xref-p filepath)
+                                         (lsp-proxy--process-location-lazy it)
+                                       (lsp-proxy--process-location-eager it))))
                                  (if (vectorp locations) locations (vector locations)))))
       (lsp-proxy-show-xrefs (delq nil locs) nil nil))))
 
