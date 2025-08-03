@@ -1016,14 +1016,26 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
   "Process LOCATIONS and show xrefs, using lazy evaluation for large files."
   (if (seq-empty-p locations)
       (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
-    (when-let* ((locs (cl-mapcar (lambda (it)
-                                   (let* ((uri (plist-get it :uri))
-                                          (filepath (lsp-proxy--uri-to-path uri)))
-                                     (if (lsp-proxy--should-use-lazy-xref-p filepath)
-                                         (lsp-proxy--process-location-lazy it)
-                                       (lsp-proxy--process-location-eager it))))
-                                 (if (vectorp locations) locations (vector locations)))))
-      (lsp-proxy-show-xrefs (delq nil locs) nil nil))))
+    (let ((locations-vec (if (vectorp locations) locations (vector locations))))
+      ;; Pre-compute lazy evaluation decision for each unique file
+      (let ((file-lazy-map (make-hash-table :test 'equal)))
+        ;; First pass: determine which files should use lazy evaluation
+        (cl-loop for location across locations-vec
+                 for uri = (plist-get location :uri)
+                 for filepath = (lsp-proxy--uri-to-path uri)
+                 unless (gethash filepath file-lazy-map)
+                 do (puthash filepath (lsp-proxy--should-use-lazy-xref-p filepath) file-lazy-map))
+        
+        ;; Second pass: process locations using pre-computed decisions
+        (when-let* ((locs (cl-mapcar (lambda (it)
+                                       (let* ((uri (plist-get it :uri))
+                                              (filepath (lsp-proxy--uri-to-path uri))
+                                              (use-lazy (gethash filepath file-lazy-map)))
+                                         (if use-lazy
+                                             (lsp-proxy--process-location-lazy it)
+                                           (lsp-proxy--process-location-eager it))))
+                                     locations-vec)))
+          (lsp-proxy-show-xrefs (delq nil locs) nil nil))))))
 
 (defun lsp-proxy-find-definition ()
   "Find definition."
