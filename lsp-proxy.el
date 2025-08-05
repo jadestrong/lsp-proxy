@@ -912,10 +912,20 @@ Only works when mode is `tick or `alive."
 
 (defcustom lsp-proxy-lazy-xref-threshold 10000
   "Threshold for using lazy xref evaluation.
-Files with more than this many lines will use lazy evaluation to improve performance.
+Files with more than this many lines will use optimized evaluation to improve performance.
 Set to nil to always use lazy evaluation, or a very large number to disable it."
   :type '(choice (const :tag "Always lazy" nil)
                  (integer :tag "Line count threshold"))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-xref-optimization-strategy 'optimized
+  "Strategy for handling xref in large files.
+- 'eager: Always use original method (may be slow for large files)
+- 'lazy: Use lazy evaluation (no preview, fastest)
+- 'optimized: Use optimized method with preview (balanced)"
+  :type '(choice (const :tag "Eager (original)" eager)
+                 (const :tag "Lazy (no preview)" lazy)
+                 (const :tag "Optimized (fast with preview)" optimized))
   :group 'lsp-proxy)
 
 ;; Custom xref location class for lazy evaluation
@@ -994,6 +1004,76 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
      (t (lsp-proxy--warn "Failed to process xref entry for file %s" filepath)
         nil))))
 
+(defun lsp-proxy--process-location-optimized (location-data)
+  "Process a single location using optimized method for large files."
+  (let* ((uri (plist-get location-data :uri))
+         (filepath (lsp-proxy--uri-to-path uri))
+         (visiting (find-buffer-visiting filepath))
+         (range (plist-get location-data :range))
+         (start (plist-get range :start))
+         (end (plist-get range :end))
+         (start-line (plist-get start :line))
+         (start-column (plist-get start :character))
+         (end-line (plist-get end :line))
+         (end-column (plist-get end :character)))
+    (cond
+     (visiting
+      ;; For visited buffers, use optimized line-based calculation
+      (with-current-buffer visiting
+        (save-excursion
+          (save-restriction
+            (widen)
+            (goto-char (point-min))
+            (forward-line start-line)  ; Much faster than eglot--lsp-position-to-point
+            (let* ((bol (line-beginning-position))
+                   (eol (line-end-position))
+                   (summary (buffer-substring bol eol))
+                   (hi-beg start-column)
+                   (hi-end (if (= start-line end-line)
+                              (min end-column (length summary))
+                            (length summary))))
+              (when (and summary (> hi-end hi-beg))
+                (add-face-text-property hi-beg hi-end 'xref-match t summary))
+              (xref-make (if (string-blank-p summary)
+                            (format "%s:%d:%d" 
+                                   (file-name-nondirectory filepath)
+                                   (1+ start-line) 
+                                   (1+ start-column))
+                          summary)
+                         (xref-make-file-location filepath (1+ start-line) start-column)))))))
+     ((file-readable-p filepath)
+      ;; For unvisited files, use efficient line reading
+      (let ((summary (lsp-proxy--get-line-content filepath start-line start-column end-line end-column)))
+        (xref-make (if (string-blank-p summary)
+                      (format "%s:%d:%d" 
+                             (file-name-nondirectory filepath)
+                             (1+ start-line) 
+                             (1+ start-column))
+                    summary)
+                   (xref-make-file-location filepath (1+ start-line) start-column))))
+     (t (lsp-proxy--warn "Failed to process xref entry for file %s" filepath)
+        nil))))
+
+(defun lsp-proxy--get-line-content (filepath start-line start-column end-line end-column)
+  "Efficiently get line content from FILEPATH without loading entire file."
+  (with-temp-buffer
+    (let ((inhibit-read-only t)
+          (large-file-warning-threshold nil))
+      ;; Only read the lines we need
+      (insert-file-contents filepath nil)
+      (goto-char (point-min))
+      (forward-line start-line)
+      (let* ((bol (line-beginning-position))
+             (eol (line-end-position))
+             (summary (buffer-substring bol eol))
+             (hi-beg start-column)
+             (hi-end (if (= start-line end-line)
+                        (min end-column (length summary))
+                      (length summary))))
+        (when (and summary (> hi-end hi-beg) (>= hi-beg 0))
+          (add-face-text-property hi-beg hi-end 'xref-match t summary))
+        summary))))
+
 (defun lsp-proxy--process-location-lazy (location-data)
   "Process a single location using lazy evaluation."
   (let* ((uri (plist-get location-data :uri))
@@ -1012,30 +1092,153 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
     (when (file-exists-p filepath)
       (xref-make summary location))))
 
+(defun lsp-proxy--batch-process-locations-optimized (locations-by-file)
+  "Batch process locations grouped by file for optimal performance."
+  (let (results)
+    (maphash 
+     (lambda (filepath file-locations)
+       (let ((visiting (find-buffer-visiting filepath)))
+         (cond
+          (visiting
+           ;; Process all locations in one buffer operation
+           (with-current-buffer visiting
+             (save-excursion
+               (save-restriction
+                 (widen)
+                 (dolist (location-data file-locations)
+                   (let* ((range (plist-get location-data :range))
+                          (start (plist-get range :start))
+                          (end (plist-get range :end))
+                          (start-line (plist-get start :line))
+                          (start-column (plist-get start :character))
+                          (end-line (plist-get end :line))
+                          (end-column (plist-get end :character)))
+                     (goto-char (point-min))
+                     (forward-line start-line)
+                     (let* ((bol (line-beginning-position))
+                            (eol (line-end-position))
+                            (summary (buffer-substring bol eol))
+                            (hi-beg start-column)
+                            (hi-end (if (= start-line end-line)
+                                       (min end-column (length summary))
+                                     (length summary))))
+                       (when (and summary (> hi-end hi-beg))
+                         (add-face-text-property hi-beg hi-end 'xref-match t summary))
+                       (push (xref-make (if (string-blank-p summary)
+                                           (format "%s:%d:%d" 
+                                                  (file-name-nondirectory filepath)
+                                                  (1+ start-line) 
+                                                  (1+ start-column))
+                                         summary)
+                                        (xref-make-file-location filepath (1+ start-line) start-column))
+                             results))))))))
+          ((file-readable-p filepath)
+           ;; Batch read file once for all locations
+           (let ((file-lines (lsp-proxy--read-file-lines filepath file-locations)))
+             (dolist (location-data file-locations)
+               (let* ((range (plist-get location-data :range))
+                      (start (plist-get range :start))
+                      (start-line (plist-get start :line))
+                      (start-column (plist-get start :character))
+                      (summary (and (< start-line (length file-lines))
+                                   (aref file-lines start-line))))
+                 (when summary
+                   (let* ((hi-beg start-column)
+                          (hi-end (min (+ start-column 10) (length summary)))) ; Simple highlight
+                     (when (and (> hi-end hi-beg) (>= hi-beg 0))
+                       (add-face-text-property hi-beg hi-end 'xref-match t summary))))
+                 (push (xref-make (or summary
+                                     (format "%s:%d:%d" 
+                                            (file-name-nondirectory filepath)
+                                            (1+ start-line) 
+                                            (1+ start-column)))
+                                  (xref-make-file-location filepath (1+ start-line) start-column))
+                       results)))))
+          (t
+           (lsp-proxy--warn "Failed to process xref entry for file %s" filepath)))))
+     locations-by-file)
+    (nreverse results)))
+
+(defun lsp-proxy--read-file-lines (filepath locations)
+  "Read only the required lines from FILEPATH for given LOCATIONS."
+  (let ((line-numbers (mapcar (lambda (loc) 
+                               (plist-get (plist-get (plist-get loc :range) :start) :line))
+                             locations)))
+    (with-temp-buffer
+      (let ((inhibit-read-only t)
+            (large-file-warning-threshold nil)
+            (lines (make-hash-table :test 'equal)))
+        (insert-file-contents filepath nil)
+        (goto-char (point-min))
+        (let ((current-line 0))
+          (while (not (eobp))
+            (when (memq current-line line-numbers)
+              (puthash current-line (buffer-substring (line-beginning-position) (line-end-position)) lines))
+            (forward-line 1)
+            (setq current-line (1+ current-line))))
+        ;; Convert hash table to list indexed by line number
+        (let ((max-line (apply #'max line-numbers))
+              (result-lines (make-vector (1+ max-line) nil)))
+          (maphash (lambda (line-num content)
+                    (aset result-lines line-num content))
+                  lines)
+          result-lines)))))
+
 (defun lsp-proxy--process-locations (locations)
-  "Process LOCATIONS and show xrefs, using lazy evaluation for large files."
+  "Process LOCATIONS and show xrefs, using optimized batch processing."
   (if (seq-empty-p locations)
       (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
     (let ((locations-vec (if (vectorp locations) locations (vector locations))))
-      ;; Pre-compute lazy evaluation decision for each unique file
-      (let ((file-lazy-map (make-hash-table :test 'equal)))
-        ;; First pass: determine which files should use lazy evaluation
+      ;; Group locations by file and strategy
+      (let ((file-strategy-map (make-hash-table :test 'equal))
+            (eager-files (make-hash-table :test 'equal))
+            (optimized-files (make-hash-table :test 'equal))
+            (lazy-results nil))
+        
+        ;; First pass: group locations by file and determine strategy
         (cl-loop for location across locations-vec
                  for uri = (plist-get location :uri)
                  for filepath = (lsp-proxy--uri-to-path uri)
-                 unless (gethash filepath file-lazy-map)
-                 do (puthash filepath (lsp-proxy--should-use-lazy-xref-p filepath) file-lazy-map))
+                 do (let ((strategy (or (gethash filepath file-strategy-map)
+                                       (let ((is-large (lsp-proxy--should-use-lazy-xref-p filepath)))
+                                         (puthash filepath 
+                                                  (cond
+                                                   ((eq lsp-proxy-xref-optimization-strategy 'eager) 'eager)
+                                                   ((eq lsp-proxy-xref-optimization-strategy 'lazy) (if is-large 'lazy 'eager))
+                                                   ((eq lsp-proxy-xref-optimization-strategy 'optimized) (if is-large 'optimized 'eager))
+                                                   (t 'eager))
+                                                  file-strategy-map)))))
+                      (pcase strategy
+                        ('eager 
+                         (let ((current-list (gethash filepath eager-files)))
+                           (puthash filepath (cons location current-list) eager-files)))
+                        ('optimized 
+                         (let ((current-list (gethash filepath optimized-files)))
+                           (puthash filepath (cons location current-list) optimized-files)))
+                        ('lazy
+                         (push (lsp-proxy--process-location-lazy location) lazy-results)))))
         
-        ;; Second pass: process locations using pre-computed decisions
-        (when-let* ((locs (cl-mapcar (lambda (it)
-                                       (let* ((uri (plist-get it :uri))
-                                              (filepath (lsp-proxy--uri-to-path uri))
-                                              (use-lazy (gethash filepath file-lazy-map)))
-                                         (if use-lazy
-                                             (lsp-proxy--process-location-lazy it)
-                                           (lsp-proxy--process-location-eager it))))
-                                     locations-vec)))
-          (lsp-proxy-show-xrefs (delq nil locs) nil nil))))))
+        ;; Process each strategy group in batch
+        (let ((all-results lazy-results))
+          ;; Process eager files (original method, but batched)
+          (when (> (hash-table-count eager-files) 0)
+            (maphash (lambda (filepath file-locations)
+                      (dolist (location (nreverse file-locations))
+                        (when-let ((result (lsp-proxy--process-location-eager location)))
+                          (push result all-results))))
+                    eager-files))
+          
+          ;; Process optimized files (batch optimized method)
+          (when (> (hash-table-count optimized-files) 0)
+            ;; Reverse the lists in optimized-files for correct order
+            (let ((corrected-optimized-files (make-hash-table :test 'equal)))
+              (maphash (lambda (filepath file-locations)
+                        (puthash filepath (nreverse file-locations) corrected-optimized-files))
+                      optimized-files)
+              (setq all-results (append (lsp-proxy--batch-process-locations-optimized corrected-optimized-files) all-results))))
+          
+          (when all-results
+            (lsp-proxy-show-xrefs (delq nil all-results) nil nil)))))))
 
 (defun lsp-proxy-find-definition ()
   "Find definition."
