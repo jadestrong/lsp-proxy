@@ -2,8 +2,7 @@ use log::{debug, error};
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    cmp::Ordering, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}
 };
 use stringslice::StringSlice;
 
@@ -450,6 +449,22 @@ pub enum ImenuEntry {
     Position((u32, u32)), // (line, character)
 }
 
+impl ImenuEntry {
+    /// Retrieve the position information of the entry for sorting comparison
+    fn get_position(&self) -> (u32, u32) {
+        match self {
+            ImenuEntry::Group(children) => {
+                // For a Group, use the position of the first child, or (0, 0) if it is empty
+                children
+                    .first()
+                    .map(|(_, entry)| entry.get_position())
+                    .unwrap_or((0, 0))
+            }
+            ImenuEntry::Position(pos) => *pos,
+        }
+    }
+}
+
 pub fn lsp_symbols_to_imenu(response: Option<DocumentSymbolResponse>) -> Vec<(String, ImenuEntry)> {
     response.map_or(Vec::new(), |symbols| match symbols {
         DocumentSymbolResponse::Flat(symbols) => flat_symbols_to_imenu(&symbols),
@@ -461,24 +476,38 @@ pub fn lsp_symbols_to_imenu(response: Option<DocumentSymbolResponse>) -> Vec<(St
 fn nested_symbols_to_imenu(symbols: &[DocumentSymbol]) -> Vec<(String, ImenuEntry)> {
     symbols
         .iter()
-        .map(|sym| {
+        .flat_map(|sym| {
             let name = sym.name.clone();
-            sym.children.as_ref().map_or_else(
-                || {
-                    let lsp_types::Position { line, character } = sym.range.start;
-                    (name.clone(), ImenuEntry::Position((line, character)))
-                },
-                |children| {
-                    if children.is_empty() {
-                        let lsp_types::Position { line, character } = sym.range.start;
-                        return (name.clone(), ImenuEntry::Position((line, character)));
-                    } else {
-                        let children = nested_symbols_to_imenu(&children);
-                        (name.clone(), ImenuEntry::Group(children))
-                    }
-                },
-            )
+            let lsp_types::Position { line, character } = sym.range.start;
+            let position_entry = (name.clone(), ImenuEntry::Position((line, character)));
+
+            match &sym.children {
+                Some(children) if !children.is_empty() => {
+                    let children_entries = nested_symbols_to_imenu(&children);
+                    let group_entry = (name.clone(), ImenuEntry::Group(children_entries));
+                    vec![position_entry, group_entry]
+                }
+                _ => vec![position_entry],
+            }
         })
+        // .map(|sym| {
+        //     let name = sym.name.clone();
+        //     sym.children.as_ref().map_or_else(
+        //         || {
+        //             let lsp_types::Position { line, character } = sym.range.start;
+        //             (name.clone(), ImenuEntry::Position((line, character)))
+        //         },
+        //         |children| {
+        //             if children.is_empty() {
+        //                 let lsp_types::Position { line, character } = sym.range.start;
+        //                 return (name.clone(), ImenuEntry::Position((line, character)));
+        //             } else {
+        //                 let children = nested_symbols_to_imenu(&children);
+        //                 (name.clone(), ImenuEntry::Group(children))
+        //             }
+        //         },
+        //     )
+        // })
         .collect()
 }
 
@@ -494,3 +523,58 @@ fn flat_symbols_to_imenu(symbols: &[SymbolInformation]) -> Vec<(String, ImenuEnt
         .collect()
 }
 
+pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
+    // Create a temporary structure to hold the grouping information
+    let mut groups: Vec<Vec<(String, ImenuEntry)>> = Vec::new();
+    let mut current_group: Vec<(String, ImenuEntry)> = Vec::new();
+    let mut last_name: Option<String> = None;
+
+    // First, sort all entries by their positions.
+    entries.sort_by(|a, b| {
+        let pos_a = a.1.get_position();
+        let pos_b = b.1.get_position();
+        pos_a.0.cmp(&pos_b.0).then_with(|| pos_a.1.cmp(&pos_b.1))
+    });
+
+    for (name, entry) in entries.drain(..) {
+        match &last_name {
+            Some(last) if last == &name => {
+                // For entries with the same name, add them to the current group.
+                current_group.push((name.clone(), entry));
+            },
+            _ => {
+                // For a new name, save the current group and start a new group
+                if !current_group.is_empty() {
+                    groups.push(current_group);
+                    current_group = Vec::new();
+                }
+                current_group.push((name.clone(), entry));
+                last_name = Some(name);
+            },
+        }
+    }
+
+    if !current_group.is_empty() {
+        groups.push(current_group);
+    }
+
+    for group in groups.iter_mut() {
+        group.sort_by(|a, b| {
+            match (&a.1, &b.1) {
+                (ImenuEntry::Position(_), ImenuEntry::Group(_)) => Ordering::Less,
+                (ImenuEntry::Group(_), ImenuEntry::Position(_)) => Ordering::Greater,
+                _ => Ordering::Equal,
+            }
+        });
+
+        // Recursively sort the contents within the Group
+        for (_, entry) in group.iter_mut() {
+            if let ImenuEntry::Group(ref mut children) = entry {
+                sort_imenu_entries_grouped(children);
+            }
+        }
+    }
+
+    // Flatten the grouped results back into the original Vec
+    *entries = groups.into_iter().flatten().collect();
+}
