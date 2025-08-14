@@ -126,9 +126,9 @@ the buffer when it becomes large."
   :group 'lsp-proxy
   :type 'boolean)
 
-(defcustom lsp-proxy-log-level 1
-  "A number indicating the log level. Defaults to 1."
-  :type '(choice (const :tag "Warn" 0)
+(defcustom lsp-proxy-log-level 0
+  "A number indicating the log level. Defaults to 0."
+  :type '(choice (const :tag "Error" 0)
           (const :tag "Info" 1)
           (const :tag "Debug" 2)
           (const :tag "Trace" 3))

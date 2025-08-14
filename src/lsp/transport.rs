@@ -1,7 +1,7 @@
 use super::{jsonrpc, Error, Result};
-use crate::msg::RequestId;
+use crate::{msg::RequestId, logging::LspLogger};
 use anyhow::Context;
-use log::{debug, error};
+use log::error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
@@ -35,6 +35,7 @@ enum ServerMessage {
 pub struct Transport {
     id: usize,
     name: String,
+    logger: LspLogger,
     pending_requests: Mutex<HashMap<RequestId, Sender<core::result::Result<Value, Error>>>>,
 }
 
@@ -55,9 +56,12 @@ impl Transport {
         let (tx, client_rx) = unbounded_channel();
         let notify = Arc::new(Notify::new());
 
+        let logger = LspLogger::new(name.clone(), Some(id as u32));
+        
         let transport = Self {
             id,
             name,
+            logger,
             pending_requests: Mutex::new(HashMap::default()),
         };
 
@@ -88,7 +92,7 @@ impl Transport {
     ) {
         let mut recv_buffer = String::new();
         loop {
-            match Self::recv_server_message(&mut server_stdout, &mut recv_buffer, &transport.name)
+            match Self::recv_server_message(&mut server_stdout, &mut recv_buffer, &transport.logger)
                 .await
             {
                 Ok(msg) => {
@@ -246,7 +250,7 @@ impl Transport {
     async fn err(transport: Arc<Self>, mut server_stderr: BufReader<ChildStderr>) {
         let mut recv_buffer = String::new();
         loop {
-            match Self::recv_server_error(&mut server_stderr, &mut recv_buffer, &transport.name)
+            match Self::recv_server_error(&mut server_stderr, &mut recv_buffer, &transport.logger)
                 .await
             {
                 Ok(_) => {}
@@ -261,7 +265,7 @@ impl Transport {
     async fn recv_server_message(
         reader: &mut (impl AsyncBufRead + Unpin + Send),
         buffer: &mut String,
-        _language_server_name: &str,
+        logger: &LspLogger,
     ) -> core::result::Result<ServerMessage, Error> {
         let mut content_length = None;
         loop {
@@ -298,7 +302,9 @@ impl Transport {
         reader.read_exact(&mut content).await?;
         let msg = std::str::from_utf8(&content).context("invalid utf8 from server")?;
 
-        debug!("{_language_server_name} <- {msg}");
+        // Log the received message with structured logging
+        logger.log_response(msg);
+        
         let output: serde_json::Result<ServerMessage> = serde_json::from_str(msg);
 
         Ok(output?)
@@ -307,13 +313,13 @@ impl Transport {
     async fn recv_server_error(
         err: &mut (impl AsyncBufRead + Unpin + Send),
         buffer: &mut String,
-        language_server_name: &str,
+        logger: &LspLogger,
     ) -> Result<()> {
         buffer.truncate(0);
         if err.read_line(buffer).await? == 0 {
             return Err(Error::StreamClosed);
         };
-        error!("{language_server_name} err <- {buffer:?}");
+        logger.log_error(&buffer.trim());
         Ok(())
     }
 
@@ -393,9 +399,14 @@ impl Transport {
         &self,
         server_stdin: &mut BufWriter<ChildStdin>,
         request: String,
-        language_server_name: &str,
+        _language_server_name: &str,
     ) -> Result<()> {
-        debug!("{language_server_name} -> {request}");
+        // Use structured logging for outgoing messages
+        if let Some(method) = LspLogger::extract_method(&request) {
+            self.logger.log_request(&method, &request);
+        } else {
+            self.logger.log_debug(&format!("Sending message: {}", &request));
+        }
 
         // send the headers
         server_stdin

@@ -14,6 +14,7 @@ mod error;
 mod fuzzy;
 mod handlers;
 mod job;
+mod logging;
 mod lsp;
 mod lsp_ext;
 mod main_loop;
@@ -28,32 +29,14 @@ use anyhow::{Context, Result};
 use args::Args;
 use config::{initialize_config_file, initialize_log_file, log_file};
 use log::{error, info};
+use logging::init_tracing;
+use std::error::Error;
 
 use crate::{connection::Connection, main_loop::main_loop};
 
 fn setup_logging(verbosity: u64) -> Result<()> {
-    let mut base_config = fern::Dispatch::new();
-
-    base_config = match verbosity {
-        0 => base_config.level(log::LevelFilter::Warn),
-        1 => base_config.level(log::LevelFilter::Info),
-        2 => base_config.level(log::LevelFilter::Debug),
-        _3_or_more => base_config.level(log::LevelFilter::Trace),
-    };
-
-    let file_config = fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "{} {} [{}] {}",
-                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"),
-                record.target(),
-                record.level(),
-                message
-            ))
-        })
-        .chain(fern::log_file(log_file())?);
-
-    base_config.chain(file_config).apply()?;
+    // Only use tracing for all logging
+    init_tracing(verbosity)?;
 
     Ok(())
 }
@@ -69,7 +52,18 @@ fn try_main() -> Result<()> {
     let args = Args::parse_args().context("could not parse arguments")?;
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
-    setup_logging(args.log_level).context("failed to initialize logging")?;
+    
+    if let Err(e) = setup_logging(args.log_level) {
+        eprintln!("Failed to setup logging: {}", e);
+        eprintln!("Error chain:");
+        let mut source = e.source();
+        while let Some(err) = source {
+            eprintln!("  Caused by: {}", err);
+            source = err.source();
+        }
+        return Err(e).context("failed to initialize logging");
+    }
+    
     info!("Server starting...");
     with_extra_thread("LspProxy", run_server)?;
 
