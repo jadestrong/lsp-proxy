@@ -49,12 +49,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ matrix.rust }}
-          profile: minimal
-          override: true
-          target: ${{ matrix.target }}
+          targets: ${{ matrix.target }}
 
       - name: Build binary
         run: cargo build --verbose --release --target ${{ matrix.target }}
@@ -63,7 +61,7 @@ jobs:
 
       - name: Strip binary (linux and macos)
         if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-arm64' || matrix.build == 'macos-x86_64' || matrix.build == 'macos-arm64'
-        run: strip "target/${{ matrix.target }}/release/lsp-proxy"
+        run: strip "target/${{ matrix.target }}/release/emacs-lsp-proxy"
 
       - name: Build archive
         shell: bash
@@ -85,11 +83,11 @@ jobs:
             WIN_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/win32-x64"
             mkdir -p "$WIN_PLATFORM_DIR"
             # Copy binary to release archive directory
-            cp "target/${{ matrix.target }}/release/lsp-proxy.exe" "$RELEASE_ARCHIVE_DIR/"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy.exe"
             # Copy binary to npm package directory
-            cp "target/${{ matrix.target }}/release/lsp-proxy.exe" "$WIN_PLATFORM_DIR/"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "$WIN_PLATFORM_DIR/emacs-lsp-proxy.exe"
             # Create release archive
-            7z a "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" "$RELEASE_ARCHIVE_DIR/LICENSE" "$RELEASE_ARCHIVE_DIR/README.org" "$RELEASE_ARCHIVE_DIR/lsp-proxy.el" "$RELEASE_ARCHIVE_DIR/lsp-proxy.exe"
+            7z a "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" "$RELEASE_ARCHIVE_DIR/LICENSE" "$RELEASE_ARCHIVE_DIR/README.org" "$RELEASE_ARCHIVE_DIR/lsp-proxy.el" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy.exe"
           else
             LINUX_MACOS_PLATFORM_DIR=""
             if [[ "${{ matrix.build }}" == linux-x86_64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/linux-x64/bin"; fi
@@ -99,12 +97,12 @@ jobs:
             
             mkdir -p "$LINUX_MACOS_PLATFORM_DIR"
             # Copy binary to release archive directory
-            cp "target/${{ matrix.target }}/release/lsp-proxy" "$RELEASE_ARCHIVE_DIR/"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy"
             # Copy binary to npm package directory
-            cp "target/${{ matrix.target }}/release/lsp-proxy" "$LINUX_MACOS_PLATFORM_DIR/"
-            chmod +x "$LINUX_MACOS_PLATFORM_DIR/lsp-proxy"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "$LINUX_MACOS_PLATFORM_DIR/emacs-lsp-proxy"
+            chmod +x "$LINUX_MACOS_PLATFORM_DIR/emacs-lsp-proxy"
             # Create release archive
-            tar -czf "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" -C "$RELEASE_ARCHIVE_DIR" LICENSE README.org lsp-proxy.el lsp-proxy
+            tar -czf "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" -C "$RELEASE_ARCHIVE_DIR" LICENSE README.org lsp-proxy.el emacs-lsp-proxy
           fi
 
       - name: Upload artifacts
@@ -119,25 +117,51 @@ jobs:
     name: Publish npm packages
     needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      - name: Reorganize npm packages
+        run: |
+          set -e
+          # Create consolidated npm directory from artifacts
+          mkdir -p consolidated-npm/@emacs-lsp-proxy
+          
+          # Copy platform-specific packages from different artifacts
+          for build in linux-x86_64 linux-arm64 macos-x86_64 macos-arm64 windows-x86_64; do
+            if [ -d "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy" ]; then
+              cp -r artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/* consolidated-npm/@emacs-lsp-proxy/
+            fi
+          done
+          
+          # Copy the main package
+          cp -r npm/emacs-lsp-proxy consolidated-npm/
+
       - name: Publish npm packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
-          cd artifacts/npm/@emacs-lsp-proxy/linux-x64 && npm publish --access public
-          cd ../../linux-arm64 && npm publish --access public
-          cd ../../darwin-x64 && npm publish --access public
-          cd ../../darwin-arm64 && npm publish --access public
-          cd ../../win32-x64 && npm publish --access public
+          # Publish platform-specific packages first
+          cd consolidated-npm/@emacs-lsp-proxy/linux-x64 && npm publish --access public
+          cd ../linux-arm64 && npm publish --access public
+          cd ../darwin-x64 && npm publish --access public
+          cd ../darwin-arm64 && npm publish --access public
+          cd ../win32-x64 && npm publish --access public
+          # Publish main package
+          cd ../../emacs-lsp-proxy && npm publish --access public
 
   release:
     name: Release
