@@ -1,0 +1,63 @@
+#!/usr/bin/env node
+const childProcess = require('child_process');
+const os = require('os');
+
+const knownWindowsPackages = {
+    'win32 x64 LE': '@emacs-lsp-proxy/win32-x64',
+};
+
+const knownUnixlikePackages = {
+    'darwin arm64 LE': '@emacs-lsp-proxy/darwin-arm64',
+    'darwin x64 LE': '@emacs-lsp-proxy/darwin-x64',
+    'linux arm64 LE': '@emacs-lsp-proxy/linux-arm64',
+    'linux x64 LE': '@emacs-lsp-proxy/linux-x64',
+};
+
+function pkgAndSubpathforCurrentPlatform() {
+    let pkg;
+    let subpath;
+
+    let platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
+
+    if (platformKey in knownWindowsPackages) {
+        pkg = knownWindowsPackages[platformKey];
+        subpath = 'emacs-lsp-proxy.exe';
+    }
+
+    else if (platformKey in knownUnixlikePackages) {
+        pkg = knownUnixlikePackages[platformKey];
+        subpath = 'bin/emacs-lsp-proxy';
+    }
+
+    else {
+        throw new Error(`Unsupported platform: ${platformKey}`);
+    }
+
+    return {pkg, subpath};
+}
+
+function generateBinPath() {
+    const {pkg, subpath} = pkgAndSubpathforCurrentPlatform();
+
+    let binPath;
+    try {
+        binPath = require.resolve(`${pkg}/${subpath}`);
+    } catch (e) {
+        // If that didn't work, then someone probably installed the package with "no-optional" flag.
+        // Our install script attempts to compensate for this by
+        // manually downloading the package instead.
+        // Check for that next.
+        // binPath = downloadedBinPath(pkg, subpath);
+        // if (!fs.existsSync(binPath)) {
+        //     // If that didn't work, check to see whether the package is even there at all.
+        //     // It may not be (for a few different reasons).
+        // }
+        throw e;
+    }
+
+    return { binPath };
+}
+
+const {binPath} = generateBinPath();
+
+childProcess.execFileSync(binPath, process.argv.slice(2), { stdio: 'inherit' });

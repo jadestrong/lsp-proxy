@@ -27,13 +27,13 @@ The features it supports are:
 Before installing LSP-PROXY, you should install rust and cargo first.
 ** Manually
 #+begin_src bash
-git clone https://github.com/jadestrong/lsp-proxy.git ./your-directory
+git clone https://github.com/jadestrong/emacs-lsp-proxy.git ./your-directory
 cd ./your-directory
 cargo build --release
 # delete old file if exist
 rm lsp-proxy
 # cp ./target/release/lsp-proxy.exe ./
-cp ./target/release/lsp-proxy ./
+cp ./target/release/emacs-lsp-proxy ./
 #+end_src
 ** Doom Emacs
 package.el
