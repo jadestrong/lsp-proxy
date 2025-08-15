@@ -41,6 +41,7 @@ pub struct DiagnosticProvider {
 pub struct DiagnosticItem {
     pub item: Diagnostic,
     pub provider: DiagnosticProvider,
+    #[allow(dead_code)]
     pub file_path: String,
 }
 

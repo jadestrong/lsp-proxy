@@ -655,7 +655,7 @@ Only works when mode is `tick or `alive."
   `(progn
      (when lsp-proxy-mode
        (unless (lsp-proxy--connection-alivep)
-         (lsp-proxy--start-agent))
+         (lsp-proxy--start-server))
        (lsp-proxy--send-did-change)
        (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
          (lsp-proxy--on-doc-open))
@@ -665,7 +665,7 @@ Only works when mode is `tick or `alive."
   "Send a notification to the lsp proxy agent with ARGS."
   `(progn
      (unless (lsp-proxy--connection-alivep)
-       (lsp-proxy--start-agent))
+       (lsp-proxy--start-server))
      (if (or (eq ,method 'textDocument/didOpen) (eq ,method 'textDocument/willSave) (eq ,method 'textDocument/didSave) (-contains-p lsp-proxy--opened-buffers (current-buffer)))
          (let ((new-params (append (eglot--TextDocumentIdentifier) (list :params ,@params))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
@@ -675,7 +675,7 @@ Only works when mode is `tick or `alive."
   "Send an asynchronous request to the lsp proxy agent."
   `(progn
      (unless (lsp-proxy--connection-alivep)
-       (lsp-proxy--start-agent))
+       (lsp-proxy--start-server))
      (if (not (eq ,method 'textDocument/diagnostic))
          (lsp-proxy--send-did-change))
      (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
@@ -714,7 +714,7 @@ Only works when mode is `tick or `alive."
        ;; handle older jsonrpc versions
        (funcall make-fn :events-buffer-scrollback-size lsp-proxy-log-max)))))
 
-(defun lsp-proxy--start-agent ()
+(defun lsp-proxy--start-server ()
   "Start the lsp proxy agent process in local."
   (let* ((timestamp (format-time-string "%Y%m%d%H%M%S"))
          (random-num (random 100000))
@@ -723,7 +723,7 @@ Only works when mode is `tick or `alive."
     (if (file-exists-p lsp-proxy--exec-file)
         (progn
           (setq lsp-proxy--connection (lsp-proxy--make-connection))
-          (message "Lsp proxy agent started."))
+          (message "Lsp proxy server started."))
       (lsp-proxy--error "No lsp-proxy file found, please check your `lsp-proxy--exec-file'"))))
 
 (defun lsp-proxy--handle-notification (_ method msg)
@@ -2871,7 +2871,10 @@ textDocument/didOpen for the new file."
 (defun lsp-proxy-restart ()
   "Restart."
   (interactive)
-  (when lsp-proxy--connection
+  (unwind-protect
+      (progn
+        (lsp-proxy--request 'shutdown (lsp-proxy--request-or-notify-params nil) :timeout 1.5)
+        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--request-or-notify-params nil)))
     (jsonrpc-shutdown lsp-proxy--connection)
     (setq lsp-proxy--connection nil))
   (setq lsp-proxy--opened-buffers nil)

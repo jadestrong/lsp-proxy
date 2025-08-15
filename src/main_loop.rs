@@ -525,15 +525,33 @@ impl Application {
                     Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
                 }
             }
+            Message::Request(req) if req.method == lsp_types::request::Shutdown::METHOD => {
+                log::info!("Received shutdown request");
+                self.request_shutdown();
+                self.respond(Response::new_ok(req.id, serde_json::Value::Null));
+            }
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
             }
-            Message::Request(req) => match self.get_working_document(&req) {
-                Ok(doc) => {
-                    Self::on_request(req, self.sender.clone(), doc.get_all_language_servers());
+            Message::Request(req) => {
+                // After shutdown, reject any requests.
+                if self.shutdown_requested {
+                    log::warn!("Rejecting request '{}' after shutdown", req.method);
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidRequest,
+                        "Server is shutting down".to_string(),
+                    ));
+                    return Ok(());
                 }
-                Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
-            },
+                
+                match self.get_working_document(&req) {
+                    Ok(doc) => {
+                        Self::on_request(req, self.sender.clone(), doc.get_all_language_servers());
+                    }
+                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                }
+            }
             Message::Notification(not) => self.on_notification(not)?,
             Message::Response(resp) => self.complete_request(resp),
         }
@@ -619,6 +637,7 @@ impl Application {
         .on_sync_mut::<lsp_ext::DidFocusTextDocument>(
             handlers::notification::handle_did_focus_text_document,
         )?
+        .on_sync_mut::<notfis::Exit>(handlers::notification::handle_exit)?
         .finish();
 
         Ok(())

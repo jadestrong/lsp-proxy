@@ -15,6 +15,7 @@ pub(crate) struct Application {
     req_queue: ReqQueue,
     pub editor: Editor,
     pub jobs: Jobs,
+    pub shutdown_requested: bool,
 }
 
 impl Application {
@@ -32,6 +33,7 @@ impl Application {
             req_queue: ReqQueue::default(),
             editor,
             jobs: Jobs::new(),
+            shutdown_requested: false,
         }
     }
 
@@ -72,5 +74,31 @@ impl Application {
     ) {
         let not = Notification::new(N::METHOD.to_string(), params);
         self.send(not.into());
+    }
+
+    pub(crate) fn request_shutdown(&mut self) {
+        log::info!("Shutdown requested");
+        self.shutdown_requested = true;
+    }
+
+    pub(crate) fn cleanup_resources(&mut self) {
+        log::info!("Cleaning up resources before exit");
+        
+        // Shutdown all language servers
+        for client in self.editor.language_servers.iter_clients() {
+            log::debug!("Shutting down language server: {}", client.name());
+            // Send shutdown to language servers if they're running
+            if client.is_initialized() {
+                let _ = client.shutdown_and_exit();
+            }
+        }
+        
+        // Clear documents
+        self.editor.documents.clear();
+        
+        // Clear request queue
+        self.req_queue = req_queue::ReqQueue::default();
+        
+        log::info!("Resource cleanup complete");
     }
 }

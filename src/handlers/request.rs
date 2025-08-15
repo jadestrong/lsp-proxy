@@ -1093,7 +1093,7 @@ pub(crate) async fn handle_pull_diagnostic_response(
 pub(crate) async fn handle_inline_completion(
     req: msg::Request,
     language_server: Arc<Client>,
-    language_id: String,
+    _language_id: String,
     response_sender: Sender<Message>,
 ) {
     if let Some(Context::InlineCompletionContext(context)) = req.params.context {
@@ -1116,7 +1116,6 @@ pub(crate) async fn handle_inline_completion(
                     return;
                 }
                 let doc_version = context.doc_version;
-                let language = language_id.clone();
                 let future = match language_server.name() {
                     _ => {
                         let request = language_server

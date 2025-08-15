@@ -27,10 +27,9 @@ mod utils;
 
 use anyhow::{Context, Result};
 use args::Args;
-use config::{initialize_config_file, initialize_log_file, log_file};
+use config::{initialize_config_file, initialize_log_file};
 use log::{error, info};
 use logging::init_tracing;
-use std::error::Error;
 
 use crate::{connection::Connection, main_loop::main_loop};
 

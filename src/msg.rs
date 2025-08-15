@@ -322,10 +322,6 @@ impl Notification {
             }),
         }
     }
-
-    pub(crate) fn is_exit(&self) -> bool {
-        self.method == "exit"
-    }
 }
 
 fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
