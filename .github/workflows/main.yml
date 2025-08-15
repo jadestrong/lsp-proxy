@@ -15,31 +15,31 @@ jobs:
           # Linux x86_64
           - build: linux-x86_64
             os: ubuntu-latest
-            rust: nightly
+            rust: stable
             target: x86_64-unknown-linux-musl
             archive-name: lsp-proxy-linux-x86_64.tar.gz
           # Linux ARM64
           - build: linux-arm64
             os: ubuntu-latest
-            rust: nightly
+            rust: stable
             target: aarch64-unknown-linux-musl
             archive-name: lsp-proxy-linux-arm64.tar.gz
           # macOS x86_64
           - build: macos-x86_64
             os: macos-latest
-            rust: nightly
+            rust: stable
             target: x86_64-apple-darwin
             archive-name: lsp-proxy-macos-x86_64.tar.gz
           # macOS ARM64 (Apple Silicon)
           - build: macos-arm64
             os: macos-latest
-            rust: nightly
+            rust: stable
             target: aarch64-apple-darwin
             archive-name: lsp-proxy-macos-arm64.tar.gz
           # Windows x86_64
           - build: windows-x86_64
             os: windows-latest
-            rust: nightly-x86_64-msvc
+            rust: stable-x86_64-msvc
             target: x86_64-pc-windows-msvc
             archive-name: lsp-proxy-windows-x86_64.7z
       fail-fast: false
@@ -47,6 +47,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.build == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "AR_aarch64_unknown_linux_musl=aarch64-linux-gnu-ar" >> $GITHUB_ENV
+
+      - name: Install musl tools (Linux x86_64)
+        if: matrix.build == 'linux-x86_64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
