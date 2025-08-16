@@ -1,11 +1,14 @@
 {
   "name": "emacs-lsp-proxy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "scripts": {
     "postinstall": "node ./install.js"
   },
   "bin": {
     "emacs-lsp-proxy": "./bin/cli"
+  },
+  "publicConfig": {
+    "access": "public"
   },
   "keywords": ["emacs", "lsp", "rust"],
   "author": "jadestrong",

@@ -1,6 +1,6 @@
 {
     "name": "@emacs-lsp-proxy/linux-arm64",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "main": "index.js",
     "license": "ISC",
     "description": "The Linux ARM 64-bit binary for emacs-lsp-proxy.",
