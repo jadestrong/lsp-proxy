@@ -195,12 +195,26 @@ Disable idle completion if set to nil."
   :group 'lsp-proxy-mode
   :type 'string)
 
-(defvar lsp-proxy--exec-file (expand-file-name (if (eq system-type 'windows-nt)
-                                                   "./emacs-lsp-proxy.exe"
-                                                 "./emacs-lsp-proxy")
-                                               (if load-file-name
-                                                   (file-name-directory load-file-name)
-                                                 default-directory)))
+(defun lsp-proxy-server-executable ()
+  "Find emacs-lsp-proxy executable with priority order:
+1. System PATH (emacs-lsp-proxy)
+2. Current directory (./emacs-lsp-proxy)
+3. target/release directory (./target/release/emacs-lsp-proxy)"
+  (let* ((base-dir (if load-file-name
+                       (file-name-directory load-file-name)
+                     default-directory))
+         (exe-name (if (eq system-type 'windows-nt)
+                       "emacs-lsp-proxy.exe"
+                     "emacs-lsp-proxy"))
+         (candidates (list (executable-find exe-name)
+                           (expand-file-name exe-name base-dir)
+                           (expand-file-name (concat "target/release/" exe-name) base-dir))))
+    (or (seq-find #'file-exists-p (delq nil candidates))
+        (error "No emacs-lsp-proxy executable found in any location"))))
+
+(defvar lsp-proxy--exec-file nil
+  "Path to the emacs-lsp-proxy executable. 
+Will be determined by `lsp-proxy-server-executable'.")
 (defvar-local lsp-proxy--on-idle-timer nil)
 
 (defvar-local lsp-proxy--inline-completion-trigger-by 1
@@ -720,11 +734,12 @@ Only works when mode is `tick or `alive."
          (random-num (random 100000))
          (filename (format "lsp-proxy-%s-%05d.log" timestamp random-num)))
     (setq lsp-proxy--log-file (concat lsp-proxy-log-file-directory filename))
-    (if (file-exists-p lsp-proxy--exec-file)
+    (setq lsp-proxy--exec-file (lsp-proxy-server-executable))
+    (if lsp-proxy--exec-file
         (progn
           (setq lsp-proxy--connection (lsp-proxy--make-connection))
-          (message "Lsp proxy server started."))
-      (lsp-proxy--error "No lsp-proxy file found, please check your `lsp-proxy--exec-file'"))))
+          (message "Lsp proxy server started using: %s" lsp-proxy--exec-file))
+      (lsp-proxy--error "No emacs-lsp-proxy executable found. Please ensure it's installed in PATH, current directory, or target/release directory"))))
 
 (defun lsp-proxy--handle-notification (_ method msg)
   "Handle MSG of type METHOD."
