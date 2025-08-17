@@ -150,6 +150,19 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=$(node scripts/extract-version.js "$TAG_NAME")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION from tag: $TAG_NAME"
+
+      - name: Update package.json versions
+        run: |
+          echo "Updating all package.json files to version ${{ steps.extract_version.outputs.version }}"
+          node scripts/update-version.js "${{ steps.extract_version.outputs.version }}"
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
