@@ -163,6 +163,18 @@ jobs:
           echo "Updating all package.json files to version ${{ steps.extract_version.outputs.version }}"
           node scripts/update-version.js "${{ steps.extract_version.outputs.version }}"
 
+      - name: Commit version updates
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add npm/*/package.json
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "release: update package versions to ${{ steps.extract_version.outputs.version }}"
+            git push origin HEAD:main
+          fi
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
