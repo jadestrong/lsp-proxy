@@ -167,11 +167,37 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
+          
+          echo "🔍 Debug: Checking file existence before git add..."
+          for file in npm/emacs-lsp-proxy/package.json npm/@emacs-lsp-proxy/*/package.json; do
+            if [ -f "$file" ]; then
+              echo "✅ File exists: $file"
+              echo "📄 Content preview:"
+              head -5 "$file"
+              echo "---"
+            else
+              echo "❌ File missing: $file"
+            fi
+          done
+          
+          echo "🔍 Debug: Git status before adding files..."
+          git status --porcelain
+          
+          echo "🔍 Debug: Adding files with git add..."
           git add npm/**/package.json
+          
+          echo "🔍 Debug: Git status after adding files (staged changes)..."
+          git status --porcelain
+          
+          echo "🔍 Debug: Git diff --staged to see what will be committed..."
+          git diff --staged --name-only
+          
           if git diff --staged --quiet; then
-            echo "No changes to commit"
+            echo "❌ No changes to commit"
           else
+            echo "✅ Changes detected, creating commit..."
             git commit -m "release: update package versions to ${{ steps.extract_version.outputs.version }}"
+            echo "🔍 Debug: Commit created successfully, pushing to main..."
             git push origin HEAD:main
           fi
 

@@ -11,14 +11,32 @@ const path = require('path');
 
 function updatePackageVersion(packagePath, version) {
   try {
+    console.log(`🔍 Debug: Processing file ${packagePath}`);
+    
+    if (!require('fs').existsSync(packagePath)) {
+      console.error(`❌ File does not exist: ${packagePath}`);
+      return false;
+    }
+    
     const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+    const oldVersion = packageJson.version;
+    console.log(`📄 Current version in ${packagePath}: ${oldVersion}`);
+    
+    if (oldVersion === version) {
+      console.log(`⚠️  Version already matches in ${packagePath}: ${version}`);
+      return true; // Still consider this a success
+    }
+    
     packageJson.version = version;
     
     // If this is the main package, also update optional dependencies
     if (packageJson.optionalDependencies) {
+      console.log(`🔗 Updating optional dependencies in ${packagePath}`);
       for (const dep in packageJson.optionalDependencies) {
         if (dep.startsWith('@emacs-lsp-proxy/')) {
+          const oldDepVersion = packageJson.optionalDependencies[dep];
           packageJson.optionalDependencies[dep] = version;
+          console.log(`   ${dep}: ${oldDepVersion} → ${version}`);
         }
       }
     }
@@ -32,7 +50,7 @@ function updatePackageVersion(packagePath, version) {
     }
     
     fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n');
-    console.log(`✅ Updated ${packagePath} to version ${version}`);
+    console.log(`✅ Updated ${packagePath}: ${oldVersion} → ${version}`);
     return true;
   } catch (error) {
     console.error(`❌ Failed to update ${packagePath}:`, error.message);
@@ -58,6 +76,7 @@ function main() {
   }
   
   console.log(`🔄 Updating all package.json files to version ${version}...`);
+  console.log(`🔍 Debug: Current working directory: ${process.cwd()}`);
   
   // List of package.json files to update
   const packageFiles = [
@@ -69,18 +88,30 @@ function main() {
     'npm/@emacs-lsp-proxy/win32-x64/package.json'
   ];
   
+  console.log(`🔍 Debug: Files to process:`, packageFiles);
+  
   let success = true;
+  let processedCount = 0;
+  let updatedCount = 0;
   
   for (const packageFile of packageFiles) {
     const fullPath = path.join(process.cwd(), packageFile);
+    console.log(`\n🔍 Debug: Checking ${packageFile} (full path: ${fullPath})`);
+    
     if (fs.existsSync(fullPath)) {
-      if (!updatePackageVersion(fullPath, version)) {
+      console.log(`✅ File exists: ${packageFile}`);
+      processedCount++;
+      if (updatePackageVersion(fullPath, version)) {
+        updatedCount++;
+      } else {
         success = false;
       }
     } else {
       console.warn(`⚠️  Package file not found: ${fullPath}`);
     }
   }
+  
+  console.log(`\n📊 Summary: Processed ${processedCount}/${packageFiles.length} files, updated ${updatedCount} files`);
   
   if (success) {
     console.log(`🎉 Successfully updated all package.json files to version ${version}`);
