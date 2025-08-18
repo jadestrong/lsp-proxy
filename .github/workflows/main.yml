@@ -312,8 +312,6 @@ jobs:
     name: Create GitHub Release
     needs: [prepare-versions, publish-npm]
     runs-on: ubuntu-latest
-    outputs:
-      release_success: ${{ steps.create_release.outputs.success }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -365,17 +363,13 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: false
-
-      - name: Set success output
-        run: echo "success=true" >> $GITHUB_OUTPUT
 
   # Step 5: Commit version updates (only after successful release)
   commit-versions:
     name: Commit version updates
     needs: [prepare-versions, create-release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/') && needs.create-release.outputs.release_success == 'true'
+    if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
