@@ -394,6 +394,7 @@ jobs:
           git config --local user.name "GitHub Action"
           
           # Add all package.json files
+          git add Cargo.toml
           git add npm/emacs-lsp-proxy/package.json
           git add npm/@emacs-lsp-proxy/darwin-arm64/package.json
           git add npm/@emacs-lsp-proxy/darwin-x64/package.json
