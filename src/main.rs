@@ -49,6 +49,25 @@ fn main() {
 
 fn try_main() -> Result<()> {
     let args = Args::parse_args().context("could not parse arguments")?;
+    
+    // Handle help and version flags
+    if args.show_help {
+        Args::print_help();
+        return Ok(());
+    }
+    
+    if args.show_version {
+        Args::print_version();
+        return Ok(());
+    }
+    
+    // Check if --stdio flag is provided
+    if !args.stdio {
+        eprintln!("Error: --stdio flag is required to start the server");
+        eprintln!("Use --help for usage information");
+        std::process::exit(1);
+    }
+    
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
     

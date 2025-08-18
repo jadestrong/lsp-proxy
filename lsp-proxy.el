@@ -717,7 +717,7 @@ Only works when mode is `tick or `alive."
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
-                                         :command (list lsp-proxy--exec-file "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file)
+                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file)
                                          :coding 'utf-8-emacs-unix
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")

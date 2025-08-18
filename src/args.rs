@@ -6,6 +6,9 @@ pub struct Args {
     pub config_file: Option<PathBuf>,
     pub log_level: u64,
     pub log_file: Option<PathBuf>,
+    pub stdio: bool,
+    pub show_help: bool,
+    pub show_version: bool,
 }
 
 impl Args {
@@ -13,6 +16,7 @@ impl Args {
         let mut args = Args::default();
         let mut argv = std::env::args().peekable();
         argv.next(); // skip the program, we don't care about that;
+        
         while let Some(arg) = argv.next() {
             match arg.as_str() {
                 "-c" | "--config" => match argv.next().as_deref() {
@@ -32,9 +36,38 @@ impl Args {
                     Some(path) => args.log_file = Some(path.into()),
                     None => anyhow::bail!("--log must specify path to write"),
                 },
-                _ => break,
+                "--stdio" => args.stdio = true,
+                "-h" | "--help" => {
+                    args.show_help = true;
+                    return Ok(args);
+                }
+                "-V" | "--version" => {
+                    args.show_version = true;
+                    return Ok(args);
+                }
+                _ => anyhow::bail!("unknown argument: {}", arg),
             }
         }
         Ok(args)
+    }
+    
+    pub fn print_help() {
+        println!("emacs-lsp-proxy {}", env!("CARGO_PKG_VERSION"));
+        println!("{}", env!("CARGO_PKG_DESCRIPTION"));
+        println!();
+        println!("USAGE:");
+        println!("    emacs-lsp-proxy [OPTIONS] --stdio");
+        println!();
+        println!("OPTIONS:");
+        println!("    -c, --config <FILE>       Set configuration file path");
+        println!("        --log <FILE>          Set log file path");
+        println!("        --log-level <LEVEL>   Set log level (0-3, default: 1)");
+        println!("        --stdio               Enable stdio communication mode (required)");
+        println!("    -h, --help               Print help information");
+        println!("    -V, --version            Print version information");
+    }
+    
+    pub fn print_version() {
+        println!("emacs-lsp-proxy {}", env!("CARGO_PKG_VERSION"));
     }
 }
