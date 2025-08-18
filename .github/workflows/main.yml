@@ -412,21 +412,21 @@ jobs:
             echo "⚠️  No version changes detected"
           else
             echo "✅ Committing version updates after successful release..."
-            git commit -m "release: update package versions to ${{ needs.prepare-versions.outputs.version }}
+            git commit \
+              -m "release: update package versions to ${{ needs.prepare-versions.outputs.version }}" \
+              -m "" \
+              -m "Released version ${{ needs.prepare-versions.outputs.version }} successfully!" \
+              -m "" \
+              -m "Updated version for all npm packages:" \
+              -m "- Main package: emacs-lsp-proxy@${{ needs.prepare-versions.outputs.version }}" \
+              -m "- Platform packages: @emacs-lsp-proxy/*@${{ needs.prepare-versions.outputs.version }}" \
+              -m "" \
+              -m "Published to npm: https://www.npmjs.com/package/emacs-lsp-proxy" \
+              -m "GitHub Release: https://github.com/jadestrong/lsp-proxy/releases/tag/v${{ needs.prepare-versions.outputs.version }}" \
+              -m "" \
+              -m "Generated with Claude Code" \
+              -m "Co-Authored-By: Claude <noreply@anthropic.com>"
 
-🎉 Released version ${{ needs.prepare-versions.outputs.version }} successfully!
-
-🔧 Updated version for all npm packages:
-- Main package: emacs-lsp-proxy@${{ needs.prepare-versions.outputs.version }}
-- Platform packages: @emacs-lsp-proxy/*@${{ needs.prepare-versions.outputs.version }}
-
-📦 Published to npm: https://www.npmjs.com/package/emacs-lsp-proxy
-📋 GitHub Release: https://github.com/jadestrong/lsp-proxy/releases/tag/v${{ needs.prepare-versions.outputs.version }}
-
-🤖 Generated with [Claude Code](https://claude.ai/code)
-
-Co-Authored-By: Claude <noreply@anthropic.com>"
-            
             git push origin HEAD:main
             echo "🎉 Version updates committed and pushed successfully!"
           fi
