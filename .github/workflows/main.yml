@@ -195,6 +195,12 @@ jobs:
           
           # Copy the main package
           cp -r npm/emacs-lsp-proxy consolidated-npm/
+          
+          # Copy README.org to the main package for npm distribution
+          cp README.org consolidated-npm/emacs-lsp-proxy/
+          
+          echo "✅ README.org copied to npm package"
+          ls -la consolidated-npm/emacs-lsp-proxy/
 
       - name: Publish npm packages
         env:

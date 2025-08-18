@@ -23,6 +23,14 @@ function updatePackageVersion(packagePath, version) {
       }
     }
     
+    // Ensure files array includes README.org for main package
+    if (packageJson.name === 'emacs-lsp-proxy' && packageJson.files) {
+      if (!packageJson.files.includes('README.org')) {
+        packageJson.files.push('README.org');
+        console.log(`📄 Added README.org to files list in ${packagePath}`);
+      }
+    }
+    
     fs.writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n');
     console.log(`✅ Updated ${packagePath} to version ${version}`);
     return true;
