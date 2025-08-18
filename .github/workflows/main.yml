@@ -63,7 +63,7 @@ jobs:
           path: |
             npm/
             scripts/
-            README.org
+            README.md
             LICENSE
             lsp-proxy.el
 
@@ -169,7 +169,7 @@ jobs:
           mkdir -p "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}"
           
           # Copy common files to release archive
-          cp LICENSE README.org lsp-proxy.el "release-archive/"
+          cp LICENSE README.md lsp-proxy.el "release-archive/"
           
           # Copy npm package template (with correct version)
           cp -r "npm/@emacs-lsp-proxy/${{ matrix.npm-platform }}"/* "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/"
@@ -181,7 +181,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/"
             
             # Create release archive
-            7z a "release-archive/${{ matrix.archive-name }}" "release-archive/LICENSE" "release-archive/README.org" "release-archive/lsp-proxy.el" "release-archive/emacs-lsp-proxy.exe"
+            7z a "release-archive/${{ matrix.archive-name }}" "release-archive/LICENSE" "release-archive/README.md" "release-archive/lsp-proxy.el" "release-archive/emacs-lsp-proxy.exe"
           else
             # Unix: executable in bin/ subdirectory
             cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "release-archive/"
@@ -190,7 +190,7 @@ jobs:
             chmod +x "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/bin/emacs-lsp-proxy"
             
             # Create release archive
-            tar -czf "release-archive/${{ matrix.archive-name }}" -C "release-archive" LICENSE README.org lsp-proxy.el emacs-lsp-proxy
+            tar -czf "release-archive/${{ matrix.archive-name }}" -C "release-archive" LICENSE README.md lsp-proxy.el emacs-lsp-proxy
           fi
           
           # Verify npm package
@@ -265,9 +265,9 @@ jobs:
             fi
           done
           
-          # Copy main package (with updated version and README.org)
+          # Copy main package (with updated version and README.md)
           cp -r npm/emacs-lsp-proxy consolidated-npm/
-          cp README.org consolidated-npm/emacs-lsp-proxy/
+          cp README.md consolidated-npm/emacs-lsp-proxy/
           
           echo "✅ All packages prepared. Final verification:"
           for package_json in consolidated-npm/emacs-lsp-proxy/package.json consolidated-npm/@emacs-lsp-proxy/*/package.json; do
@@ -354,7 +354,7 @@ jobs:
             
             ### 📚 Documentation
             
-            See [README.org](https://github.com/jadestrong/lsp-proxy/blob/main/README.org) for installation and usage instructions.
+            See [README.md](https://github.com/jadestrong/lsp-proxy/blob/main/README.md) for installation and usage instructions.
             
             ---
             

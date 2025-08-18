@@ -41,11 +41,11 @@ function updatePackageVersion(packagePath, version) {
       }
     }
     
-    // Ensure files array includes README.org for main package
+    // Ensure files array includes README.md for main package
     if (packageJson.name === 'emacs-lsp-proxy' && packageJson.files) {
-      if (!packageJson.files.includes('README.org')) {
-        packageJson.files.push('README.org');
-        console.log(`📄 Added README.org to files list in ${packagePath}`);
+      if (!packageJson.files.includes('README.md')) {
+        packageJson.files.push('README.md');
+        console.log(`📄 Added README.md to files list in ${packagePath}`);
       }
     }
     
