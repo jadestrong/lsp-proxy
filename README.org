@@ -24,8 +24,17 @@ The features it supports are:
 ** Emacs30.1 or 29 + eglot@latest (Reused some capabilities of eglot to reduce code duplication.)
 
 * Installation
-Before installing LSP-PROXY, you should install rust and cargo first.
+** Via npm (Recommended)
+LSP-PROXY is now available via npm with prebuilt binaries for all major platforms:
+
+#+begin_src bash
+npm install -g emacs-lsp-proxy
+#+end_src
+
+This will automatically install the appropriate binary for your platform (Linux x64/ARM64, macOS x64/ARM64, Windows x64) and make the ~emacs-lsp-proxy~ command available in your PATH.
+
 ** Manually
+Before installing LSP-PROXY manually, you should install rust and cargo first.
 #+begin_src bash
 git clone https://github.com/jadestrong/emacs-lsp-proxy.git ./your-directory
 cd ./your-directory
@@ -35,13 +44,7 @@ rm emacs-lsp-proxy
 # cp ./target/release/emacs-lsp-proxy.exe ./
 cp ./target/release/emacs-lsp-proxy ./
 #+end_src
-** Doom Emacs
-package.el
-#+begin_src elisp
-(package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
-                :files ("lsp-proxy.el" "emacs-lsp-proxy")
-                :pre-build (("cargo" "build" "--release") ("cp" "./target/release/emacs-lsp-proxy" "./"))))
-#+end_src
+
 ** Download prebuilt binary
 You can download the prebuilt binary from [[https://github.com/jadestrong/lsp-copilot/releases][releases]]. For MacOS users, you should allow this binary to run first time, like this:
 #+begin_quote
@@ -60,6 +63,10 @@ The application cannot be opened because it is from an unidentified developer. Y
 
 #+begin_src elisp
 ;; Doom Emacs
+(package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
+                :files ("lsp-proxy.el" "emacs-lsp-proxy")
+                :pre-build (("cargo" "build" "--release") ("cp" "./target/release/emacs-lsp-proxy" "./"))))
+
 (set-lookup-handlers! 'lsp-proxy-mode
     :definition '(lsp-proxy-find-definition :async t)
     :references '(lsp-proxy-find-references :async t)
