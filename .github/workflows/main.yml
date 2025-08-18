@@ -167,7 +167,7 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add npm/*/package.json
+          git add npm/**/package.json
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
