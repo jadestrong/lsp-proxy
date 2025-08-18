@@ -6,8 +6,71 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Step 1: Update versions (but don't commit yet)
+  prepare-versions:
+    name: Prepare versions
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract_version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          VERSION=$(node scripts/extract-version.js "$TAG_NAME")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION from tag: $TAG_NAME"
+
+      - name: Update package.json versions
+        run: |
+          echo "🔄 Updating all package.json files to version ${{ steps.extract_version.outputs.version }}"
+          node scripts/update-version.js "${{ steps.extract_version.outputs.version }}"
+
+      - name: Verify version updates
+        run: |
+          echo "🔍 Verifying all package versions are correct..."
+          TARGET_VERSION="${{ steps.extract_version.outputs.version }}"
+          
+          for package_json in npm/emacs-lsp-proxy/package.json npm/@emacs-lsp-proxy/*/package.json; do
+            if [ -f "$package_json" ]; then
+              version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).version)")
+              package_name=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).name)")
+              if [ "$version" = "$TARGET_VERSION" ]; then
+                echo "✅ $package_name: $version"
+              else
+                echo "❌ $package_name: expected $TARGET_VERSION, got $version"
+                exit 1
+              fi
+            fi
+          done
+          echo "🎉 All package versions verified successfully!"
+
+      - name: Upload updated sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: updated-sources
+          path: |
+            npm/
+            scripts/
+            README.org
+            LICENSE
+            lsp-proxy.el
+
+  # Step 2: Build binaries for all platforms
   build:
-    name: build
+    name: Build (${{ matrix.build }})
+    needs: prepare-versions
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -18,35 +81,46 @@ jobs:
             rust: stable
             target: x86_64-unknown-linux-musl
             archive-name: lsp-proxy-linux-x86_64.tar.gz
+            npm-platform: linux-x64
           # Linux ARM64
           - build: linux-arm64
             os: ubuntu-latest
             rust: stable
             target: aarch64-unknown-linux-musl
             archive-name: lsp-proxy-linux-arm64.tar.gz
+            npm-platform: linux-arm64
           # macOS x86_64
           - build: macos-x86_64
             os: macos-latest
             rust: stable
             target: x86_64-apple-darwin
             archive-name: lsp-proxy-macos-x86_64.tar.gz
+            npm-platform: darwin-x64
           # macOS ARM64 (Apple Silicon)
           - build: macos-arm64
             os: macos-latest
             rust: stable
             target: aarch64-apple-darwin
             archive-name: lsp-proxy-macos-arm64.tar.gz
+            npm-platform: darwin-arm64
           # Windows x86_64
           - build: windows-x86_64
             os: windows-latest
             rust: stable-x86_64-msvc
             target: x86_64-pc-windows-msvc
             archive-name: lsp-proxy-windows-x86_64.7z
+            npm-platform: win32-x64
       fail-fast: false
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download updated sources
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-sources
+          path: ./
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.build == 'linux-arm64'
@@ -85,64 +159,75 @@ jobs:
             strip "target/${{ matrix.target }}/release/emacs-lsp-proxy"
           fi
 
-      - name: Build archive
+      - name: Create release archives and npm packages
         shell: bash
         run: |
           set -e
-          # Define directories
-          RELEASE_ARCHIVE_DIR="release-archive"
-          NPM_DIR="npm"
-
+          
           # Create directories
-          mkdir -p "$RELEASE_ARCHIVE_DIR"
-          mkdir -p "$NPM_DIR/@emacs-lsp-proxy"
-
-          # Copy common files to release archive directory
-          cp LICENSE README.org lsp-proxy.el "$RELEASE_ARCHIVE_DIR/"
-
-          # Handle platform-specific copying and archiving
+          mkdir -p "release-archive"
+          mkdir -p "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}"
+          
+          # Copy common files to release archive
+          cp LICENSE README.org lsp-proxy.el "release-archive/"
+          
+          # Copy npm package template (with correct version)
+          cp -r "npm/@emacs-lsp-proxy/${{ matrix.npm-platform }}"/* "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/"
+          
+          # Handle platform-specific binary packaging
           if [[ "${{ matrix.build }}" == windows* ]]; then
-            WIN_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/win32-x64"
-            mkdir -p "$WIN_PLATFORM_DIR"
-            # Copy binary to release archive directory
-            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy.exe"
-            # Copy binary to npm package directory
-            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "$WIN_PLATFORM_DIR/emacs-lsp-proxy.exe"
-            # Create release archive
-            7z a "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" "$RELEASE_ARCHIVE_DIR/LICENSE" "$RELEASE_ARCHIVE_DIR/README.org" "$RELEASE_ARCHIVE_DIR/lsp-proxy.el" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy.exe"
-          else
-            LINUX_MACOS_PLATFORM_DIR=""
-            if [[ "${{ matrix.build }}" == linux-x86_64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/linux-x64/bin"; fi
-            if [[ "${{ matrix.build }}" == linux-arm64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/linux-arm64/bin"; fi
-            if [[ "${{ matrix.build }}" == macos-x86_64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/darwin-x64/bin"; fi
-            if [[ "${{ matrix.build }}" == macos-arm64 ]]; then LINUX_MACOS_PLATFORM_DIR="$NPM_DIR/@emacs-lsp-proxy/darwin-arm64/bin"; fi
+            # Windows: executable in package root
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "release-archive/"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy.exe" "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/"
             
-            mkdir -p "$LINUX_MACOS_PLATFORM_DIR"
-            # Copy binary to release archive directory
-            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "$RELEASE_ARCHIVE_DIR/emacs-lsp-proxy"
-            # Copy binary to npm package directory
-            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "$LINUX_MACOS_PLATFORM_DIR/emacs-lsp-proxy"
-            chmod +x "$LINUX_MACOS_PLATFORM_DIR/emacs-lsp-proxy"
             # Create release archive
-            tar -czf "$RELEASE_ARCHIVE_DIR/${{ matrix.archive-name }}" -C "$RELEASE_ARCHIVE_DIR" LICENSE README.org lsp-proxy.el emacs-lsp-proxy
+            7z a "release-archive/${{ matrix.archive-name }}" "release-archive/LICENSE" "release-archive/README.org" "release-archive/lsp-proxy.el" "release-archive/emacs-lsp-proxy.exe"
+          else
+            # Unix: executable in bin/ subdirectory
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "release-archive/"
+            mkdir -p "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/bin"
+            cp "target/${{ matrix.target }}/release/emacs-lsp-proxy" "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/bin/"
+            chmod +x "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/bin/emacs-lsp-proxy"
+            
+            # Create release archive
+            tar -czf "release-archive/${{ matrix.archive-name }}" -C "release-archive" LICENSE README.org lsp-proxy.el emacs-lsp-proxy
+          fi
+          
+          # Verify npm package
+          echo "📦 Verifying npm package for ${{ matrix.npm-platform }}:"
+          if [ -f "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/package.json" ]; then
+            version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}/package.json', 'utf8')).version)")
+            echo "✅ Package version: $version"
+            echo "📁 Package contents:"
+            find "npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}" -type f
+          else
+            echo "❌ package.json not found!"
+            exit 1
           fi
 
-      - name: Upload artifacts
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: build-artifacts-${{ matrix.build }}
+          name: build-${{ matrix.build }}
           path: |
             release-archive/${{ matrix.archive-name }}
-            npm/@emacs-lsp-proxy
+            npm-packages/@emacs-lsp-proxy/${{ matrix.npm-platform }}
 
+  # Step 3: Publish npm packages
   publish-npm:
     name: Publish npm packages
-    needs: build
+    needs: [prepare-versions, build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download updated sources
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-sources
+          path: ./
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -150,116 +235,46 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          TAG_NAME=${GITHUB_REF#refs/tags/}
-          VERSION=$(node scripts/extract-version.js "$TAG_NAME")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Extracted version: $VERSION from tag: $TAG_NAME"
-
-      - name: Update package.json versions
-        run: |
-          echo "Updating all package.json files to version ${{ steps.extract_version.outputs.version }}"
-          node scripts/update-version.js "${{ steps.extract_version.outputs.version }}"
-
-      - name: Commit version updates
-        run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          
-          echo "🔍 Debug: Checking file existence before git add..."
-          for file in npm/emacs-lsp-proxy/package.json npm/@emacs-lsp-proxy/*/package.json; do
-            if [ -f "$file" ]; then
-              echo "✅ File exists: $file"
-              echo "📄 Content preview:"
-              head -5 "$file"
-              echo "---"
-            else
-              echo "❌ File missing: $file"
-            fi
-          done
-          
-          echo "🔍 Debug: Git status before adding files..."
-          git status --porcelain
-          
-          echo "🔍 Debug: Adding files with git add..."
-          git add npm/emacs-lsp-proxy/package.json
-          git add npm/@emacs-lsp-proxy/darwin-arm64/package.json
-          git add npm/@emacs-lsp-proxy/darwin-x64/package.json
-          git add npm/@emacs-lsp-proxy/linux-arm64/package.json
-          git add npm/@emacs-lsp-proxy/linux-x64/package.json
-          git add npm/@emacs-lsp-proxy/win32-x64/package.json
-          
-          echo "🔍 Debug: Git status after adding files (staged changes)..."
-          git status --porcelain
-          
-          echo "🔍 Debug: Git diff --staged to see what will be committed..."
-          git diff --staged --name-only
-          
-          if git diff --staged --quiet; then
-            echo "❌ No changes to commit"
-          else
-            echo "✅ Changes detected, creating commit..."
-            git commit -m "release: update package versions to ${{ steps.extract_version.outputs.version }}"
-            echo "🔍 Debug: Commit created successfully, pushing to main..."
-            git push origin HEAD:main
-          fi
-
-      - name: Download build artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: build-*
           path: artifacts
 
-      - name: Reorganize npm packages
+      - name: Prepare npm packages for publishing
         run: |
           set -e
-          # Create consolidated npm directory from artifacts
+          echo "🔄 Preparing npm packages for publishing..."
+          
+          # Create consolidated npm directory
           mkdir -p consolidated-npm/@emacs-lsp-proxy
           
-          # Copy platform-specific packages from source (with updated package.json)
-          # and binaries from artifacts
+          # Copy platform-specific packages from build artifacts
           for build in linux-x86_64 linux-arm64 macos-x86_64 macos-arm64 windows-x86_64; do
             case $build in
-              linux-x86_64) platform_dir="linux-x64" ;;
-              linux-arm64) platform_dir="linux-arm64" ;;
-              macos-x86_64) platform_dir="darwin-x64" ;;
-              macos-arm64) platform_dir="darwin-arm64" ;;
-              windows-x86_64) platform_dir="win32-x64" ;;
+              linux-x86_64) platform="linux-x64" ;;
+              linux-arm64) platform="linux-arm64" ;;
+              macos-x86_64) platform="darwin-x64" ;;
+              macos-arm64) platform="darwin-arm64" ;;
+              windows-x86_64) platform="win32-x64" ;;
             esac
             
-            # Copy package.json from source (already updated with correct version)
-            if [ -d "npm/@emacs-lsp-proxy/$platform_dir" ]; then
-              echo "📦 Copying platform package: $platform_dir"
-              cp -r "npm/@emacs-lsp-proxy/$platform_dir" "consolidated-npm/@emacs-lsp-proxy/"
-              
-              # Copy binary from artifacts (overwriting any existing binary)
-              if [ -d "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir" ]; then
-                echo "📥 Copying binary for $platform_dir from build artifacts"
-                # Copy binary files only, preserve package.json
-                if [ "$platform_dir" = "win32-x64" ]; then
-                  cp "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir/emacs-lsp-proxy.exe" "consolidated-npm/@emacs-lsp-proxy/$platform_dir/" 2>/dev/null || true
-                else
-                  mkdir -p "consolidated-npm/@emacs-lsp-proxy/$platform_dir/bin"
-                  cp "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir/bin/emacs-lsp-proxy" "consolidated-npm/@emacs-lsp-proxy/$platform_dir/bin/" 2>/dev/null || true
-                fi
-              fi
+            if [ -d "artifacts/build-$build/npm-packages/@emacs-lsp-proxy/$platform" ]; then
+              echo "📦 Adding platform package: $platform"
+              cp -r "artifacts/build-$build/npm-packages/@emacs-lsp-proxy/$platform" "consolidated-npm/@emacs-lsp-proxy/"
             fi
           done
           
-          # Copy the main package (already updated with correct version)
+          # Copy main package (with updated version and README.org)
           cp -r npm/emacs-lsp-proxy consolidated-npm/
-          
-          # Copy README.org to the main package for npm distribution
           cp README.org consolidated-npm/emacs-lsp-proxy/
           
-          echo "✅ README.org copied to npm package"
-          echo "🔍 Verifying package versions:"
+          echo "✅ All packages prepared. Final verification:"
           for package_json in consolidated-npm/emacs-lsp-proxy/package.json consolidated-npm/@emacs-lsp-proxy/*/package.json; do
             if [ -f "$package_json" ]; then
               version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).version)")
               package_name=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).name)")
-              echo "📦 $package_name: $version"
+              echo "📦 $package_name@$version"
             fi
           done
 
@@ -268,48 +283,150 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
+          echo "🚀 Publishing npm packages..."
+          
           # Publish platform-specific packages first
-          cd consolidated-npm/@emacs-lsp-proxy/linux-x64 && npm publish --access public
-          cd ../linux-arm64 && npm publish --access public
-          cd ../darwin-x64 && npm publish --access public
-          cd ../darwin-arm64 && npm publish --access public
-          cd ../win32-x64 && npm publish --access public
+          echo "📦 Publishing platform packages..."
+          cd consolidated-npm/@emacs-lsp-proxy
+          for platform_dir in */; do
+            if [ -d "$platform_dir" ] && [ -f "$platform_dir/package.json" ]; then
+              platform_name=$(basename "$platform_dir")
+              echo "🔄 Publishing @emacs-lsp-proxy/$platform_name..."
+              cd "$platform_dir"
+              npm publish --access public
+              cd ..
+              echo "✅ Published @emacs-lsp-proxy/$platform_name"
+            fi
+          done
+          
           # Publish main package
-          cd ../../emacs-lsp-proxy && npm publish --access public
+          echo "📦 Publishing main package..."
+          cd ../emacs-lsp-proxy
+          npm publish --access public
+          echo "✅ Published emacs-lsp-proxy"
+          
+          echo "🎉 All npm packages published successfully!"
 
-  release:
-    name: Release
-    needs: publish-npm
+  # Step 4: Create GitHub release
+  create-release:
+    name: Create GitHub Release
+    needs: [prepare-versions, publish-npm]
     runs-on: ubuntu-latest
-
+    outputs:
+      release_success: ${{ steps.create_release.outputs.success }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: build-*
           path: assets
 
       - name: Create GitHub Release
+        id: create_release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            ./assets/build-artifacts-linux-x86_64/release-archive/lsp-proxy-linux-x86_64.tar.gz
-            ./assets/build-artifacts-linux-arm64/release-archive/lsp-proxy-linux-arm64.tar.gz
-            ./assets/build-artifacts-macos-x86_64/release-archive/lsp-proxy-macos-x86_64.tar.gz
-            ./assets/build-artifacts-macos-arm64/release-archive/lsp-proxy-macos-arm64.tar.gz
-            ./assets/build-artifacts-windows-x86_64/release-archive/lsp-proxy-windows-x86_64.7z
+            ./assets/build-linux-x86_64/release-archive/lsp-proxy-linux-x86_64.tar.gz
+            ./assets/build-linux-arm64/release-archive/lsp-proxy-linux-arm64.tar.gz
+            ./assets/build-macos-x86_64/release-archive/lsp-proxy-macos-x86_64.tar.gz
+            ./assets/build-macos-arm64/release-archive/lsp-proxy-macos-arm64.tar.gz
+            ./assets/build-windows-x86_64/release-archive/lsp-proxy-windows-x86_64.7z
           body: |
-            Automated release for build artifacts.
+            ## 🚀 Release ${{ needs.prepare-versions.outputs.version }}
             
-            ## Supported Platforms
+            ### 📦 Installation
             
-            - Linux (x86_64, ARM64)
-            - macOS (x86_64, ARM64/Apple Silicon)
-            - Windows (x86_64)
+            **Via npm (Recommended):**
+            ```bash
+            npm install -g emacs-lsp-proxy@${{ needs.prepare-versions.outputs.version }}
+            ```
+            
+            **Manual installation:**
+            Download the appropriate binary for your platform from the assets below.
+            
+            ### 🔧 Supported Platforms
+            
+            - **Linux**: x86_64, ARM64
+            - **macOS**: x86_64, ARM64 (Apple Silicon)  
+            - **Windows**: x86_64
+            
+            ### 📚 Documentation
+            
+            See [README.org](https://github.com/jadestrong/lsp-proxy/blob/main/README.org) for installation and usage instructions.
+            
+            ---
+            
+            🤖 *This release was automatically generated and published via GitHub Actions.*
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: false
+
+      - name: Set success output
+        run: echo "success=true" >> $GITHUB_OUTPUT
+
+  # Step 5: Commit version updates (only after successful release)
+  commit-versions:
+    name: Commit version updates
+    needs: [prepare-versions, create-release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') && needs.create-release.outputs.release_success == 'true'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download updated sources
+        uses: actions/download-artifact@v4
+        with:
+          name: updated-sources
+          path: ./
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Commit and push version updates
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Add all package.json files
+          git add npm/emacs-lsp-proxy/package.json
+          git add npm/@emacs-lsp-proxy/darwin-arm64/package.json
+          git add npm/@emacs-lsp-proxy/darwin-x64/package.json
+          git add npm/@emacs-lsp-proxy/linux-arm64/package.json
+          git add npm/@emacs-lsp-proxy/linux-x64/package.json
+          git add npm/@emacs-lsp-proxy/win32-x64/package.json
+          
+          # Check if there are changes to commit
+          if git diff --staged --quiet; then
+            echo "⚠️  No version changes detected"
+          else
+            echo "✅ Committing version updates after successful release..."
+            git commit -m "release: update package versions to ${{ needs.prepare-versions.outputs.version }}
+
+🎉 Released version ${{ needs.prepare-versions.outputs.version }} successfully!
+
+🔧 Updated version for all npm packages:
+- Main package: emacs-lsp-proxy@${{ needs.prepare-versions.outputs.version }}
+- Platform packages: @emacs-lsp-proxy/*@${{ needs.prepare-versions.outputs.version }}
+
+📦 Published to npm: https://www.npmjs.com/package/emacs-lsp-proxy
+📋 GitHub Release: https://github.com/jadestrong/lsp-proxy/releases/tag/v${{ needs.prepare-versions.outputs.version }}
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>"
+            
+            git push origin HEAD:main
+            echo "🎉 Version updates committed and pushed successfully!"
+          fi
