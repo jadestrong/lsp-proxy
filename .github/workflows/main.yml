@@ -217,21 +217,51 @@ jobs:
           # Create consolidated npm directory from artifacts
           mkdir -p consolidated-npm/@emacs-lsp-proxy
           
-          # Copy platform-specific packages from different artifacts
+          # Copy platform-specific packages from source (with updated package.json)
+          # and binaries from artifacts
           for build in linux-x86_64 linux-arm64 macos-x86_64 macos-arm64 windows-x86_64; do
-            if [ -d "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy" ]; then
-              cp -r artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/* consolidated-npm/@emacs-lsp-proxy/
+            case $build in
+              linux-x86_64) platform_dir="linux-x64" ;;
+              linux-arm64) platform_dir="linux-arm64" ;;
+              macos-x86_64) platform_dir="darwin-x64" ;;
+              macos-arm64) platform_dir="darwin-arm64" ;;
+              windows-x86_64) platform_dir="win32-x64" ;;
+            esac
+            
+            # Copy package.json from source (already updated with correct version)
+            if [ -d "npm/@emacs-lsp-proxy/$platform_dir" ]; then
+              echo "📦 Copying platform package: $platform_dir"
+              cp -r "npm/@emacs-lsp-proxy/$platform_dir" "consolidated-npm/@emacs-lsp-proxy/"
+              
+              # Copy binary from artifacts (overwriting any existing binary)
+              if [ -d "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir" ]; then
+                echo "📥 Copying binary for $platform_dir from build artifacts"
+                # Copy binary files only, preserve package.json
+                if [ "$platform_dir" = "win32-x64" ]; then
+                  cp "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir/emacs-lsp-proxy.exe" "consolidated-npm/@emacs-lsp-proxy/$platform_dir/" 2>/dev/null || true
+                else
+                  mkdir -p "consolidated-npm/@emacs-lsp-proxy/$platform_dir/bin"
+                  cp "artifacts/build-artifacts-$build/npm/@emacs-lsp-proxy/$platform_dir/bin/emacs-lsp-proxy" "consolidated-npm/@emacs-lsp-proxy/$platform_dir/bin/" 2>/dev/null || true
+                fi
+              fi
             fi
           done
           
-          # Copy the main package
+          # Copy the main package (already updated with correct version)
           cp -r npm/emacs-lsp-proxy consolidated-npm/
           
           # Copy README.org to the main package for npm distribution
           cp README.org consolidated-npm/emacs-lsp-proxy/
           
           echo "✅ README.org copied to npm package"
-          ls -la consolidated-npm/emacs-lsp-proxy/
+          echo "🔍 Verifying package versions:"
+          for package_json in consolidated-npm/emacs-lsp-proxy/package.json consolidated-npm/@emacs-lsp-proxy/*/package.json; do
+            if [ -f "$package_json" ]; then
+              version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).version)")
+              package_name=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$package_json', 'utf8')).name)")
+              echo "📦 $package_name: $version"
+            fi
+          done
 
       - name: Publish npm packages
         env:
