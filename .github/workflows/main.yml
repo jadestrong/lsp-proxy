@@ -66,6 +66,7 @@ jobs:
             README.md
             LICENSE
             lsp-proxy.el
+            Cargo.toml
 
   # Step 2: Build binaries for all platforms
   build:
