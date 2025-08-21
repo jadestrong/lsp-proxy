@@ -1,13 +1,17 @@
 {
-    "name": "@emacs-lsp-proxy/win32-x64",
-    "version": "0.1.1",
-    "main": "index.js",
-    "license": "ISC",
-    "description": "The Windows 64-bit binary for emacs-lsp-proxy.",
-    "preferUnplugged": true,
-    "engines": {
-        "node": ">=18"
-    },
-    "os": ["win32"],
-    "cpu": ["x64"]
+  "name": "@emacs-lsp-proxy/win32-x64",
+  "version": "0.5.3",
+  "main": "index.js",
+  "license": "ISC",
+  "description": "The Windows 64-bit binary for emacs-lsp-proxy.",
+  "preferUnplugged": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ]
 }
