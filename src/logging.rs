@@ -160,9 +160,9 @@ pub fn init_tracing(log_level: u64) -> anyhow::Result<()> {
 
     let filter_directive = match log_level {
         0 => "warn", // Only errors and warnings
-        1 => "lsp_proxy=info,lsp_proxy::lsp=info,lsp_proxy::transport=info", // Only LSP communication (info level)
-        2 => "lsp_proxy=debug", // Service debug logs + LSP logs
-        _ => "lsp_proxy=trace", // Everything (most verbose)
+        1 => "emacs_lsp_proxy=info,emacs_lsp_proxy::lsp=info,emacs_lsp_proxy::transport=info", // Only LSP communication (info level)
+        2 => "emacs_lsp_proxy=debug", // Service debug logs + LSP logs
+        _ => "emacs_lsp_proxy=trace", // Everything (most verbose)
     };
 
     // Create filter for tracing events with custom logic per level
