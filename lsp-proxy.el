@@ -1192,8 +1192,8 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
             (forward-line 1)
             (setq current-line (1+ current-line))))
         ;; Convert hash table to list indexed by line number
-        (let ((max-line (apply #'max line-numbers))
-              (result-lines (make-vector (1+ max-line) nil)))
+        (let* ((max-line (apply #'max line-numbers))
+               (result-lines (make-vector (1+ max-line) nil)))
           (maphash (lambda (line-num content)
                     (aset result-lines line-num content))
                   lines)
