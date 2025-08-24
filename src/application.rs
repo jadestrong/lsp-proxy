@@ -1,11 +1,12 @@
 use crate::{
     editor::Editor,
     job::Jobs,
+    large_file_manager::{LargeFileManager, LargeFileStats},
     msg::{Message, Notification, Response},
     req_queue, syntax,
 };
 use crossbeam_channel::Sender;
-use std::time::Instant;
+use std::{sync::Arc, sync::Mutex, time::Instant};
 
 pub(crate) type ReqHandler = fn(&mut Application, Response);
 type ReqQueue = req_queue::ReqQueue<(String, Instant), ReqHandler>;
@@ -16,6 +17,8 @@ pub(crate) struct Application {
     pub editor: Editor,
     pub jobs: Jobs,
     pub shutdown_requested: bool,
+    pub large_file_manager: Arc<Mutex<LargeFileManager>>,
+    pub large_file_stats: Arc<Mutex<LargeFileStats>>,
 }
 
 impl Application {
@@ -34,6 +37,8 @@ impl Application {
             editor,
             jobs: Jobs::new(),
             shutdown_requested: false,
+            large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),
+            large_file_stats: Arc::new(Mutex::new(LargeFileStats::default())),
         }
     }
 

@@ -171,3 +171,73 @@ pub struct VersionInlineCompletionResult {
     pub doc_version: i32,
     pub items: Vec<lsp_types::InlineCompletionItem>,
 }
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct LargeFileLoadStartParams {
+    pub uri: lsp_types::Url,
+    #[serde(rename = "totalSize")]
+    pub total_size: usize,
+    #[serde(rename = "chunkSize")]
+    pub chunk_size: usize,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct LargeFileChunkParams {
+    pub uri: lsp_types::Url,
+    #[serde(rename = "chunkIndex")]
+    pub chunk_index: usize,
+    #[serde(rename = "chunkData")]
+    pub chunk_data: String,
+    #[serde(rename = "startPos")]
+    pub start_pos: usize,
+    #[serde(rename = "endPos")]
+    pub end_pos: usize,
+    #[serde(rename = "isLastChunk")]
+    #[serde(default)]
+    pub is_last_chunk: Option<bool>,
+    pub progress: u8,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct LargeFileLoadCompleteParams {
+    pub uri: lsp_types::Url,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct LargeFileLoadCancelParams {
+    pub uri: lsp_types::Url,
+}
+
+#[derive(Debug)]
+pub enum EmacsLargeFileLoadStart {}
+
+impl Notification for EmacsLargeFileLoadStart {
+    type Params = LargeFileLoadStartParams;
+    const METHOD: &'static str = "emacs/largeFileLoadStart";
+}
+
+#[derive(Debug)]
+pub enum EmacsLargeFileChunk {}
+
+impl Notification for EmacsLargeFileChunk {
+    type Params = LargeFileChunkParams;
+    const METHOD: &'static str = "emacs/largeFileChunk";
+}
+
+#[derive(Debug)]
+pub enum EmacsLargeFileLoadComplete {}
+
+impl Notification for EmacsLargeFileLoadComplete {
+    type Params = LargeFileLoadCompleteParams;
+
+    const METHOD: &'static str = "emacs/largeFileLoadComplete";
+}
+
+#[derive(Debug)]
+pub enum EmacsLargeFileLoadCancel {}
+
+impl Notification for EmacsLargeFileLoadCancel {
+    type Params = LargeFileLoadCancelParams;
+
+    const METHOD: &'static str = "emacs/largeFileLoadCancel";
+}

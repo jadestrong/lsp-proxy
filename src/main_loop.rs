@@ -634,6 +634,18 @@ impl Application {
             handlers::notification::handle_did_close_text_document,
         )?
         .on_sync_mut::<lsp_ext::CustomizeCancel>(handlers::notification::handle_cancel)?
+        .on_sync_mut::<lsp_ext::EmacsLargeFileLoadStart>(
+            handlers::notification::handle_large_file_load_start,
+        )?
+        .on_sync_mut::<lsp_ext::EmacsLargeFileChunk>(
+            handlers::notification::handle_large_file_chunk,
+        )?
+        // .on_sync_mut::<lsp_ext::EmacsLargeFileLoadComplete>(
+        //     handlers::notification::handle_large_file_load_complete,
+        // )?
+        .on_sync_mut::<lsp_ext::EmacsLargeFileLoadCancel>(
+            handlers::notification::handle_large_file_load_cancel,
+        )?
         .on_sync_mut::<lsp_ext::DidFocusTextDocument>(
             handlers::notification::handle_did_focus_text_document,
         )?

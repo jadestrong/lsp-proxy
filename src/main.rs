@@ -24,6 +24,7 @@ mod req_queue;
 mod syntax;
 mod thread;
 mod utils;
+mod large_file_manager;
 
 use anyhow::{Context, Result};
 use args::Args;

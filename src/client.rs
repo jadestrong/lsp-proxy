@@ -807,6 +807,10 @@ impl Client {
         })
     }
 
+    pub fn text_document_did_change(&self, params: lsp::DidChangeTextDocumentParams) -> Result<()> {
+        self.notify::<lsp::notification::DidChangeTextDocument>(params)
+    }
+
     pub fn text_document_did_close(&self, params: lsp::DidCloseTextDocumentParams) -> Result<()> {
         self.notify::<lsp::notification::DidCloseTextDocument>(params)
     }

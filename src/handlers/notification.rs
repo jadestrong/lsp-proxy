@@ -179,3 +179,145 @@ pub fn handle_exit(app: &mut Application, _params: ()) -> Result<()> {
     // Exit the process
     std::process::exit(exit_code);
 }
+
+pub fn handle_large_file_load_start(
+    app: &mut Application,
+    params: lsp_ext::LargeFileLoadStartParams,
+) -> anyhow::Result<()> {
+    {
+        // let mut app = app.lock().unwrap();
+        app.large_file_manager
+            .lock()
+            .unwrap()
+            .start_loading(params.uri.clone(), params.total_size);
+    }
+
+    tracing::info!(
+        "Large file load started: {} ({} bytes, {} chunk size)",
+        params.uri,
+        params.total_size,
+        params.chunk_size
+    );
+    Ok(())
+}
+
+pub fn handle_large_file_chunk(
+    app: &mut Application,
+    params: lsp_ext::LargeFileChunkParams,
+) -> anyhow::Result<()> {
+    let is_completed = {
+        // let mut app = app.lock().unwrap();
+        app.large_file_manager.lock().unwrap().add_chunk(
+            &params.uri,
+            params.chunk_data,
+            params.chunk_index,
+            params.is_last_chunk.unwrap_or(false),
+        )?
+    };
+
+    tracing::debug!(
+        "Received chunk {} for {}, progress: {}%",
+        params.chunk_index,
+        params.uri,
+        params.progress
+    );
+
+    if is_completed {
+        handle_large_file_load_complete_internal(app, params.uri)?;
+    }
+
+    Ok(())
+}
+
+pub fn handle_large_file_load_complete(
+    app: &mut Application,
+    params: lsp_ext::LargeFileLoadCompleteParams,
+) -> anyhow::Result<()> {
+    handle_large_file_load_complete_internal(app, params.uri)
+}
+
+pub fn handle_large_file_load_cancel(
+    app: &mut Application,
+    params: lsp_ext::LargeFileLoadCancelParams,
+) -> anyhow::Result<()> {
+    {
+        // let mut app = app.lock().unwrap();
+        app.large_file_manager
+            .lock()
+            .unwrap()
+            .cancel_loading(&params.uri);
+    }
+
+    tracing::info!("Large file loading cancelled: {}", params.uri);
+    Ok(())
+}
+
+fn handle_large_file_load_complete_internal(
+    app: &mut Application,
+    uri: lsp_types::Url,
+) -> anyhow::Result<()> {
+    let content = {
+        // let mut app = app.lock().unwrap();
+        let manager = app.large_file_manager.lock().unwrap();
+
+        let content = manager
+            .get_content(&uri)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Large file content not found"))?;
+
+        // let requests = manager.get_buffered_requests(&uri).unwrap_or_default();
+
+        content
+    };
+
+    // 发送完整内容给语言服务器
+    {
+        // let mut app = app.lock().unwrap();
+        let document = app.editor.get(&uri);
+
+        // 创建 didChange 参数来更新内容
+        let did_change_params = lsp_types::DidChangeTextDocumentParams {
+            text_document: lsp_types::VersionedTextDocumentIdentifier {
+                uri: uri.clone(),
+                version: 0,
+            },
+            content_changes: vec![lsp_types::TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: content,
+            }],
+        };
+
+        let language_servers = document.language_servers();
+        for ls in language_servers {
+            if let Err(e) = ls.text_document_did_change(did_change_params.clone()) {
+                tracing::error!("Failed to send didChange to {}: {}", ls.name(), e);
+            }
+        }
+    }
+
+    // 处理缓冲的请求
+    // if !buffered_requests.is_empty() {
+    //     tracing::info!("Processing {} buffered requests for {}",
+    //                   buffered_requests.len(), uri);
+
+    //     // 在新的任务中处理缓冲的请求，避免阻塞
+    //     let app_clone = app.clone();
+    //     let uri_clone = uri.clone();
+    //     tokio::spawn(async move {
+    //         for request in buffered_requests {
+    //             if let Err(e) = process_buffered_request(app_clone.clone(), &uri_clone, request).await {
+    //                 tracing::error!("Failed to process buffered request: {}", e);
+    //             }
+    //             // 小延迟避免过载
+    //             tokio::time::sleep(Duration::from_millis(10)).await;
+    //         }
+    //     });
+    // }
+
+    tracing::info!(
+        "Large file loading completed and requests processed: {}",
+        uri
+    );
+    Ok(())
+}
