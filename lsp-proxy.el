@@ -195,22 +195,6 @@ Disable idle completion if set to nil."
   :group 'lsp-proxy-mode
   :type 'string)
 
-(defun lsp-proxy-server-executable ()
-  "Find emacs-lsp-proxy executable with priority order:
-1. System PATH (emacs-lsp-proxy)
-2. Current directory (./emacs-lsp-proxy)
-3. target/release directory (./target/release/emacs-lsp-proxy)"
-  (let* ((base-dir (if load-file-name
-                       (file-name-directory load-file-name)
-                     default-directory))
-         (exe-name (if (eq system-type 'windows-nt)
-                       "emacs-lsp-proxy.exe"
-                     "emacs-lsp-proxy"))
-         (candidates (list (executable-find exe-name)
-                           (expand-file-name exe-name base-dir)
-                           (expand-file-name (concat "target/release/" exe-name) base-dir))))
-    (or (seq-find #'file-exists-p (delq nil candidates))
-        (error "No emacs-lsp-proxy executable found in any location"))))
 
 (defvar lsp-proxy--exec-file nil
   "Path to the emacs-lsp-proxy executable. 
@@ -727,6 +711,25 @@ Only works when mode is `tick or `alive."
       (invalid-slot-name
        ;; handle older jsonrpc versions
        (funcall make-fn :events-buffer-scrollback-size lsp-proxy-log-max)))))
+
+(defvar lsp-proxy--base-dir (if load-file-name
+                                (file-name-directory load-file-name)
+                              default-directory))
+
+(defun lsp-proxy-server-executable ()
+  "Find emacs-lsp-proxy executable with priority order:
+1. System PATH (emacs-lsp-proxy)
+2. Current directory (./emacs-lsp-proxy)
+3. target/release directory (./target/release/emacs-lsp-proxy)"
+  (let* ((base-dir lsp-proxy--base-dir)
+         (exe-name (if (eq system-type 'windows-nt)
+                       "emacs-lsp-proxy.exe"
+                     "emacs-lsp-proxy"))
+         (candidates (list (executable-find exe-name)
+                           (expand-file-name exe-name base-dir)
+                           (expand-file-name (concat "target/release/" exe-name) base-dir))))
+    (or (seq-find #'file-exists-p (delq nil candidates))
+        (error "No emacs-lsp-proxy executable found in any location"))))
 
 (defun lsp-proxy--start-server ()
   "Start the lsp proxy agent process in local."
