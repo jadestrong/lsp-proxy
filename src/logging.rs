@@ -1,5 +1,6 @@
 use serde_json::Value;
 use tracing::{debug, error, info};
+use tracing_subscriber::fmt::time;
 
 /// A structured logger for LSP server communication
 pub struct LspLogger {
@@ -198,6 +199,7 @@ pub fn init_tracing(log_level: u64) -> anyhow::Result<()> {
         .with_file(false)
         .with_line_number(false)
         .with_ansi(false) // Disable ANSI colors for file output
+        .with_timer(time::LocalTime::rfc_3339())
         .compact()
         .with_writer(file_writer)
         .with_env_filter(env_filter)
