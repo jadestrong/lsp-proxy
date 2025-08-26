@@ -25,6 +25,7 @@ mod req_queue;
 mod syntax;
 mod thread;
 mod utils;
+mod remote;
 
 use anyhow::{Context, Result};
 use args::Args;
