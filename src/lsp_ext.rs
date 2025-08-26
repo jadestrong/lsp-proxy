@@ -280,3 +280,126 @@ impl Request for RustAnalyzerExpandMacro {
     type Result = ExpandMacroResult;
     const METHOD: &'static str = "rust-analyzer/expandMacro";
 }
+
+// Remote development LSP extensions
+
+// emacs/remoteConnect
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteConnectParams {
+    pub server_name: String,
+    pub host: Option<String>,
+    pub user: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug)]
+pub enum RemoteConnect {}
+
+impl Request for RemoteConnect {
+    type Params = RemoteConnectParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteConnect";
+}
+
+// emacs/remoteDisconnect
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDisconnectParams {
+    pub server_name: String,
+}
+
+#[derive(Debug)]
+pub enum RemoteDisconnect {}
+
+impl Request for RemoteDisconnect {
+    type Params = RemoteDisconnectParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteDisconnect";
+}
+
+// emacs/remoteList
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct RemoteListParams {}
+
+#[derive(Debug)]
+pub enum RemoteList {}
+
+impl Request for RemoteList {
+    type Params = RemoteListParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteList";
+}
+
+// emacs/remoteStatus
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteStatusParams {
+    pub server_name: String,
+}
+
+#[derive(Debug)]
+pub enum RemoteStatus {}
+
+impl Request for RemoteStatus {
+    type Params = RemoteStatusParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteStatus";
+}
+
+// emacs/remoteFileRead
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileReadParams {
+    pub server_name: String,
+    pub file_path: String,
+}
+
+#[derive(Debug)]
+pub enum RemoteFileRead {}
+
+impl Request for RemoteFileRead {
+    type Params = RemoteFileReadParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteFileRead";
+}
+
+// emacs/remoteFileWrite
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteFileWriteParams {
+    pub server_name: String,
+    pub file_path: String,
+    pub content: String,
+}
+
+#[derive(Debug)]
+pub enum RemoteFileWrite {}
+
+impl Request for RemoteFileWrite {
+    type Params = RemoteFileWriteParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteFileWrite";
+}
+
+// emacs/remoteLspRequest
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteLspRequestParams {
+    pub server_name: String,
+    pub lsp_server_id: u32,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+#[derive(Debug)]
+pub enum RemoteLspRequest {}
+
+impl Request for RemoteLspRequest {
+    type Params = RemoteLspRequestParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteLspRequest";
+}
+
+// Re-export jsonrpc_core for error handling
+pub use serde_json as jsonrpc_core;

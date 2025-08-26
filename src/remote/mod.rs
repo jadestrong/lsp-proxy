@@ -53,6 +53,7 @@ pub enum RemoteMode {
 }
 
 /// Remote development session
+#[derive(Clone)]
 pub struct RemoteSession {
     pub config: RemoteServerConfig,
     pub connection: Arc<dyn connection::Connection>,

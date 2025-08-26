@@ -4,9 +4,10 @@ use crate::{
     large_file_manager::LargeFileManager,
     msg::{Message, Notification, Response},
     req_queue, syntax,
+    remote::{RemoteSession, config::RemoteConfigManager},
 };
 use crossbeam_channel::Sender;
-use std::{sync::Arc, sync::Mutex, time::Instant};
+use std::{sync::Arc, sync::Mutex, time::Instant, collections::HashMap};
 
 pub(crate) type ReqHandler = fn(&mut Application, Response);
 type ReqQueue = req_queue::ReqQueue<(String, Instant), ReqHandler>;
@@ -18,6 +19,8 @@ pub(crate) struct Application {
     pub jobs: Jobs,
     pub shutdown_requested: bool,
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
+    pub remote_sessions: Arc<Mutex<HashMap<String, RemoteSession>>>,
+    pub remote_config: Arc<Mutex<RemoteConfigManager>>,
 }
 
 impl Application {
@@ -31,6 +34,13 @@ impl Application {
         let syn_loader = std::sync::Arc::new(loader);
         let editor = Editor::new(syn_loader.clone());
 
+        // Initialize remote configuration
+        let remote_config = RemoteConfigManager::new().unwrap_or_else(|err| {
+            log::warn!("Failed to initialize remote config: {}", err);
+            // Create default config manager
+            RemoteConfigManager::new().unwrap()
+        });
+
         Application {
             sender,
             req_queue: ReqQueue::default(),
@@ -38,6 +48,8 @@ impl Application {
             jobs: Jobs::new(),
             shutdown_requested: false,
             large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),
+            remote_sessions: Arc::new(Mutex::new(HashMap::new())),
+            remote_config: Arc::new(Mutex::new(remote_config)),
         }
     }
 
@@ -97,6 +109,19 @@ impl Application {
             }
         }
 
+        // Disconnect remote sessions
+        if let Ok(mut sessions) = self.remote_sessions.lock() {
+            for (name, mut session) in sessions.drain() {
+                log::debug!("Disconnecting remote session: {}", name);
+                // Use tokio spawn to handle async cleanup
+                let _ = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        let _ = session.disconnect().await;
+                    })
+                });
+            }
+        }
+
         // Clear documents
         self.editor.documents.clear();
 
@@ -104,5 +129,47 @@ impl Application {
         self.req_queue = req_queue::ReqQueue::default();
 
         log::info!("Resource cleanup complete");
+    }
+
+    /// Get remote session by name
+    pub(crate) fn get_remote_session(&self, name: &str) -> Option<RemoteSession> {
+        self.remote_sessions
+            .lock()
+            .ok()?
+            .get(name)
+            .cloned()
+    }
+
+    /// Add or update remote session
+    pub(crate) fn add_remote_session(&self, name: String, session: RemoteSession) {
+        if let Ok(mut sessions) = self.remote_sessions.lock() {
+            sessions.insert(name, session);
+        }
+    }
+
+    /// Remove remote session
+    pub(crate) fn remove_remote_session(&self, name: &str) -> Option<RemoteSession> {
+        self.remote_sessions
+            .lock()
+            .ok()?
+            .remove(name)
+    }
+
+    /// List all remote sessions
+    pub(crate) fn list_remote_sessions(&self) -> Vec<String> {
+        self.remote_sessions
+            .lock()
+            .map(|sessions| sessions.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Check if remote session exists and is connected
+    pub(crate) fn is_remote_session_connected(&self, name: &str) -> bool {
+        self.remote_sessions
+            .lock()
+            .ok()
+            .and_then(|sessions| sessions.get(name).cloned())
+            .map(|session| session.is_connected())
+            .unwrap_or(false)
     }
 }

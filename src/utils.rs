@@ -578,3 +578,32 @@ pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
     // Flatten the grouped results back into the original Vec
     *entries = groups.into_iter().flatten().collect();
 }
+
+// Remote development utility functions
+use crate::application::Application;
+use lsp_types::{MessageType, ShowMessageParams};
+
+/// Show message to user via LSP notification
+pub fn show_message(app: &Application, message_type: MessageType, message: &str) {
+    use lsp_types::notification::Notification;
+    let params = ShowMessageParams {
+        typ: message_type,
+        message: message.to_string(),
+    };
+    app.send_notification::<lsp_types::notification::ShowMessage>(params);
+}
+
+/// Show error message to user
+pub fn show_error(app: &Application, error: &str) {
+    show_message(app, MessageType::ERROR, error);
+}
+
+/// Show info message to user
+pub fn show_info(app: &Application, info: &str) {
+    show_message(app, MessageType::INFO, info);
+}
+
+/// Show warning message to user
+pub fn show_warning(app: &Application, warning: &str) {
+    show_message(app, MessageType::WARNING, warning);
+}

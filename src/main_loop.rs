@@ -600,6 +600,70 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
             }
+            // Remote development requests
+            Message::Request(req) if req.method == lsp_ext::RemoteList::METHOD => {
+                let response = Response::new_ok(req.id.clone(), json!({}));
+                match crate::handlers::remote::handle_remote_list(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_connect(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteDisconnect::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_disconnect(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteStatus::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_status(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteFileRead::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_file_read(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteFileWrite::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_file_write(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteLspRequest::METHOD => {
+                let response = Response::new_ok(req.id.clone(), req.params.params);
+                match crate::handlers::remote::handle_remote_lsp_request(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
