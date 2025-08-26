@@ -128,7 +128,7 @@ impl Registry {
                         return (name.to_owned(), Ok(client.clone()));
                     }
 
-                    // 如果存在 library_directories 则判断该文件是否属于，若属于则返回最新活跃的 client
+                    // If library_directories exists, check whether the file belongs to it; if it dones, return the latest active client.
                     if let Some(_) = library_directories.iter().find(|dir| {
                         path::path_is_ancestor_of(dir, &doc_path.unwrap().to_string_lossy())
                     }) {
@@ -211,12 +211,6 @@ impl Registry {
                             Ok(client) => client,
                             error => return Some(error),
                         };
-
-                    // 这样是将所有同名的 server 都清空了
-                    // let old_clients = self
-                    //     .inner
-                    //     .insert(name.clone(), vec![client.clone()])
-                    //     .unwrap();
 
                     self.inner
                         .entry(name.to_string())

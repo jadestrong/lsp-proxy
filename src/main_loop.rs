@@ -171,7 +171,7 @@ impl Application {
                                     }
                                 }
 
-                                // eslint 需要根据 scope_uri 来设置 workspaceFolder
+                                // eslint need scope_uri to set workspaceFolder
                                 if language_server.name() == "eslint" {
                                     if let Some(uri) = item.scope_uri.as_ref() {
                                         let workspace_folder = find_workspace_folder_for_uri(uri);
@@ -640,9 +640,6 @@ impl Application {
         .on_sync_mut::<lsp_ext::EmacsLargeFileChunk>(
             handlers::notification::handle_large_file_chunk,
         )?
-        // .on_sync_mut::<lsp_ext::EmacsLargeFileLoadComplete>(
-        //     handlers::notification::handle_large_file_load_complete,
-        // )?
         .on_sync_mut::<lsp_ext::EmacsLargeFileLoadCancel>(
             handlers::notification::handle_large_file_load_cancel,
         )?
