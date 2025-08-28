@@ -64,16 +64,67 @@ pub trait FileTransfer: Send + Sync {
 /// Create a connection based on configuration
 pub async fn create_connection(config: &RemoteServerConfig) -> Result<Arc<dyn Connection>> {
     match &config.mode {
-        crate::remote::RemoteMode::Direct | crate::remote::RemoteMode::Auto => {
+        crate::remote::RemoteMode::Direct => {
             let ssh_conn = ssh::SSHConnection::new(config.clone()).await?;
             Ok(Arc::new(ssh_conn))
         },
         crate::remote::RemoteMode::Server { .. } => {
-            // First try SSH, then potentially upgrade to server mode
+            let server_conn = server_mode::ServerModeConnection::new(config.clone()).await?;
+            Ok(Arc::new(server_conn))
+        },
+        crate::remote::RemoteMode::SSHTunnel { .. } => {
+            let tunnel_conn = ssh_tunnel::SSHTunnelConnection::new(config.clone()).await?;
+            Ok(Arc::new(tunnel_conn))
+        },
+        crate::remote::RemoteMode::Auto => {
+            // Try SSH tunnel first (best of both worlds), then server mode, finally SSH direct
+            match ssh_tunnel::SSHTunnelConnection::new(config.clone()).await {
+                Ok(tunnel_conn) => {
+                    match tunnel_conn.connect().await {
+                        Ok(()) => {
+                            log::info!("Auto-mode: Selected SSH tunnel connection");
+                            Ok(Arc::new(tunnel_conn))
+                        },
+                        Err(e) => {
+                            log::warn!("SSH tunnel connection failed, trying server mode: {}", e);
+                            try_server_mode_fallback(config).await
+                        }
+                    }
+                },
+                Err(e) => {
+                    log::warn!("Failed to create SSH tunnel connection, trying server mode: {}", e);
+                    try_server_mode_fallback(config).await
+                }
+            }
+        }
+    }
+}
+
+async fn try_server_mode_fallback(config: &RemoteServerConfig) -> Result<Arc<dyn Connection>> {
+    match server_mode::ServerModeConnection::new(config.clone()).await {
+        Ok(server_conn) => {
+            match server_conn.connect().await {
+                Ok(()) => {
+                    log::info!("Auto-mode: Selected direct server connection");
+                    Ok(Arc::new(server_conn))
+                },
+                Err(e) => {
+                    log::warn!("Server mode connection failed, falling back to SSH direct: {}", e);
+                    let ssh_conn = ssh::SSHConnection::new(config.clone()).await?;
+                    log::info!("Auto-mode: Selected SSH direct connection");
+                    Ok(Arc::new(ssh_conn))
+                }
+            }
+        },
+        Err(e) => {
+            log::warn!("Failed to create server mode connection, using SSH direct: {}", e);
             let ssh_conn = ssh::SSHConnection::new(config.clone()).await?;
+            log::info!("Auto-mode: Selected SSH direct connection");
             Ok(Arc::new(ssh_conn))
         }
     }
 }
 
 pub mod ssh;
+pub mod server_mode;
+pub mod ssh_tunnel;

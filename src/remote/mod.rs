@@ -11,6 +11,10 @@ pub mod filesystem;
 pub mod lsp;
 pub mod auth;
 pub mod config;
+pub mod protocol;
+pub mod deployment;
+pub mod server_config;
+pub mod server_connection;
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
@@ -46,8 +50,10 @@ pub enum RemoteAuth {
 pub enum RemoteMode {
     /// Direct SSH mode (zero deployment)
     Direct,
-    /// Server mode with optional auto-deployment
+    /// Server mode with direct TCP connection
     Server { auto_deploy: bool, server_path: Option<PathBuf> },
+    /// Server mode with SSH tunnel (secure + high performance)
+    SSHTunnel { auto_deploy: bool, server_path: Option<PathBuf> },
     /// Auto-detect best mode
     Auto,
 }

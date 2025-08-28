@@ -1,0 +1,74 @@
+# LSP-Proxy Remote Server Configuration Examples
+
+# Server Mode with auto-deployment
+[[servers]]
+name = "dev-server"
+host = "dev.example.com"
+user = "developer"
+port = 22
+workspace_root = "/home/developer/projects"
+
+# Server mode with auto-deployment
+mode = { Server = { auto_deploy = true, server_path = "/usr/local/bin/lsp-proxy-server" } }
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/id_rsa"
+
+[[servers]]
+name = "staging-server"
+host = "staging.example.com"
+user = "deploy"
+port = 2222
+workspace_root = "/opt/apps"
+
+# Server mode without auto-deployment (manually deployed)
+mode = { Server = { auto_deploy = false, server_path = "/usr/local/bin/lsp-proxy-server" } }
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/staging_key"
+
+[[servers]]
+name = "direct-server"
+host = "direct.example.com"
+user = "developer"
+port = 22
+workspace_root = "/home/developer/work"
+
+# Direct mode (SSH only, no server deployment)
+mode = "Direct"
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/id_rsa"
+
+[[servers]]
+name = "auto-server"
+host = "auto.example.com"
+user = "developer"
+port = 22
+workspace_root = "/home/developer/projects"
+
+# Auto mode (try server mode first, fallback to direct)
+mode = "Auto"
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/id_rsa"
+
+# Global settings
+[settings]
+default_server = "dev-server"
+connection_timeout = 30
+max_connections = 5
+
+[settings.cache]
+enabled = true
+max_size = "100MB"
+ttl = 3600
+
+[settings.connection]
+keep_alive = true
+retry_attempts = 3
+retry_delay = 5
