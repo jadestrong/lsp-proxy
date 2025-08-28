@@ -96,6 +96,14 @@ impl RemoteConfigManager {
         })
     }
     
+    /// Create a minimal fallback config manager for error cases
+    pub fn fallback() -> Self {
+        Self {
+            config_file: std::env::temp_dir().join("lsp-proxy-fallback.toml"),
+            config: RemoteConfig::default(),
+        }
+    }
+    
     /// Load configuration from file
     pub fn load(&mut self) -> Result<()> {
         if self.config_file.exists() {

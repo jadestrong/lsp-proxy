@@ -34,12 +34,24 @@ impl Application {
         let syn_loader = std::sync::Arc::new(loader);
         let editor = Editor::new(syn_loader.clone());
 
-        // Initialize remote configuration
-        let remote_config = RemoteConfigManager::new().unwrap_or_else(|err| {
-            log::warn!("Failed to initialize remote config: {}", err);
-            // Create default config manager
-            RemoteConfigManager::new().unwrap()
-        });
+        // Initialize remote configuration with proper error handling
+        let remote_config = match crate::remote::config::load_remote_config() {
+            Ok(config) => {
+                log::info!("Successfully loaded remote configuration");
+                config
+            },
+            Err(err) => {
+                log::warn!("Failed to load remote config: {}, creating default", err);
+                match RemoteConfigManager::new() {
+                    Ok(config) => config,
+                    Err(config_err) => {
+                        log::error!("Failed to create default remote config: {}", config_err);
+                        // Use the fallback constructor
+                        RemoteConfigManager::fallback()
+                    }
+                }
+            }
+        };
 
         Application {
             sender,

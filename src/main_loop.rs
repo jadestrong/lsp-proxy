@@ -664,6 +664,15 @@ impl Application {
                     }
                 }
             }
+            Message::Request(req) if req.method == lsp_ext::RemoteWorkspace::METHOD => {
+                let response = Response::new_ok(req.id.clone(), json!({}));
+                match crate::handlers::remote::handle_remote_workspace(self, response) {
+                    Ok(_) => {},
+                    Err(e) => {
+                        self.respond(create_error_response(&req.id, e.to_string()));
+                    }
+                }
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {

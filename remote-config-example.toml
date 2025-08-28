@@ -1,0 +1,86 @@
+# LSP-Proxy Remote Configuration Example
+# Save this file as ~/.config/lsp-proxy/remote.toml
+
+# Global settings
+[settings]
+# Default server to connect to on startup
+default_server = "dev-server"
+
+# Connection timeout in seconds
+connection_timeout = 30
+
+# Maximum number of concurrent connections
+max_connections = 5
+
+# Cache settings
+[settings.cache]
+enabled = true
+max_size = "100MB"
+ttl = 3600  # 1 hour in seconds
+
+# Connection settings
+[settings.connection]
+keep_alive = true
+retry_attempts = 3
+retry_delay = 5
+
+# Example remote servers
+[[servers]]
+name = "dev-server"
+host = "dev.example.com"
+user = "developer"
+port = 22
+mode = "SSH"
+workspace_root = "/home/developer/projects"
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/id_rsa"
+# password = ""  # Use for password auth
+
+[[servers]]
+name = "staging"
+host = "staging.example.com" 
+user = "deploy"
+port = 2222
+mode = "SSH"
+workspace_root = "/var/www/staging"
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/staging_key"
+
+[[servers]]
+name = "production"
+host = "prod.example.com"
+user = "deploy"
+port = 22
+mode = "SSH"
+workspace_root = "/var/www/production"
+
+[servers.auth]
+method = "key"
+key_file = "~/.ssh/prod_key"
+
+# You can add more servers by copying the [[servers]] section
+
+# Language server configurations for remote environments
+[language_servers]
+
+# Example: Remote Rust analyzer
+[language_servers.rust-analyzer]
+command = "rust-analyzer"
+args = []
+workspace_pattern = "Cargo.toml"
+
+# Example: Remote TypeScript server  
+[language_servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+workspace_pattern = "package.json"
+
+# Example: Remote Python LSP
+[language_servers.pylsp]
+command = "pylsp"
+args = []
+workspace_pattern = "requirements.txt"

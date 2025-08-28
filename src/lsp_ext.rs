@@ -401,5 +401,18 @@ impl Request for RemoteLspRequest {
     const METHOD: &'static str = "emacs/remoteLspRequest";
 }
 
+// emacs/remoteWorkspace
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct RemoteWorkspaceParams {}
+
+#[derive(Debug)]
+pub enum RemoteWorkspace {}
+
+impl Request for RemoteWorkspace {
+    type Params = RemoteWorkspaceParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/remoteWorkspace";
+}
+
 // Re-export jsonrpc_core for error handling
 pub use serde_json as jsonrpc_core;
