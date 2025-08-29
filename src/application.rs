@@ -81,6 +81,11 @@ impl Application {
         self.send(not.into());
     }
 
+    pub(crate) fn send_notification_with_params(&self, method: &str, params: serde_json::Value) {
+        let not = Notification::new(method.to_string(), params);
+        self.send(not.into());
+    }
+
     pub(crate) fn request_shutdown(&mut self) {
         log::info!("Shutdown requested");
         self.shutdown_requested = true;
@@ -88,7 +93,7 @@ impl Application {
 
     pub(crate) fn cleanup_resources(&mut self) {
         log::info!("Cleaning up resources before exit");
-        
+
         // Shutdown all language servers
         for client in self.editor.language_servers.iter_clients() {
             log::debug!("Shutting down language server: {}", client.name());
@@ -97,13 +102,13 @@ impl Application {
                 let _ = client.shutdown_and_exit();
             }
         }
-        
+
         // Clear documents
         self.editor.documents.clear();
-        
+
         // Clear request queue
         self.req_queue = req_queue::ReqQueue::default();
-        
+
         log::info!("Resource cleanup complete");
     }
 }

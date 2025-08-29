@@ -292,13 +292,6 @@ impl Application {
             Call::Notification(jsonrpc::Notification { method, params, .. }) => {
                 let notification = match NotificationFromServer::parse(&method, params) {
                     Ok(notification) => notification,
-                    Err(crate::registry::Error::Unhandled) => {
-                        info!(
-                            "Ignoring unhandled notification from Language Server {:?}",
-                            method
-                        );
-                        return;
-                    }
                     Err(err) => {
                         error!(
                             "Ignoring unknown notification from Language Server: {}",
@@ -409,6 +402,10 @@ impl Application {
                                 params,
                             },
                         )
+                    }
+                    NotificationFromServer::CustomMessage(method, params) => {
+                        info!("Forwarding custom notification from Language Server: {:?}", method);
+                        self.send_notification_with_params(&method, params);
                     }
                 }
             }
@@ -544,7 +541,7 @@ impl Application {
                     ));
                     return Ok(());
                 }
-                
+
                 match self.get_working_document(&req) {
                     Ok(doc) => {
                         Self::on_request(req, self.sender.clone(), doc.get_all_language_servers());

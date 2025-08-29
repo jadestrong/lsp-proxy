@@ -50,6 +50,7 @@ pub enum NotificationFromServer {
     ShowMessage(lsp::ShowMessageParams),
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
+    CustomMessage(String, serde_json::Value),
 }
 
 impl NotificationFromServer {
@@ -76,7 +77,8 @@ impl NotificationFromServer {
                 Self::ProgressMessage(params)
             }
             _ => {
-                return Err(Error::Unhandled);
+                let params: serde_json::Value = params.into();
+                Self::CustomMessage(method.to_string(), params)
             }
         };
 
