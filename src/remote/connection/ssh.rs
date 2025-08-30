@@ -4,6 +4,7 @@
 
 use super::{Connection, CommandResult, FileTransfer};
 use crate::remote::{RemoteServerConfig, RemoteAuth};
+use crate::remote::ssh_config::{SshConfigParser, SshHostConfig};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use log::{debug, info};
@@ -11,6 +12,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// SSH handler for the russh library
+#[derive(Clone)]
 struct SshHandler;
 
 #[async_trait]
@@ -41,6 +43,32 @@ impl SSHConnection {
             connected: Arc::new(Mutex::new(false)),
         })
     }
+    
+    /// Apply SSH configuration to override connection settings
+    async fn apply_ssh_config(&mut self, ssh_config: &SshHostConfig) -> Result<()> {
+        Self::apply_ssh_config_to(&mut self.config, ssh_config)
+    }
+    
+    /// Apply SSH configuration to a RemoteServerConfig
+    fn apply_ssh_config_to(config: &mut RemoteServerConfig, ssh_config: &SshHostConfig) -> Result<()> {
+        // Override connection settings from SSH config
+        if let Some(ref hostname) = ssh_config.hostname {
+            config.host = hostname.clone();
+        }
+        
+        if let Some(ref user) = ssh_config.user {
+            config.user = user.clone();
+        }
+        
+        if let Some(port) = ssh_config.port {
+            config.port = Some(port);
+        }
+        
+        log::debug!("Applied SSH config: host={}, user={}, port={:?}", 
+                   config.host, config.user, config.port);
+        
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -54,14 +82,79 @@ impl Connection for SSHConnection {
         let mut session = russh::client::connect(
             ssh_config, 
             (&self.config.host[..], self.config.port.unwrap_or(22)),
-            handler
+            handler.clone()
         ).await?;
         
         // Authenticate based on config
         let auth_result = match &self.config.auth {
             RemoteAuth::Key { path, passphrase } => {
-                let key_pair = russh_keys::load_secret_key(path, passphrase.as_deref())?;
+                // Expand tilde (~) in path
+                let expanded_path = if path.to_string_lossy().starts_with('~') {
+                    if let Some(home) = dirs::home_dir() {
+                        let path_str = path.to_string_lossy();
+                        let relative_path = path_str.strip_prefix('~').unwrap_or(&path_str).trim_start_matches('/');
+                        home.join(relative_path)
+                    } else {
+                        path.clone()
+                    }
+                } else {
+                    path.clone()
+                };
+                
+                log::debug!("Attempting to load SSH key from: {}", expanded_path.display());
+                let key_pair = russh_keys::load_secret_key(&expanded_path, passphrase.as_deref())?;
                 session.authenticate_publickey(&self.config.user, Arc::new(key_pair)).await?
+            },
+            RemoteAuth::SshConfig { host } => {
+                let parser = SshConfigParser::new();
+                let config_host = host.as_ref().unwrap_or(&self.config.host);
+                
+                log::debug!("Attempting to parse SSH config for host: {}", config_host);
+                match parser.get_host_config(config_host)? {
+                    Some(ssh_config) => {
+                        // Apply SSH config settings (need to create new config since self is immutable)
+                        let mut updated_config = self.config.clone();
+                        Self::apply_ssh_config_to(&mut updated_config, &ssh_config)?;
+                        
+                        // Use updated config for connection (temporarily override self.config)
+                        let host = &updated_config.host;
+                        let port = updated_config.port.unwrap_or(22);
+                        let user = &updated_config.user;
+                        
+                        log::debug!("Connecting with SSH config: host={}, user={}, port={}", host, user, port);
+                        
+                        // Connect with updated config
+                        let mut session = russh::client::connect(
+                            Arc::new(russh::client::Config::default()),
+                            (host.as_str(), port),
+                            handler.clone()
+                        ).await?;
+                        
+                        // Find identity file from SSH config
+                        if let Some(identity_file) = parser.find_identity_file(&ssh_config) {
+                            log::debug!("Using SSH key from config: {}", identity_file.display());
+                            let key_pair = russh_keys::load_secret_key(&identity_file, None)?;
+                            let auth_result = session.authenticate_publickey(user, Arc::new(key_pair)).await?;
+                            
+                            if !auth_result {
+                                return Err(anyhow!("SSH authentication failed"));
+                            }
+                            
+                            // Store the session
+                            let mut session_guard = self.session.lock().await;
+                            *session_guard = Some(session);
+                            let mut connected_guard = self.connected.lock().await;
+                            *connected_guard = true;
+                            
+                            return Ok(());
+                        } else {
+                            return Err(anyhow!("No suitable SSH identity file found for host '{}'", config_host));
+                        }
+                    }
+                    None => {
+                        return Err(anyhow!("No SSH configuration found for host '{}'", config_host));
+                    }
+                }
             },
             RemoteAuth::Password(password) => {
                 session.authenticate_password(&self.config.user, password).await?

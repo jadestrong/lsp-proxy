@@ -285,7 +285,6 @@ impl Request for RustAnalyzerExpandMacro {
 
 // emacs/remoteConnect
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteConnectParams {
     pub server_name: String,
     pub host: Option<String>,
@@ -304,7 +303,6 @@ impl Request for RemoteConnect {
 
 // emacs/remoteDisconnect
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteDisconnectParams {
     pub server_name: String,
 }
@@ -333,7 +331,6 @@ impl Request for RemoteList {
 
 // emacs/remoteStatus
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteStatusParams {
     pub server_name: String,
 }
@@ -349,7 +346,6 @@ impl Request for RemoteStatus {
 
 // emacs/remoteFileRead
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteFileReadParams {
     pub server_name: String,
     pub file_path: String,
@@ -366,7 +362,6 @@ impl Request for RemoteFileRead {
 
 // emacs/remoteFileWrite
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteFileWriteParams {
     pub server_name: String,
     pub file_path: String,
@@ -384,7 +379,6 @@ impl Request for RemoteFileWrite {
 
 // emacs/remoteLspRequest
 #[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct RemoteLspRequestParams {
     pub server_name: String,
     pub lsp_server_id: u32,

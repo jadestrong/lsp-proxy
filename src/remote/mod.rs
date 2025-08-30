@@ -15,6 +15,7 @@ pub mod protocol;
 pub mod deployment;
 pub mod server_config;
 pub mod server_connection;
+pub mod ssh_config;
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
@@ -43,6 +44,8 @@ pub enum RemoteAuth {
     Password(String),
     /// SSH agent authentication
     Agent,
+    /// Automatic SSH config file parsing
+    SshConfig { host: Option<String> },
 }
 
 /// Remote development modes
@@ -70,7 +73,9 @@ pub struct RemoteSession {
 impl RemoteSession {
     /// Create a new remote session
     pub async fn new(config: RemoteServerConfig) -> Result<Self> {
-        let connection = Arc::new(connection::ssh::SSHConnection::new(config.clone()).await?);
+        // create_connection now handles connection establishment for all modes
+        let connection = connection::create_connection(&config).await?;
+        
         let filesystem = filesystem::create_filesystem(connection.clone()).await?;
         let lsp_proxy = lsp::create_lsp_proxy(connection.clone()).await?;
 

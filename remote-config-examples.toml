@@ -1,74 +1,105 @@
 # LSP-Proxy Remote Server Configuration Examples
+# This file should be saved as ~/.config/lsp-proxy/remote.toml
 
-# Server Mode with auto-deployment
-[[servers]]
+# Server configurations - each server gets its own section
+[servers.dev-server]
 name = "dev-server"
 host = "dev.example.com"
 user = "developer"
 port = 22
 workspace_root = "/home/developer/projects"
-
+connection_timeout = 30
 # Server mode with auto-deployment
 mode = { Server = { auto_deploy = true, server_path = "/usr/local/bin/lsp-proxy-server" } }
+# SSH key authentication
+auth = { Key = { path = "~/.ssh/id_rsa", passphrase = null } }
 
-[servers.auth]
-method = "key"
-key_file = "~/.ssh/id_rsa"
+# Server using SSH config file for automatic configuration
+[servers.ssh-config-server]
+name = "ssh-config-server"
+host = "myserver"  # This should match a Host entry in ~/.ssh/config
+user = "developer"  # Can be overridden by SSH config
+port = 22          # Can be overridden by SSH config
+workspace_root = "/home/developer/projects"
+mode = { SSHTunnel = { auto_deploy = true, server_path = "/usr/local/bin/lsp-proxy-server" } }
+# Use SSH config file for automatic configuration
+auth = { SshConfig = { host = "myserver" } }  # Optional: specify different host name for SSH config lookup
 
-[[servers]]
+# Server using SSH config with fallback to current host name
+[servers.auto-ssh-config]
+name = "auto-ssh-config"
+host = "production.example.com"  # Will look for this in ~/.ssh/config
+user = "admin"
+workspace_root = "/opt/apps"
+mode = "Auto"
+# Use SSH config file, will use the server's host name if no specific host is provided
+auth = "SshConfig"  # Short form, equivalent to { SshConfig = { host = null } }
+
+[servers.staging-server]
 name = "staging-server"
 host = "staging.example.com"
 user = "deploy"
 port = 2222
 workspace_root = "/opt/apps"
-
 # Server mode without auto-deployment (manually deployed)
 mode = { Server = { auto_deploy = false, server_path = "/usr/local/bin/lsp-proxy-server" } }
+# SSH key with different key file
+auth = { Key = { path = "~/.ssh/staging_key" } }
 
-[servers.auth]
-method = "key"
-key_file = "~/.ssh/staging_key"
-
-[[servers]]
+[servers.direct-server]
 name = "direct-server"
 host = "direct.example.com"
 user = "developer"
 port = 22
 workspace_root = "/home/developer/work"
-
 # Direct mode (SSH only, no server deployment)
 mode = "Direct"
+# SSH key authentication
+auth = { Key = { path = "~/.ssh/id_rsa" } }
 
-[servers.auth]
-method = "key"
-key_file = "~/.ssh/id_rsa"
-
-[[servers]]
+[servers.auto-server]
 name = "auto-server"
 host = "auto.example.com"
 user = "developer"
 port = 22
 workspace_root = "/home/developer/projects"
-
 # Auto mode (try server mode first, fallback to direct)
 mode = "Auto"
+# SSH agent authentication
+auth = "Agent"
 
-[servers.auth]
-method = "key"
-key_file = "~/.ssh/id_rsa"
+[servers.tunnel-server]
+name = "tunnel-server"
+host = "tunnel.example.com"
+user = "developer"
+port = 22
+workspace_root = "/home/developer/projects"
+# SSH Tunnel mode - secure and high performance
+mode = { SSHTunnel = { auto_deploy = true, server_path = "/usr/local/bin/lsp-proxy-server" } }
+# SSH key authentication
+auth = { Key = { path = "~/.ssh/id_rsa" } }
+
+[servers.password-server]
+name = "password-server"
+host = "password.example.com"
+user = "developer"
+port = 22
+workspace_root = "/home/developer/projects"
+mode = "Direct"
+# Password authentication (not recommended for production)
+auth = { Password = "your-password-here" }
 
 # Global settings
-[settings]
 default_server = "dev-server"
-connection_timeout = 30
-max_connections = 5
 
-[settings.cache]
+[cache_settings]
 enabled = true
-max_size = "100MB"
-ttl = 3600
+max_size_mb = 100
+ttl_seconds = 3600
+# cache_dir = "/tmp/lsp-proxy-cache"  # optional, will use default if not specified
 
-[settings.connection]
-keep_alive = true
+[connection_settings]
+timeout_seconds = 30
 retry_attempts = 3
-retry_delay = 5
+keepalive_interval = 60  # seconds, optional
+compression = true

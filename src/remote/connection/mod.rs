@@ -66,14 +66,20 @@ pub async fn create_connection(config: &RemoteServerConfig) -> Result<Arc<dyn Co
     match &config.mode {
         crate::remote::RemoteMode::Direct => {
             let ssh_conn = ssh::SSHConnection::new(config.clone()).await?;
+            ssh_conn.connect().await?;
+            log::info!("Successfully established SSH Direct connection to {}", config.name);
             Ok(Arc::new(ssh_conn))
         },
         crate::remote::RemoteMode::Server { .. } => {
             let server_conn = server_mode::ServerModeConnection::new(config.clone()).await?;
+            server_conn.connect().await?;
+            log::info!("Successfully established Server Mode connection to {}", config.name);
             Ok(Arc::new(server_conn))
         },
         crate::remote::RemoteMode::SSHTunnel { .. } => {
             let tunnel_conn = ssh_tunnel::SSHTunnelConnection::new(config.clone()).await?;
+            tunnel_conn.connect().await?;
+            log::info!("Successfully established SSH Tunnel connection to {}", config.name);
             Ok(Arc::new(tunnel_conn))
         },
         crate::remote::RemoteMode::Auto => {

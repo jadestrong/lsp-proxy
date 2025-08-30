@@ -602,72 +602,121 @@ impl Application {
             }
             // Remote development requests
             Message::Request(req) if req.method == lsp_ext::RemoteList::METHOD => {
-                let response = Response::new_ok(req.id.clone(), json!({}));
-                match crate::handlers::remote::handle_remote_list(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_list(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_connect(self, response) {
-                    Ok(_) => {},
-                    Err(e) => {
-                        self.respond(create_error_response(&req.id, e.to_string()));
+                // let params: lsp_ext::RemoteConnectParams = if req.params.params.is_null() {
+                //     return Err(anyhow::anyhow!("Missing connect parameters"));
+                // } else {
+                //     serde_json::from_value(req.params.params.clone())?
+                // };
+
+                // let server_name = params.server_name.clone();
+                // Check if already connected
+                // if self.is_remote_session_connected(&server_name) {
+                //     let response = Response::new_ok(
+                //         req.id.clone(),
+                //         Some(json!({
+                //             "success": true,
+                //             "message": format!("Already connected to server '{}'", server_name),
+                //             "server_name": server_name
+                //         })),
+                //     );
+                //     self.respond(response);
+                // } else {
+                let remote_config = self.remote_config.clone();
+                let remote_sessions = self.remote_sessions.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    match crate::handlers::remote::handle_remote_connect(
+                        remote_config,
+                        remote_sessions,
+                        &req,
+                    )
+                    .await
+                    {
+                        Ok(response) => {
+                            // let response = Response::new_ok(req.id.clone(), result);
+                            let _ = sender.send(response.into());
+                        }
+                        Err(e) => {
+                            let _ =
+                                sender.send(create_error_response(&req.id, e.to_string()).into());
+                            // self.respond(create_error_response(&req.id, e.to_string()));
+                        }
                     }
-                }
+                });
+                // }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteDisconnect::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_disconnect(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_disconnect(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteStatus::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_status(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_status(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteFileRead::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_file_read(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_file_read(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteFileWrite::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_file_write(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_file_write(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteLspRequest::METHOD => {
-                let response = Response::new_ok(req.id.clone(), req.params.params);
-                match crate::handlers::remote::handle_remote_lsp_request(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_lsp_request(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteWorkspace::METHOD => {
-                let response = Response::new_ok(req.id.clone(), json!({}));
-                match crate::handlers::remote::handle_remote_workspace(self, response) {
-                    Ok(_) => {},
+                match crate::handlers::remote::handle_remote_workspace(self, &req) {
+                    Ok(result) => {
+                        let response = Response::new_ok(req.id.clone(), result);
+                        self.respond(response);
+                    }
                     Err(e) => {
                         self.respond(create_error_response(&req.id, e.to_string()));
                     }

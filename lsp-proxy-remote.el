@@ -17,10 +17,17 @@
 
 ;;; Code:
 
-(require 'lsp-proxy)  ; 依赖主模块
-(require 'jsonrpc)
-(require 'project)
 (require 'cl-lib)
+(require 'json)
+
+;; Forward declarations for lsp-proxy functions
+(declare-function lsp-proxy--connection-alivep "lsp-proxy")
+(declare-function jsonrpc-request "jsonrpc")
+(declare-function jsonrpc-async-request "jsonrpc")
+(defvar lsp-proxy--connection)
+(defvar lsp-proxy-mode)
+(defvar lsp-proxy-mode-hook)
+(defvar lsp-proxy-mode-exit-hook)
 
 (defgroup lsp-proxy-remote nil
   "Remote development integration for lsp-proxy."
@@ -48,29 +55,42 @@
 (defvar lsp-proxy-remote--server-cache (make-hash-table :test 'equal)
   "Cache for remote server configurations.")
 
+;; Safe function definitions for when lsp-proxy is not loaded
+(defun lsp-proxy-remote--connection-alivep-safe ()
+  "Safely check if lsp-proxy connection is alive."
+  (and (boundp 'lsp-proxy--connection)
+       lsp-proxy--connection
+       (if (fboundp 'lsp-proxy--connection-alivep)
+           (lsp-proxy--connection-alivep)
+         t)))  ; fallback
+
 ;;; Integration with main lsp-proxy
 
 (defun lsp-proxy-remote--ensure-connection ()
   "Ensure lsp-proxy connection is active before remote operations."
-  (unless (and (boundp 'lsp-proxy--connection) 
-               lsp-proxy--connection
-               (lsp-proxy--connection-alivep))
+  (unless (lsp-proxy-remote--connection-alivep-safe)
     (user-error "LSP-Proxy not connected. Please start lsp-proxy-mode first")))
 
 (defun lsp-proxy-remote--send-request (method params &optional callback)
   "Send a remote request to lsp-proxy with METHOD and PARAMS.
-If CALLBACK is provided, call it with the result."
+If CALLBACK is provided, call it with the result.
+Manually constructs the parameter format expected by lsp-proxy backend."
   (lsp-proxy-remote--ensure-connection)
-  (if callback
-      (jsonrpc-async-request lsp-proxy--connection method params
-                           :success-fn callback
-                           :error-fn (lambda (error)
-                                       (message "Remote request failed: %s" error)))
-    (jsonrpc-request lsp-proxy--connection method params)))
+  ;; Construct the wrapped params format that lsp-proxy backend expects
+  ;; For remote requests, we typically don't need the current file URI
+  (let ((wrapped-params (list :uri nil  ; Remote requests don't need current file URI
+                              :params params)))
+    (if callback
+        (jsonrpc-async-request lsp-proxy--connection method wrapped-params
+                               :success-fn callback
+                               :error-fn (lambda (error)
+                                           (message "Remote request failed: %s" error)))
+      (jsonrpc-request lsp-proxy--connection method wrapped-params))))
 
 (defun lsp-proxy-remote--send-async-request (method params callback)
   "Send async remote request to lsp-proxy with METHOD and PARAMS.
-Call CALLBACK with the result when complete."
+Call CALLBACK with the result when complete.
+Manually constructs the parameter format expected by lsp-proxy backend."
   (lsp-proxy-remote--send-request method params callback))
 
 ;;; Integration with existing lsp-proxy status
@@ -99,8 +119,12 @@ Call CALLBACK with the result when complete."
 
 (defun lsp-proxy-remote--mode-enter-hook ()
   "Hook function called when lsp-proxy-mode is enabled."
-  (when (and lsp-proxy-remote-mode lsp-proxy-remote-auto-connect)
-    (lsp-proxy-remote--auto-connect)))
+  (when lsp-proxy-remote-mode
+    ;; Refresh server list when entering remote mode
+    (lsp-proxy-remote-refresh-server-list)
+    ;; Auto-connect if configured
+    (when lsp-proxy-remote-auto-connect
+      (lsp-proxy-remote--auto-connect))))
 
 (defun lsp-proxy-remote--mode-exit-hook ()
   "Hook function called when lsp-proxy-mode is disabled."
@@ -131,98 +155,119 @@ Call CALLBACK with the result when complete."
   "List all available remote servers."
   (interactive)
   (lsp-proxy-remote--send-request
-   "emacs/remoteList" (list)
+   "emacs/remoteList" nil
    (lambda (result)
-     (let ((servers (alist-get 'servers result))
-           (connected-count (alist-get 'connected_count result))
-           (total-count (alist-get 'total_count result)))
+     (let ((servers (plist-get result :servers))
+           (connected-count (plist-get result :connected_count))
+           (total-count (plist-get result :total_count)))
        (with-current-buffer (get-buffer-create "*LSP-Proxy Remote Servers*")
          (erase-buffer)
          (insert (format "Remote Servers (%d/%d connected)\n"
-                        connected-count total-count))
+                         connected-count total-count))
          (insert (make-string 50 ?=) "\n\n")
          (dolist (server servers)
-           (let ((name (alist-get 'name server))
-                 (connected (alist-get 'connected server))
-                 (host (alist-get 'host server))
-                 (user (alist-get 'user server))
-                 (mode (alist-get 'mode server)))
+           (let ((name (plist-get server :name))
+                 (connected (plist-get server :connected))
+                 (host (plist-get server :host))
+                 (user (plist-get server :user))
+                 (mode (plist-get server :mode)))
              (insert (format "• %s %s\n"
-                           name
-                           (if connected "(connected)" "(disconnected)")))
+                             name
+                             (if connected "(connected)" "(disconnected)")))
              (insert (format "  Host: %s@%s\n" user host))
              (insert (format "  Mode: %s\n\n" mode))))
          (goto-char (point-min))
          (display-buffer (current-buffer)))))))
 
 ;;;###autoload
-(defun lsp-proxy-remote-connect (server-name &optional host user port)
+(defun lsp-proxy-remote-connect (&optional server-name host user port)
   "Connect to remote SERVER-NAME.
+If SERVER-NAME is not provided, prompt user to select from available servers.
 Optionally override HOST, USER, and PORT."
-  (interactive 
-   (list (completing-read "Server name: " 
-                         (lsp-proxy-remote--get-available-servers))))
-  (let ((params `((server_name . ,server-name))))
-    (when host (push `(host . ,host) params))
-    (when user (push `(user . ,user) params))
-    (when port (push `(port . ,port) params))
+  (interactive)
+  ;; First, get available servers from the server
+  (let* ((available-servers (lsp-proxy-remote--get-available-servers t)) ; force refresh
+         (selected-server (or server-name
+                              (if available-servers
+                                  (completing-read "Server name: " available-servers)
+                                (user-error "No remote servers available. Please check your lsp-proxy configuration")))))
+
+    ;; Get additional parameters if called interactively
+    (when (called-interactively-p 'interactive)
+      (let ((server-info (gethash selected-server lsp-proxy-remote--server-cache)))
+        (when (and server-info (y-or-n-p "Override server configuration? "))
+          (setq host (read-string (format "Host (default: %s): " (plist-get server-info :host)) nil nil (plist-get server-info :host)))
+          (setq user (read-string (format "User (default: %s): " (plist-get server-info :user)) nil nil (plist-get server-info :user)))
+          (when (y-or-n-p "Specify custom port? ")
+            (setq port (read-number "Port: "))))))
     
-    (message "Connecting to %s..." server-name)
-    (lsp-proxy-remote--send-async-request
-     "emacs/remoteConnect" params
-     (lambda (result)
-       (if (alist-get 'success result)
-           (progn
-             (lsp-proxy-remote--update-connected-servers server-name 'connect)
-             (run-hooks 'lsp-proxy-remote-connected-hook))
-         (message "Failed to connect to %s: %s" 
-                 server-name 
-                 (alist-get 'message result)))))))
+    ;; Build connection parameters
+    (let ((params `((server_name . ,selected-server))))
+      (when host (push `(host . ,host) params))
+      (when user (push `(user . ,user) params))
+      (when port (push `(port . ,port) params))
+      
+      (message "Connecting to %s..." selected-server)
+      (lsp-proxy-remote--send-async-request
+       "emacs/remoteConnect" params
+       (lambda (result)
+         (if (plist-get result :success)
+             (progn
+               (lsp-proxy-remote--update-connected-servers selected-server 'connect)
+               (run-hooks 'lsp-proxy-remote-connected-hook)
+               (message "Successfully connected to %s" selected-server))
+           (message "Failed to connect to %s: %s" 
+                    selected-server
+                    (plist-get result :message))))))))
 
 ;;;###autoload
 (defun lsp-proxy-remote-disconnect (server-name)
   "Disconnect from remote SERVER-NAME."
   (interactive 
    (list (completing-read "Server name: " 
-                         lsp-proxy-remote--connected-servers)))
+                          lsp-proxy-remote--connected-servers)))
   (message "Disconnecting from %s..." server-name)
   (lsp-proxy-remote--send-async-request
    "emacs/remoteDisconnect" `((server_name . ,server-name))
    (lambda (result)
-     (if (alist-get 'success result)
+     (if (plist-get result :success)
          (progn
            (lsp-proxy-remote--update-connected-servers server-name 'disconnect)
            (run-hooks 'lsp-proxy-remote-disconnected-hook))
        (message "Failed to disconnect from %s: %s" 
-               server-name 
-               (alist-get 'message result))))))
+                server-name
+                (plist-get result :message))))))
 
 ;;;###autoload
-(defun lsp-proxy-remote-status (server-name)
-  "Get status of remote SERVER-NAME."
-  (interactive 
-   (list (completing-read "Server name: " 
-                         (lsp-proxy-remote--get-available-servers))))
-  (lsp-proxy-remote--send-request
-   "emacs/remoteStatus" `((server_name . ,server-name))
-   (lambda (result)
-     (let ((name (alist-get 'name result))
-           (connected (alist-get 'connected result))
-           (host (alist-get 'host result))
-           (user (alist-get 'user result))
-           (port (alist-get 'port result))
-           (mode (alist-get 'mode result))
-           (workspace-root (alist-get 'workspace_root result)))
-       (with-current-buffer (get-buffer-create "*LSP-Proxy Server Status*")
-         (erase-buffer)
-         (insert (format "Server Status: %s\n" name))
-         (insert (make-string 30 ?=) "\n\n")
-         (insert (format "Status: %s\n" (if connected "Connected" "Disconnected")))
-         (insert (format "Host: %s@%s:%s\n" user host port))
-         (insert (format "Mode: %s\n" mode))
-         (insert (format "Workspace: %s\n" workspace-root))
-         (goto-char (point-min))
-         (display-buffer (current-buffer)))))))
+(defun lsp-proxy-remote-status (&optional server-name)
+  "Get status of remote SERVER-NAME.
+If SERVER-NAME is not provided, prompt user to select from available servers."
+  (interactive)
+  (let* ((available-servers (lsp-proxy-remote--get-available-servers))
+         (selected-server (or server-name
+                              (if available-servers
+                                  (completing-read "Server name: " available-servers)
+                                (user-error "No remote servers available")))))
+    (lsp-proxy-remote--send-request
+     "emacs/remoteStatus" `((server_name . ,selected-server))
+     (lambda (result)
+       (let ((name (plist-get result :name))
+             (connected (plist-get result :connected))
+             (host (plist-get result :host))
+             (user (plist-get result :user))
+             (port (plist-get result :port))
+             (mode (plist-get result :mode))
+             (workspace-root (plist-get 'workspace_root result)))
+         (with-current-buffer (get-buffer-create "*LSP-Proxy Server Status*")
+           (erase-buffer)
+           (insert (format "Server Status: %s\n" name))
+           (insert (make-string 30 ?=) "\n\n")
+           (insert (format "Status: %s\n" (if connected "Connected" "Disconnected")))
+           (insert (format "Host: %s@%s:%s\n" user host port))
+           (insert (format "Mode: %s\n" mode))
+           (insert (format "Workspace: %s\n" workspace-root))
+           (goto-char (point-min))
+           (display-buffer (current-buffer))))))))
 
 ;;; File Operations
 
@@ -233,15 +278,25 @@ Optionally override HOST, USER, and PORT."
    (let ((server (completing-read "Server: " lsp-proxy-remote--connected-servers)))
      (list server 
            (read-file-name "Remote file: " "/"))))
+  ;; Validate file path
+  (when (or (string-empty-p file-path)
+            (not (string-match "^/" file-path)))
+    (user-error "Invalid file path: %s (must be absolute path)" file-path))
+  
+  (message "Opening remote file: %s from %s..." file-path server-name)
   (lsp-proxy-remote--send-async-request
    "emacs/remoteFileRead" `((server_name . ,server-name)
-                           (file_path . ,file-path))
+                            (file_path . ,file-path))
    (lambda (result)
-     (if (alist-get 'success result)
-         (let ((content (alist-get 'content result))
-               (size (alist-get 'size result)))
-           (with-current-buffer (get-buffer-create 
-                               (format "*Remote: %s:%s*" server-name file-path))
+     (if (plist-get result :success)
+         (let ((content (plist-get result :content))
+               (size (plist-get result :size))
+               ;; Safe buffer name without problematic characters
+               (buffer-name (format "*Remote-%s-%s*" 
+                                   (replace-regexp-in-string "[^a-zA-Z0-9_-]" "-" server-name)
+                                   (replace-regexp-in-string "^/\\|[^a-zA-Z0-9_.-]" "-" 
+                                                            (file-name-nondirectory file-path)))))
+           (with-current-buffer (get-buffer-create buffer-name)
              (erase-buffer)
              (insert content)
              (set-buffer-modified-p nil)
@@ -251,7 +306,7 @@ Optionally override HOST, USER, and PORT."
              (normal-mode)
              (message "Opened remote file %s (%d bytes)" file-path size)
              (display-buffer (current-buffer))))
-       (message "Failed to open remote file: %s" (alist-get 'message result))))))
+       (message "Failed to open remote file: %s" (plist-get result :message))))))
 
 ;;;###autoload
 (defun lsp-proxy-remote-save-file ()
@@ -266,15 +321,15 @@ Optionally override HOST, USER, and PORT."
             (file-path lsp-proxy-remote--file-path))
         (lsp-proxy-remote--send-async-request
          "emacs/remoteFileWrite" `((server_name . ,server-name)
-                                  (file_path . ,file-path)
-                                  (content . ,content))
+                                   (file_path . ,file-path)
+                                   (content . ,content))
          (lambda (result)
-           (if (alist-get 'success result)
+           (if (plist-get :success result)
                (progn
                  (set-buffer-modified-p nil)
                  (message "Saved to remote: %s" file-path))
              (message "Failed to save remote file: %s" 
-                     (alist-get 'message result))))))
+                      (plist-get :message result))))))
     (user-error "This buffer is not associated with a remote file")))
 
 ;;; Workspace Management
@@ -284,22 +339,22 @@ Optionally override HOST, USER, and PORT."
   "List all remote workspaces."
   (interactive)
   (lsp-proxy-remote--send-request
-   "emacs/remoteWorkspace" (list)
+   "emacs/remoteWorkspace" nil
    (lambda (result)
-     (let ((workspaces (alist-get 'workspaces result))
-           (total-count (alist-get 'total_count result)))
+     (let ((workspaces (plist-get :workspaces result))
+           (total-count (plist-get :total_count result)))
        (with-current-buffer (get-buffer-create "*LSP-Proxy Remote Workspaces*")
          (erase-buffer)
          (insert (format "Remote Workspaces (%d total)\n" total-count))
          (insert (make-string 40 ?=) "\n\n")
          (dolist (workspace workspaces)
-           (let ((server-name (alist-get 'server_name workspace))
-                 (workspace-root (alist-get 'workspace_root workspace))
-                 (host (alist-get 'host workspace))
-                 (connected (alist-get 'connected workspace)))
+           (let ((server-name (plist-get workspace :server_name))
+                 (workspace-root (plist-get workspace :workspace_root))
+                 (host (plist-get workspace :host))
+                 (connected (plist-get workspace :connected)))
              (insert (format "• %s %s\n"
-                           server-name
-                           (if connected "(connected)" "(disconnected)")))
+                             server-name
+                             (if connected "(connected)" "(disconnected)")))
              (insert (format "  Host: %s\n" host))
              (insert (format "  Workspace: %s\n\n" workspace-root))))
          (goto-char (point-min))
@@ -320,12 +375,12 @@ PARAMS are the LSP parameters."
      (list server lsp-id method (json-parse-string params))))
   (lsp-proxy-remote--send-async-request
    "emacs/remoteLspRequest" `((server_name . ,server-name)
-                             (lsp_server_id . ,lsp-server-id)
-                             (method . ,method)
-                             (params . ,params))
+                              (lsp_server_id . ,lsp-server-id)
+                              (method . ,method)
+                              (params . ,params))
    (lambda (result)
-     (if (alist-get 'success result)
-         (let ((lsp-result (alist-get 'result result)))
+     (if (plist-get result :success)
+         (let ((lsp-result (plist-get result :result)))
            (message "LSP request succeeded")
            (with-current-buffer (get-buffer-create "*LSP-Proxy Remote Result*")
              (erase-buffer)
@@ -335,27 +390,50 @@ PARAMS are the LSP parameters."
              (json-pretty-print-buffer)
              (goto-char (point-min))
              (display-buffer (current-buffer))))
-       (message "LSP request failed: %s" (alist-get 'message result))))))
+       (message "LSP request failed: %s" (plist-get result :message))))))
 
 ;;; Utility Functions
 
-(defun lsp-proxy-remote--get-available-servers ()
-  "Get list of available server names from cache or server."
-  ;; This could be enhanced to cache server list
-  '("dev-server" "staging" "production"))
+(defun lsp-proxy-remote--get-available-servers (&optional force-refresh)
+  "Get list of available server names from server.
+If FORCE-REFRESH is non-nil, always fetch from server.
+Otherwise, use cache if available."
+  (if (and (not force-refresh) (> (hash-table-count lsp-proxy-remote--server-cache) 0))
+      ;; Use cached server names
+      (hash-table-keys lsp-proxy-remote--server-cache)
+    ;; Fetch from server synchronously
+    (let ((result (lsp-proxy-remote--send-request "emacs/remoteList" nil)))
+      (if result
+          (let ((servers (plist-get result :servers)))
+            (clrhash lsp-proxy-remote--server-cache)
+            (mapcar (lambda (server)
+                      (let ((name (plist-get server :name)))
+                        (puthash name server lsp-proxy-remote--server-cache)
+                        name))
+                    servers))
+        ;; Fallback if server request fails
+        (progn
+          (message "Warning: Could not fetch server list from lsp-proxy")
+          '())))))
 
 (defun lsp-proxy-remote-refresh-server-list ()
-  "Refresh the list of available servers."
+  "Refresh the list of available servers from lsp-proxy."
   (interactive)
+  (message "Refreshing server list...")
   (lsp-proxy-remote--send-request
-   "emacs/remoteList" (list)
+   "emacs/remoteList" nil
    (lambda (result)
-     (let ((servers (alist-get 'servers result)))
+     (let ((servers (plist-get result :servers)))
        (clrhash lsp-proxy-remote--server-cache)
        (dolist (server servers)
-         (let ((name (alist-get 'name server)))
+         (let ((name (plist-get server :name)))
            (puthash name server lsp-proxy-remote--server-cache)))
-       (message "Refreshed server list: %d servers" (length servers))))))
+       (message "Refreshed server list: %d servers available" (length servers))
+       ;; Also update connected servers list based on actual status
+       (setq lsp-proxy-remote--connected-servers
+             (mapcar (lambda (server) (plist-get server :name))
+                     (seq-filter (lambda (server) (plist-get server :connected))
+                                 servers)))))))
 
 ;;; Mode and Minor Mode
 
@@ -413,8 +491,16 @@ PARAMS are the LSP parameters."
 (defun lsp-proxy-remote--auto-connect ()
   "Auto-connect to default remote server if configured."
   (when (and lsp-proxy-remote-default-server
-             (lsp-proxy--connection-alivep))
-    (lsp-proxy-remote-connect lsp-proxy-remote-default-server)))
+             (lsp-proxy-remote--connection-alivep-safe))
+    ;; Check if the default server is in available servers
+    (let ((available-servers (lsp-proxy-remote--get-available-servers)))
+      (if (member lsp-proxy-remote-default-server available-servers)
+          (progn
+            (message "Auto-connecting to default server: %s" lsp-proxy-remote-default-server)
+            (lsp-proxy-remote-connect lsp-proxy-remote-default-server))
+        (message "Warning: Default server '%s' not found in available servers: %s" 
+                 lsp-proxy-remote-default-server
+                 (string-join available-servers ", "))))))
 
 ;;; Hooks
 
@@ -437,11 +523,14 @@ PARAMS are the LSP parameters."
   ;; 启用远程模式
   (lsp-proxy-remote-mode 1)
   
-  ;; 如果主模式已启用且连接活跃，则尝试自动连接
+  ;; 如果主模式已启用且连接活跃，则刷新服务器列表并尝试自动连接
   (when (and (bound-and-true-p lsp-proxy-mode)
-             (lsp-proxy--connection-alivep)
-             lsp-proxy-remote-auto-connect)
-    (lsp-proxy-remote--auto-connect))
+             (lsp-proxy-remote--connection-alivep-safe))
+    ;; First refresh server list
+    (lsp-proxy-remote-refresh-server-list)
+    ;; Then auto-connect if configured
+    (when lsp-proxy-remote-auto-connect
+      (lsp-proxy-remote--auto-connect)))
   
   (when (called-interactively-p 'interactive)
     (message "LSP-Proxy Remote integration setup complete")))

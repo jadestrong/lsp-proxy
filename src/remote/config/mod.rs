@@ -225,6 +225,24 @@ impl RemoteConfigManager {
                 RemoteAuth::Agent => {
                     // Can't validate agent availability without connecting
                 }
+                RemoteAuth::SshConfig { host } => {
+                    // Try to parse SSH config to validate
+                    use crate::remote::ssh_config::SshConfigParser;
+                    let parser = SshConfigParser::new();
+                    let config_host = host.as_ref().unwrap_or(&server.host);
+                    
+                    match parser.get_host_config(config_host) {
+                        Ok(Some(_)) => {
+                            // SSH config found, good
+                        }
+                        Ok(None) => {
+                            errors.push(format!("Server '{}': No SSH configuration found for host '{}'", name, config_host));
+                        }
+                        Err(e) => {
+                            errors.push(format!("Server '{}': Error reading SSH config: {}", name, e));
+                        }
+                    }
+                }
             }
         }
         
