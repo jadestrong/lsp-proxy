@@ -1,0 +1,15 @@
+{
+  "name": "lsp-proxy-build-scripts",
+  "version": "1.0.0",
+  "description": "Build and version management scripts for lsp-proxy",
+  "scripts": {
+    "update-version": "node scripts/update-version.js",
+    "extract-version": "node scripts/extract-version.js", 
+    "test-update": "node scripts/test-update.js",
+    "test-npm-package": "node scripts/test-npm-package.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "private": true
+}
