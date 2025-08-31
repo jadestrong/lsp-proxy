@@ -4,7 +4,7 @@ use crate::{
     large_file_manager::LargeFileManager,
     msg::{Message, Notification, Response},
     req_queue, syntax,
-    remote::{RemoteSession, config::RemoteConfigManager},
+    remote::{RemoteSession, config::RemoteConfigManager, lsp_client::RemoteLspManager},
 };
 use crossbeam_channel::Sender;
 use std::{sync::Arc, sync::Mutex, time::Instant, collections::HashMap};
@@ -21,6 +21,7 @@ pub(crate) struct Application {
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
     pub remote_sessions: Arc<Mutex<HashMap<String, RemoteSession>>>,
     pub remote_config: Arc<Mutex<RemoteConfigManager>>,
+    pub remote_lsp_manager: Option<Arc<RemoteLspManager>>,
 }
 
 impl Application {
@@ -53,6 +54,18 @@ impl Application {
             }
         };
 
+        // Initialize remote LSP manager
+        let remote_lsp_manager = match crate::remote::lsp_client::load_remote_lsp_config() {
+            Ok(config) => {
+                log::info!("Successfully loaded remote LSP configuration");
+                Some(Arc::new(RemoteLspManager::new(config)))
+            },
+            Err(err) => {
+                log::warn!("Failed to load remote LSP config: {}, remote LSP disabled", err);
+                None
+            }
+        };
+
         Application {
             sender,
             req_queue: ReqQueue::default(),
@@ -62,6 +75,7 @@ impl Application {
             large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),
             remote_sessions: Arc::new(Mutex::new(HashMap::new())),
             remote_config: Arc::new(Mutex::new(remote_config)),
+            remote_lsp_manager,
         }
     }
 

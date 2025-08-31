@@ -1,0 +1,111 @@
+# LSP-Proxy Remote Configuration with SSH Pipe Communication
+# This configuration eliminates the need for port exposure on remote servers
+
+[hosts.dev-server-pipe]
+# No address needed for SSH pipe mode - direct stdin/stdout communication
+connection_type = "ssh_pipe"
+
+[hosts.dev-server-pipe.ssh_pipe]
+host = "dev-server.example.com"
+port = 22  # Optional, defaults to 22
+user = "developer"
+identity_file = "~/.ssh/dev_key"
+# Server installation script (runs on first connection or when binary is missing)
+server_install_script = '''
+curl -fsSL https://raw.githubusercontent.com/jadestrong/lsp-proxy/main/scripts/server-install.sh | bash
+'''
+# Remote paths (optional, with defaults)
+server_binary_path = "~/.local/bin/lsp-proxy-server"  # Default: "lsp-proxy-server"
+config_file = "~/.config/lsp-proxy-server.toml"       # Default: none
+
+# Comparison: Traditional SSH Tunnel Mode (requires port exposure)
+[hosts.dev-server-tunnel]
+address = "127.0.0.1:19527"  # Local tunnel port
+connection_type = "ssh_tunnel"
+
+[hosts.dev-server-tunnel.ssh_tunnel]
+host = "dev-server.example.com" 
+port = 22
+user = "developer"
+identity_file = "~/.ssh/dev_key"
+local_port = 19527  # Local port for tunnel
+
+# Multiple servers with different configurations
+[hosts.rust-server]
+connection_type = "ssh_pipe"
+
+[hosts.rust-server.ssh_pipe]
+host = "rust-server.company.com"
+user = "rustdev"
+server_install_script = '''
+# Custom installation for Rust development server
+curl -fsSL https://sh.rustup.rs | sh -s -- -y
+source ~/.cargo/env
+rustup component add rust-analyzer
+curl -fsSL https://raw.githubusercontent.com/jadestrong/lsp-proxy/main/scripts/server-install.sh | INSTALL_DIR=$HOME/.cargo/bin bash
+'''
+server_binary_path = "~/.cargo/bin/lsp-proxy-server"
+
+[hosts.python-server]
+connection_type = "ssh_pipe"
+
+[hosts.python-server.ssh_pipe]
+host = "python-server.company.com"
+user = "pythondev"
+server_install_script = '''
+# Custom installation for Python development server
+python3 -m pip install --user 'python-lsp-server[all]'
+curl -fsSL https://raw.githubusercontent.com/jadestrong/lsp-proxy/main/scripts/server-install.sh | bash
+'''
+
+# Host mapping for TRAMP paths
+[host_mapping]
+"dev-server.example.com" = "dev-server-pipe"
+"rust-server.company.com" = "rust-server"
+"python-server.company.com" = "python-server"
+
+# Advanced configuration
+[hosts.advanced-server]
+connection_type = "ssh_pipe"
+
+[hosts.advanced-server.ssh_pipe]
+host = "advanced.example.com"
+port = 2222  # Custom SSH port
+user = "developer"
+identity_file = "~/.ssh/advanced_key"
+# Multi-step installation script
+server_install_script = '''
+#!/bin/bash
+set -e
+
+echo "Setting up advanced development environment..."
+
+# Install system dependencies
+sudo apt update
+sudo apt install -y build-essential git curl
+
+# Install multiple language tools
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source ~/.cargo/env
+rustup component add rust-analyzer
+
+# Install Node.js and TypeScript
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt install -y nodejs
+npm install -g typescript-language-server typescript
+
+# Install Python tools  
+pip3 install --user 'python-lsp-server[all]'
+
+# Install Go
+wget -O /tmp/go.tar.gz https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+export PATH=$PATH:/usr/local/go/bin
+go install golang.org/x/tools/gopls@latest
+
+# Install lsp-proxy-server
+curl -fsSL https://raw.githubusercontent.com/jadestrong/lsp-proxy/main/scripts/server-install.sh | bash
+
+echo "✅ Development environment setup complete"
+'''
+config_file = "~/.config/lsp-proxy-server-advanced.toml"

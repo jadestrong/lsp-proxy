@@ -1,0 +1,107 @@
+# LSP-Proxy Server 配置文件
+# 保存为: ~/.config/lsp-proxy-server.toml
+
+# 服务器基本设置
+listen_address = "127.0.0.1:9527"    # TCP 端口监听
+# listen_address = "/tmp/lsp-proxy.sock"  # Unix socket 监听 (可选)
+
+work_dir = "/home/developer"          # 工作目录
+max_lsp_servers = 10                  # 最大同时运行的 LSP 服务器数量
+
+# Rust LSP 服务器配置
+[lsp_servers.rust]
+command = "rust-analyzer"
+args = []
+env = {}
+# initialization_options = { "checkOnSave" = { "command" = "clippy" } }
+
+# Python LSP 服务器配置  
+[lsp_servers.python]
+command = "pylsp"
+args = []
+env = { 
+    "PYTHONPATH" = "/home/developer/venv/lib/python3.9/site-packages" 
+}
+
+# TypeScript/JavaScript LSP 服务器配置
+[lsp_servers.typescript]
+command = "typescript-language-server"
+args = ["--stdio"]
+env = {}
+
+[lsp_servers.javascript]
+command = "typescript-language-server"
+args = ["--stdio"]
+env = {}
+
+# Go LSP 服务器配置
+[lsp_servers.go]
+command = "gopls"
+args = []
+env = { "GO111MODULE" = "on" }
+
+# C/C++ LSP 服务器配置
+[lsp_servers.c]
+command = "clangd"
+args = [
+    "--background-index",
+    "--suggest-missing-includes",
+    "--clang-tidy"
+]
+env = {}
+
+[lsp_servers.cpp]
+command = "clangd"
+args = [
+    "--background-index", 
+    "--suggest-missing-includes",
+    "--clang-tidy"
+]
+env = {}
+
+# Java LSP 服务器配置
+[lsp_servers.java]
+command = "jdtls"
+args = []
+env = { "JAVA_HOME" = "/usr/lib/jvm/java-11-openjdk-amd64" }
+
+# Ruby LSP 服务器配置
+[lsp_servers.ruby]
+command = "solargraph"
+args = ["stdio"]
+env = { "GEM_PATH" = "/home/developer/.gem" }
+
+# PHP LSP 服务器配置
+[lsp_servers.php]
+command = "phpactor"
+args = ["language-server"]
+env = {}
+
+# Dart LSP 服务器配置
+[lsp_servers.dart]
+command = "dart"
+args = ["language-server", "--protocol=lsp"]
+env = { "PUB_CACHE" = "/home/developer/.pub-cache" }
+
+# Kotlin LSP 服务器配置
+[lsp_servers.kotlin]
+command = "kotlin-language-server"
+args = []
+env = {}
+
+# 认证和安全设置 (可选)
+[auth]
+enabled = false                       # 是否启用认证
+token = "your-secret-token-here"      # 认证令牌
+allowed_hosts = [                     # 允许连接的主机
+    "127.0.0.1",
+    "10.0.0.0/8",
+    "192.168.0.0/16"
+]
+
+# 高级配置 (可选)
+[advanced]
+request_timeout_seconds = 30          # LSP 请求超时时间
+heartbeat_interval_seconds = 60       # 心跳间隔
+max_request_size_mb = 10              # 最大请求大小
+enable_compression = false            # 是否启用压缩 (实验性)

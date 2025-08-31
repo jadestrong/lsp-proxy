@@ -223,6 +223,86 @@ impl ProxyServer {
         }
     }
     
+    /// Run in stdio mode for SSH pipe communication
+    pub async fn run_stdio_mode(&self) -> Result<()> {
+        info!("Running in stdio mode, communicating via stdin/stdout");
+        
+        let stdin = tokio::io::stdin();
+        let stdout = tokio::io::stdout();
+        
+        let mut reader = BufReader::new(stdin);
+        let mut writer = stdout;
+        let mut line = String::new();
+        
+        // Create a dummy client ID for stdio mode
+        let client_id = "stdio-client";
+        
+        // Register the stdio client
+        {
+            let mut clients = self.client_connections.write().await;
+            clients.insert(client_id.to_string(), ClientConnection {
+                id: client_id.to_string(),
+                remote_addr: "stdio".to_string(),
+                authenticated: true, // stdio connections are trusted
+            });
+        }
+        
+        info!("Ready to accept JSON-RPC messages via stdin/stdout");
+        
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    info!("EOF received, shutting down");
+                    break;
+                }
+                Ok(_) => {
+                    let line_content = line.trim();
+                    if line_content.is_empty() {
+                        continue;
+                    }
+                    
+                    debug!("Received via stdin: {}", line_content);
+                    
+                    match serde_json::from_str::<ProxyMessage>(line_content) {
+                        Ok(message) => {
+                            let response = self.process_message(client_id, message).await;
+                            
+                            if let Some(resp) = response {
+                                let resp_json = serde_json::to_string(&resp)?;
+                                writer.write_all(resp_json.as_bytes()).await?;
+                                writer.write_all(b"\n").await?;
+                                writer.flush().await?;
+                                debug!("Sent via stdout: {}", resp_json);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to parse JSON-RPC message: {}", e);
+                            // Send error response
+                            let error_response = ProxyMessage::Response {
+                                id: "parse_error".to_string(),
+                                result: Err(format!("JSON parse error: {}", e)),
+                            };
+                            let error_json = serde_json::to_string(&error_response)?;
+                            writer.write_all(error_json.as_bytes()).await?;
+                            writer.write_all(b"\n").await?;
+                            writer.flush().await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Error reading from stdin: {}", e);
+                    break;
+                }
+            }
+        }
+        
+        // Cleanup
+        self.shutdown_all_lsp_servers().await;
+        info!("Stdio mode server shutdown complete");
+        Ok(())
+    }
+    
     async fn start_tcp_server(&self) -> Result<()> {
         let listener = TcpListener::bind(&self.config.listen_address).await?;
         info!("TCP server listening on {}", self.config.listen_address);
@@ -694,6 +774,10 @@ async fn main() -> Result<()> {
             .value_name("DIR")
             .help("Working directory")
             .default_value("."))
+        .arg(Arg::new("stdio")
+            .long("stdio")
+            .help("Run in stdio mode for SSH pipe communication")
+            .action(clap::ArgAction::SetTrue))
         .arg(Arg::new("log-level")
             .long("log-level")
             .value_name("LEVEL")
@@ -703,8 +787,11 @@ async fn main() -> Result<()> {
     
     // Initialize logging
     let log_level = matches.get_one::<String>("log-level").unwrap();
-    env_logger::Builder::from_default_env()
-        .filter_level(match log_level.as_str() {
+    let stdio_mode = matches.get_flag("stdio");
+    
+    // In stdio mode, log to stderr to avoid interfering with JSON-RPC communication
+    let mut log_builder = env_logger::Builder::from_default_env();
+    log_builder.filter_level(match log_level.as_str() {
             "error" => log::LevelFilter::Error,
             "warn" => log::LevelFilter::Warn,
             "info" => log::LevelFilter::Info,
@@ -712,8 +799,13 @@ async fn main() -> Result<()> {
             "trace" => log::LevelFilter::Trace,
             _ => log::LevelFilter::Info,
         })
-        .format_timestamp_millis()
-        .init();
+        .format_timestamp_millis();
+        
+    if stdio_mode {
+        log_builder.target(env_logger::Target::Stderr);
+    }
+    
+    log_builder.init();
     
     info!("Starting lsp-proxy-server v{}", env!("CARGO_PKG_VERSION"));
     
@@ -735,10 +827,15 @@ async fn main() -> Result<()> {
         config.work_dir = PathBuf::from(work_dir);
     }
     
-    info!("Starting lsp-proxy-server with config: {:#?}", config);
+    let server = ProxyServer::new(config.clone());
     
-    let server = ProxyServer::new(config);
-    server.start().await?;
+    if stdio_mode {
+        info!("Running in stdio mode for SSH pipe communication");
+        server.run_stdio_mode().await?;
+    } else {
+        info!("Starting lsp-proxy-server with config: {:#?}", config);
+        server.start().await?;
+    }
     
     Ok(())
 }

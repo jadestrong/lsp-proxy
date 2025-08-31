@@ -34,11 +34,8 @@ use crate::{
     msg::RequestId,
     registry,
     syntax::{LanguageServerFeature, LanguageServerFeatures},
-    utils::{
-        defer, find_lsp_workspace, find_workspace_for_file, get_activate_time, path,
-    },
+    utils::{defer, find_lsp_workspace, find_workspace_for_file, get_activate_time, path},
 };
-
 
 fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {

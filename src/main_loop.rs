@@ -30,6 +30,7 @@ use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
+use tracing::field::debug;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -740,6 +741,30 @@ impl Application {
                     return Ok(());
                 }
 
+                // Check if this is a remote file request and handle it via SSH pipe
+                if let Some(uri) = &req.params.uri {
+                    if let Some(remote_lsp_manager) = &self.remote_lsp_manager {
+                        if crate::remote::lsp_client::RemoteLspManager::is_remote_file(uri) {
+                            let remote_manager = Arc::clone(remote_lsp_manager);
+                            let request = req.clone();
+                            let sender = self.sender.clone();
+                            
+                            tokio::spawn(async move {
+                                match Self::handle_remote_lsp_request(remote_manager, request).await {
+                                    Ok(response) => {
+                                        let _ = sender.send(response.into());
+                                    }
+                                    Err(e) => {
+                                        let error_response = create_error_response(&req.id, e.to_string());
+                                        let _ = sender.send(error_response.into());
+                                    }
+                                }
+                            });
+                            return Ok(());
+                        }
+                    }
+                }
+
                 match self.get_working_document(&req) {
                     Ok(doc) => {
                         let language_servers = doc.get_all_language_servers();
@@ -910,12 +935,161 @@ impl Application {
                     .editor
                     .document_by_uri(&lsp_types::Url::parse(uri).unwrap())
                 {
+                    log::debug!("request {:?}, doc id {:?} doc version: {}, client: {:?}", req.method, doc.id(), doc.version, doc.language_servers.iter().map(|ls| (ls.0, ls.1.id())));
                     Ok(doc)
                 } else {
                     Err(Error::msg("No document opened"))
                 }
             }
             None => Err(Error::msg("No uri provided")),
+        }
+    }
+
+    /// Handle LSP request for remote files via SSH pipe communication
+    async fn handle_remote_lsp_request(
+        remote_manager: Arc<crate::remote::lsp_client::RemoteLspManager>,
+        req: msg::Request,
+    ) -> Result<msg::Response> {
+        let uri = req.params.uri.as_ref()
+            .ok_or_else(|| anyhow::Error::msg("No URI provided in request"))?;
+
+        // Extract remote file information from TRAMP path
+        let file_info = crate::remote::lsp_client::RemoteLspManager::extract_remote_info(uri)
+            .ok_or_else(|| anyhow::Error::msg("Invalid remote file URI"))?;
+
+        log::info!("Forwarding LSP request '{}' to remote host: {} via SSH pipe", 
+                   req.method, file_info.host);
+
+        // Detect language from file path
+        let language = Self::detect_language_from_path(&file_info.path)
+            .unwrap_or_else(|| "text".to_string());
+
+        // Start remote LSP server if not already running
+        let server_id = remote_manager
+            .start_remote_lsp(&file_info, &language)
+            .await
+            .map_err(|e| anyhow::Error::msg(format!("Failed to start remote LSP: {}", e)))?;
+
+        // Convert TRAMP URI to remote file path for the request
+        let remote_params = Self::convert_tramp_uri_to_remote_path(req.params.params, &file_info);
+
+        // Forward the LSP request via SSH pipe
+        let result = remote_manager
+            .forward_request(&file_info.host, &server_id, &req.method, remote_params)
+            .await
+            .map_err(|e| anyhow::Error::msg(format!("Failed to forward request: {}", e)))?;
+
+        // Convert remote file paths back to TRAMP URIs in the response
+        let local_result = Self::convert_remote_paths_to_tramp_uris(result, &file_info);
+
+        Ok(msg::Response::new_ok(req.id, local_result))
+    }
+
+    /// Detect programming language from file path
+    fn detect_language_from_path(path: &str) -> Option<String> {
+        let extension = std::path::Path::new(path)
+            .extension()?
+            .to_str()?;
+
+        match extension {
+            "rs" => Some("rust".to_string()),
+            "py" => Some("python".to_string()),
+            "js" | "jsx" => Some("javascript".to_string()),
+            "ts" | "tsx" => Some("typescript".to_string()),
+            "go" => Some("go".to_string()),
+            "c" => Some("c".to_string()),
+            "cpp" | "cc" | "cxx" => Some("cpp".to_string()),
+            "java" => Some("java".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Convert TRAMP URI to remote file path in LSP request parameters
+    fn convert_tramp_uri_to_remote_path(
+        mut params: serde_json::Value, 
+        file_info: &crate::remote::lsp_client::RemoteFileInfo
+    ) -> serde_json::Value {
+        // Convert textDocument.uri from TRAMP format to remote file path
+        if let Some(text_document) = params.get_mut("textDocument") {
+            if let Some(uri) = text_document.get_mut("uri") {
+                if let Some(uri_str) = uri.as_str() {
+                    if uri_str.contains(&file_info.host) {
+                        let remote_uri = format!("file://{}", file_info.path);
+                        log::debug!("Converting TRAMP URI {} to remote URI {}", uri_str, remote_uri);
+                        *uri = serde_json::json!(remote_uri);
+                    }
+                }
+            }
+        }
+
+        // Convert rootUri if present
+        if let Some(root_uri) = params.get_mut("rootUri") {
+            if let Some(uri_str) = root_uri.as_str() {
+                if uri_str.contains(&file_info.host) {
+                    let workspace_root = std::path::Path::new(&file_info.path)
+                        .parent()
+                        .unwrap_or(std::path::Path::new("/"))
+                        .to_string_lossy();
+                    let remote_root_uri = format!("file://{}", workspace_root);
+                    log::debug!("Converting root URI to remote: {}", remote_root_uri);
+                    *root_uri = serde_json::json!(remote_root_uri);
+                }
+            }
+        }
+
+        params
+    }
+
+    /// Convert remote file paths back to TRAMP URIs in LSP response
+    fn convert_remote_paths_to_tramp_uris(
+        mut response: serde_json::Value, 
+        file_info: &crate::remote::lsp_client::RemoteFileInfo
+    ) -> serde_json::Value {
+        // Handle different response types that may contain file URIs
+
+        // Handle array of locations (e.g., references, definitions)
+        if let Some(locations) = response.as_array_mut() {
+            for location in locations {
+                Self::convert_uri_in_location(location, file_info);
+            }
+        }
+
+        // Handle single location response
+        if response.get("uri").is_some() {
+            Self::convert_uri_in_location(&mut response, file_info);
+        }
+
+        // Handle textEdit in completion items
+        if let Some(items) = response.get_mut("items") {
+            if let Some(items_array) = items.as_array_mut() {
+                for item in items_array {
+                    if let Some(text_edit) = item.get_mut("textEdit") {
+                        if let Some(range_obj) = text_edit.get_mut("range") {
+                            // TextEdit may have range with document URI
+                            Self::convert_uri_in_location(range_obj, file_info);
+                        }
+                    }
+                }
+            }
+        }
+
+        response
+    }
+
+    fn convert_uri_in_location(
+        location: &mut serde_json::Value, 
+        file_info: &crate::remote::lsp_client::RemoteFileInfo
+    ) {
+        if let Some(uri) = location.get_mut("uri") {
+            if let Some(uri_str) = uri.as_str() {
+                if uri_str.starts_with("file://") {
+                    let remote_path = &uri_str[7..]; // Remove "file://"
+                    let tramp_uri = format!("file:///{}:{}:{}", 
+                                          file_info.method, file_info.host, remote_path);
+                    log::debug!("Converting remote URI {} back to TRAMP URI {}", uri_str, tramp_uri);
+                    *uri = serde_json::json!(tramp_uri);
+                }
+            }
         }
     }
 }

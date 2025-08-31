@@ -9,6 +9,7 @@
 pub mod connection;
 pub mod filesystem;
 pub mod lsp;
+pub mod lsp_client;
 pub mod auth;
 pub mod config;
 pub mod protocol;

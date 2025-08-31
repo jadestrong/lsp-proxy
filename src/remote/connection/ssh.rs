@@ -10,6 +10,44 @@ use async_trait::async_trait;
 use log::{debug, info};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// SSH stream channel for persistent stdin/stdout communication
+pub struct SshStreamChannel {
+    channel: russh::Channel<russh::client::Msg>,
+}
+
+impl SshStreamChannel {
+    /// Send data to the remote process's stdin
+    pub async fn write_stdin(&mut self, data: &[u8]) -> Result<()> {
+        self.channel.data(data).await?;
+        Ok(())
+    }
+    
+    /// Read a line from the remote process's stdout
+    pub async fn read_stdout_line(&mut self) -> Result<Option<String>> {
+        while let Some(msg) = self.channel.wait().await {
+            match msg {
+                russh::ChannelMsg::Data { data } => {
+                    let output = String::from_utf8_lossy(&data).to_string();
+                    // For simplicity, return the data as is
+                    // In a full implementation, you'd want to buffer and line-split
+                    return Ok(Some(output.trim().to_string()));
+                },
+                russh::ChannelMsg::Eof => return Ok(None),
+                russh::ChannelMsg::ExitStatus { .. } => return Ok(None),
+                _ => continue,
+            }
+        }
+        Ok(None)
+    }
+    
+    /// Close the channel
+    pub async fn close(&mut self) -> Result<()> {
+        self.channel.eof().await?;
+        Ok(())
+    }
+}
 
 /// SSH handler for the russh library
 #[derive(Clone)]
@@ -256,6 +294,28 @@ impl Connection for SSHConnection {
         Ok(Box::new(SSHFileTransfer {
             connection: self.session.clone(),
         }))
+    }
+}
+
+impl SSHConnection {
+    /// Create a persistent command with stdin/stdout streams
+    pub async fn create_stream_command(&self, command: &str, args: &[&str]) -> Result<SshStreamChannel> {
+        let session_guard = self.session.lock().await;
+        let session = session_guard.as_ref()
+            .ok_or_else(|| anyhow!("SSH session not connected"))?;
+        
+        let full_command = if args.is_empty() {
+            command.to_string()
+        } else {
+            format!("{} {}", command, args.join(" "))
+        };
+        
+        debug!("Creating SSH stream command: {}", full_command);
+        
+        let mut channel = session.channel_open_session().await?;
+        channel.exec(true, full_command.as_bytes()).await?;
+        
+        Ok(SshStreamChannel { channel })
     }
 }
 

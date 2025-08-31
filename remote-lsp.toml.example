@@ -1,0 +1,121 @@
+# LSP-Proxy 远程 LSP 客户端配置文件
+# 保存为: ~/.config/lsp-proxy/remote-lsp.toml
+
+# 远程主机配置
+# 每个主机对应一个远程开发环境
+
+# 开发服务器 - 直接 TCP 连接
+[hosts.dev-server]
+address = "dev.example.com:9527"      # 远程 lsp-proxy-server 地址
+connection_type = "tcp"               # 连接类型: tcp, ssh_tunnel
+auth_token = "dev-server-token-123"   # 可选: 认证令牌
+
+# 生产服务器 - 通过 SSH 隧道
+[hosts.production]
+address = "127.0.0.1:19527"           # 本地隧道端口
+connection_type = "ssh_tunnel"
+
+[hosts.production.ssh_tunnel]
+host = "prod.example.com"             # SSH 主机
+port = 22                             # SSH 端口
+user = "admin"                        # SSH 用户
+identity_file = "~/.ssh/prod_key"     # SSH 私钥路径
+local_port = 19527                    # 本地端口转发
+
+# 内网开发机 - 通过跳板机
+[hosts.internal-dev]
+address = "127.0.0.1:19528"
+connection_type = "ssh_tunnel"
+
+[hosts.internal-dev.ssh_tunnel]
+host = "internal.dev.company.com"
+port = 22
+user = "developer"
+identity_file = "~/.ssh/internal_key"
+local_port = 19528
+
+# Docker 容器环境
+[hosts.docker-dev]
+address = "127.0.0.1:19529"
+connection_type = "ssh_tunnel"
+
+[hosts.docker-dev.ssh_tunnel]
+host = "docker-host.example.com"
+port = 2222                           # Docker 容器的 SSH 端口
+user = "root"
+identity_file = "~/.ssh/docker_key"
+local_port = 19529
+
+# OrbStack 容器 (macOS)
+[hosts.orbstack]
+address = "127.0.0.1:19530"
+connection_type = "ssh_tunnel"
+
+[hosts.orbstack.ssh_tunnel]
+host = "127.0.0.1"
+port = 32222                         # OrbStack SSH 端口
+user = "default"
+identity_file = "~/.orbstack/ssh/id_ed25519"
+local_port = 19530
+
+# 云服务器 - AWS EC2
+[hosts.aws-ec2]
+address = "127.0.0.1:19531" 
+connection_type = "ssh_tunnel"
+auth_token = "aws-ec2-secure-token"
+
+[hosts.aws-ec2.ssh_tunnel]
+host = "ec2-xx-xx-xx-xx.compute-1.amazonaws.com"
+port = 22
+user = "ec2-user"
+identity_file = "~/.ssh/aws-ec2-key.pem"
+local_port = 19531
+
+# 全局设置
+[global]
+connection_timeout_seconds = 30       # 连接超时
+keepalive_interval_seconds = 60       # 保持连接间隔
+auto_retry_attempts = 3               # 自动重试次数
+enable_connection_pooling = true      # 启用连接池
+
+# 主机名映射 (可选)
+# 将 TRAMP 路径中的主机名映射到配置的主机
+[host_mapping]
+"dev.example.com" = "dev-server"      # /ssh:dev.example.com:/path → hosts.dev-server
+"prod.example.com" = "production"     # /ssh:prod.example.com:/path → hosts.production
+"internal.dev" = "internal-dev"       # /ssh:internal.dev:/path → hosts.internal-dev
+"docker-container" = "docker-dev"     # /ssh:docker-container:/path → hosts.docker-dev
+"orb" = "orbstack"                    # /ssh:orb:/path → hosts.orbstack
+"aws" = "aws-ec2"                     # /ssh:aws:/path → hosts.aws-ec2
+
+# 语言特定设置 (可选)
+[language_settings]
+# 针对不同语言的优化设置
+[language_settings.rust]
+prefer_host = "dev-server"            # Rust 项目优先使用的主机
+workspace_detection = "Cargo.toml"    # 工作空间检测文件
+
+[language_settings.python]
+prefer_host = "production"
+workspace_detection = ["pyproject.toml", "setup.py", "requirements.txt"]
+
+[language_settings.typescript]
+prefer_host = "docker-dev"
+workspace_detection = ["package.json", "tsconfig.json"]
+
+[language_settings.go]
+prefer_host = "internal-dev"
+workspace_detection = ["go.mod", "go.sum"]
+
+# 缓存设置 (可选)
+[cache]
+enabled = true                        # 启用本地缓存
+cache_dir = "~/.cache/lsp-proxy/remote"  # 缓存目录
+max_cache_size_mb = 100               # 最大缓存大小
+ttl_seconds = 3600                    # 缓存过期时间 (1小时)
+
+# 调试和日志设置 (可选)
+[debug]
+log_level = "info"                    # 日志级别: error, warn, info, debug, trace
+log_remote_requests = false           # 是否记录远程请求详情
+enable_performance_metrics = false    # 启用性能指标收集
