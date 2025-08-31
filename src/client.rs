@@ -633,6 +633,7 @@ impl Client {
                             tag_support: Some(lsp::TagSupport {
                                 value_set: vec![lsp::CompletionItemTag::DEPRECATED],
                             }),
+                            label_details_support: Some(true),
                             ..Default::default()
                         }),
                         completion_item_kind: Some(lsp::CompletionItemKindCapability {

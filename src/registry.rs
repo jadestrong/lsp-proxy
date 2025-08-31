@@ -228,9 +228,9 @@ impl Registry {
             .filter_map(|old_client_id| self.get_by_id(old_client_id))
             .collect();
         for old_client in old_clients {
-            self.file_event_handler.remove_client(old_client.id());
+            self.remove_by_id(old_client.id());
             tokio::spawn(async move {
-                let _ = old_client.force_shutdown().await;
+                let _ = old_client.shutdown_and_exit().await;
             });
         }
 
