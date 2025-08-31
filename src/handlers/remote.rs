@@ -104,10 +104,10 @@ pub fn handle_remote_status(
 }
 
 /// Handle remote file read request
-pub fn handle_remote_file_read(
-    app: &mut Application,
+pub async fn handle_remote_file_read(
+    remote_sessions: Arc<std::sync::Mutex<std::collections::HashMap<String, RemoteSession>>>,
     req: &crate::msg::Request,
-) -> Result<serde_json::Value> {
+) -> Result<Response> {
     let params: lsp_ext::RemoteFileReadParams = if req.params.params.is_null() {
         return Err(anyhow::anyhow!("Missing file read parameters"));
     } else {
@@ -116,9 +116,14 @@ pub fn handle_remote_file_read(
 
     let server_name = params.server_name;
     let file_path = PathBuf::from(params.file_path);
+    let session = {
+        let session_guard = remote_sessions.lock().unwrap();
+        let session = session_guard.get(&server_name).cloned();
+        session
+    };
 
     // Get remote session
-    let session = match app.get_remote_session(&server_name) {
+    let session = match session {
         Some(session) => session,
         None => {
             return Err(anyhow::anyhow!(
@@ -128,44 +133,45 @@ pub fn handle_remote_file_read(
         }
     };
 
-    let sender = app.sender.clone();
+    // let sender = app.sender.clone();
     let response_id = req.id.clone();
 
-    tokio::spawn(async move {
-        match session.filesystem.read_file(&file_path).await {
-            Ok(content) => {
-                let content_str = String::from_utf8_lossy(&content);
+    // tokio::spawn(async move {
+    match session.filesystem.read_file(&file_path).await {
+        Ok(content) => {
+            let content_str = String::from_utf8_lossy(&content);
 
-                let success_response = Response {
-                    id: response_id,
-                    result: Some(json!({
-                        "success": true,
-                        "content": content_str,
-                        "file_path": file_path.to_string_lossy(),
-                        "size": content.len()
-                    })),
-                    error: None,
-                };
+            let success_response = Response {
+                id: response_id,
+                result: Some(json!({
+                    "success": true,
+                    "content": content_str,
+                    "file_path": file_path.to_string_lossy(),
+                    "size": content.len()
+                })),
+                error: None,
+            };
 
-                let _ = sender.send(success_response.into());
-            }
-            Err(err) => {
-                let error_response = Response {
-                    id: response_id,
-                    result: None,
-                    error: Some(create_jsonrpc_error(
-                        -32603,
-                        format!("Failed to read file: {}", err),
-                    )),
-                };
-
-                let _ = sender.send(error_response.into());
-            }
+            Ok(success_response)
+            // let _ = sender.send(success_response.into());
         }
-    });
+        Err(err) => {
+            let error_response = Response {
+                id: response_id,
+                result: None,
+                error: Some(create_jsonrpc_error(
+                    -32603,
+                    format!("Failed to read file: {}", err),
+                )),
+            };
+            Ok(error_response)
+            // let _ = sender.send(error_response.into());
+        }
+    }
+    // });
 
     // Return immediately for async operation
-    Ok(json!({"async": true}))
+    // Ok(json!({"async": true}))
 }
 
 /// Handle remote file write request
@@ -384,7 +390,7 @@ pub async fn handle_remote_connect(
                     );
                 }
             } // 锁在这里释放
-            
+
             Ok(Response {
                 id: req.id.clone(),
                 result: Some(json!({
@@ -400,7 +406,7 @@ pub async fn handle_remote_connect(
                 "Failed to connect to remote server '{}': {}",
                 server_name_clone, err
             );
-            
+
             Ok(Response {
                 id: req.id.clone(),
                 result: Some(json!({

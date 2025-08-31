@@ -158,26 +158,26 @@ impl HybridFileSystem {
 impl RemoteFileSystem for HybridFileSystem {
     async fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
         // Check memory cache first
-        {
-            let cache = self.cache.read().await;
-            if let Some(entry) = cache.get(path) {
-                if !entry.dirty && entry.local_modified.elapsed()?.as_secs() < 300 { // 5 min cache
-                    return Ok(entry.content.clone());
-                }
-            }
-        }
-        
-        // Check disk cache
-        if let Some(entry) = self.load_cache_entry(path).await? {
-            if entry.local_modified.elapsed()?.as_secs() < 3600 { // 1 hour disk cache
-                // Update memory cache
-                {
-                    let mut cache = self.cache.write().await;
-                    cache.insert(path.to_path_buf(), entry.clone());
-                }
-                return Ok(entry.content);
-            }
-        }
+        // {
+        //     let cache = self.cache.read().await;
+        //     if let Some(entry) = cache.get(path) {
+        //         if !entry.dirty && entry.local_modified.elapsed()?.as_secs() < 300 { // 5 min cache
+        //             return Ok(entry.content.clone());
+        //         }
+        //     }
+        // }
+
+        // // Check disk cache
+        // if let Some(entry) = self.load_cache_entry(path).await? {
+        //     if entry.local_modified.elapsed()?.as_secs() < 3600 { // 1 hour disk cache
+        //         // Update memory cache
+        //         {
+        //             let mut cache = self.cache.write().await;
+        //             cache.insert(path.to_path_buf(), entry.clone());
+        //         }
+        //         return Ok(entry.content);
+        //     }
+        // }
         
         // Fetch from remote
         let file_transfer = self.connection.file_transfer().await?;
@@ -257,7 +257,7 @@ impl RemoteFileSystem for HybridFileSystem {
         // Use stat command to get file metadata
         let result = self.connection.execute_command(
             "stat",
-            &["-c", "%s %Y %F", &path.to_string_lossy()]
+            &["-c", "\"%s %Y %F\"", &path.to_string_lossy()]
         ).await?;
         
         if result.exit_code != 0 {

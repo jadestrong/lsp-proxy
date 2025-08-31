@@ -177,6 +177,7 @@ pub enum Context {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Params {
     pub uri: Option<String>,
+    pub truename: Option<String>,
     pub context: Option<Context>,
     #[serde(default = "serde_json::Value::default")]
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]

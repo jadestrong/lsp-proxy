@@ -679,15 +679,21 @@ impl Application {
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteFileRead::METHOD => {
-                match crate::handlers::remote::handle_remote_file_read(self, &req) {
-                    Ok(result) => {
-                        let response = Response::new_ok(req.id.clone(), result);
-                        self.respond(response);
+                let remote_sessions = self.remote_sessions.clone();
+                let sender = self.sender.clone();
+                tokio::spawn(async move {
+                    match crate::handlers::remote::handle_remote_file_read(remote_sessions, &req)
+                        .await
+                    {
+                        Ok(response) => {
+                            let _ = sender.send(response.into());
+                        }
+                        Err(e) => {
+                            let _ =
+                                sender.send(create_error_response(&req.id, e.to_string()).into());
+                        }
                     }
-                    Err(e) => {
-                        self.respond(create_error_response(&req.id, e.to_string()));
-                    }
-                }
+                });
             }
             Message::Request(req) if req.method == lsp_ext::RemoteFileWrite::METHOD => {
                 match crate::handlers::remote::handle_remote_file_write(self, &req) {

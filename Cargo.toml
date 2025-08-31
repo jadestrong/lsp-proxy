@@ -31,8 +31,10 @@ serde = { version = "1.0.193", features = ["derive"] }
 serde_json = "1.0.108"
 lsp-types = { version = "0.95", features = ["proposed"] }
 dunce = "1.0.4"
-tokio = { version = "1.35", features = ["rt", "rt-multi-thread", "io-util", "io-std", "time", "process", "macros", "fs", "parking_lot", "sync", "signal"] }
+tokio = { version = "1.35", features = ["rt", "rt-multi-thread", "io-util", "io-std", "time", "process", "macros", "fs", "parking_lot", "sync", "signal", "net"] }
 tokio-stream = "0.1.14"
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
 futures-util = { version = "0.3", features = ["std", "async-await"], default-features = false }
 toml = "0.8.8"
 which = "7.0.2"
@@ -54,7 +56,10 @@ russh = "0.45.0"
 russh-keys = "0.45.0"
 dirs = "5.0.1"
 md5 = "0.7.0"
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
 gethostname = "0.4.3"
 env_logger = "0.11.3"
 clap = { version = "4.0", features = ["derive"] }
+# Additional dependencies for remote LSP
+url = "2.4"
+regex = "1.10"
