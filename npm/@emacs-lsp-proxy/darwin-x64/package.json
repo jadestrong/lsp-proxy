@@ -1,6 +1,6 @@
 {
   "name": "@emacs-lsp-proxy/darwin-x64",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "main": "index.js",
   "license": "ISC",
   "description": "The macOS 64-bit binary for emacs-lsp-proxy.",
