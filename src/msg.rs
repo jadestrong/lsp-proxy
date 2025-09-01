@@ -289,6 +289,7 @@ impl Request {
             method,
             params: Params {
                 uri: None,
+                truename: None,
                 context: None,
                 params: serde_json::to_value(params).unwrap(),
             },
@@ -302,6 +303,7 @@ impl Notification {
             method,
             params: Params {
                 uri: None,
+                truename: None,
                 context: None,
                 params: serde_json::to_value(params).unwrap(),
             },

@@ -6,7 +6,7 @@
 use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,11 +16,6 @@ use tokio::sync::{Mutex, RwLock};
 use url::Url;
 use uuid::Uuid;
 
-// Import existing SSH connection infrastructure
-use crate::remote::connection::{
-    ssh::{SSHConnection, SshStreamChannel},
-    Connection,
-};
 use crate::remote::{RemoteAuth, RemoteMode, RemoteServerConfig};
 
 /// SSH tunnel configuration
@@ -52,7 +47,7 @@ pub fn load_remote_lsp_config() -> Result<RemoteLspConfig> {
 }
 
 /// Remote LSP client configuration
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct RemoteLspConfig {
     /// Remote servers configuration (using existing RemoteServerConfig)
     pub servers: HashMap<String, RemoteServerConfig>,

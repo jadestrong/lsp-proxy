@@ -30,7 +30,6 @@ use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
-use tracing::field::debug;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -614,25 +613,12 @@ impl Application {
                 }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
-                // let params: lsp_ext::RemoteConnectParams = if req.params.params.is_null() {
-                //     return Err(anyhow::anyhow!("Missing connect parameters"));
-                // } else {
-                //     serde_json::from_value(req.params.params.clone())?
-                // };
+                let remote_lsp_manger = self.remote_lsp_manager.clone();
+                tokio::spawn(async move {
 
-                // let server_name = params.server_name.clone();
-                // Check if already connected
-                // if self.is_remote_session_connected(&server_name) {
-                //     let response = Response::new_ok(
-                //         req.id.clone(),
-                //         Some(json!({
-                //             "success": true,
-                //             "message": format!("Already connected to server '{}'", server_name),
-                //             "server_name": server_name
-                //         })),
-                //     );
-                //     self.respond(response);
-                // } else {
+                });
+            }
+            Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
                 let remote_config = self.remote_config.clone();
                 let remote_sessions = self.remote_sessions.clone();
                 let sender = self.sender.clone();
@@ -645,17 +631,14 @@ impl Application {
                     .await
                     {
                         Ok(response) => {
-                            // let response = Response::new_ok(req.id.clone(), result);
                             let _ = sender.send(response.into());
                         }
                         Err(e) => {
                             let _ =
                                 sender.send(create_error_response(&req.id, e.to_string()).into());
-                            // self.respond(create_error_response(&req.id, e.to_string()));
                         }
                     }
                 });
-                // }
             }
             Message::Request(req) if req.method == lsp_ext::RemoteDisconnect::METHOD => {
                 match crate::handlers::remote::handle_remote_disconnect(self, &req) {
