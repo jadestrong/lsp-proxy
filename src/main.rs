@@ -14,6 +14,7 @@ mod error;
 mod fuzzy;
 mod handlers;
 mod job;
+mod large_file_manager;
 mod logging;
 mod lsp;
 mod lsp_ext;
@@ -24,11 +25,10 @@ mod req_queue;
 mod syntax;
 mod thread;
 mod utils;
-mod large_file_manager;
 
 use anyhow::{Context, Result};
 use args::Args;
-use config::{initialize_config_file, initialize_log_file};
+use config::{initialize_config_file, initialize_log_file, set_max_completion_items};
 use log::{error, info};
 use logging::init_tracing;
 
@@ -50,29 +50,29 @@ fn main() {
 
 fn try_main() -> Result<()> {
     let args = Args::parse_args().context("could not parse arguments")?;
-    
+
     // Handle help and version flags
     if args.show_help {
         Args::print_help();
         return Ok(());
     }
-    
+
     if args.show_version {
         Args::print_version();
         return Ok(());
     }
-    
+
     // Check if --stdio flag is provided
     if !args.stdio {
         eprintln!("Error: --stdio flag is required to start the server");
         eprintln!("Use --help for usage information");
         std::process::exit(1);
     }
-    
-    handlers::request::set_max_completion_items(args.max_item_num);
+
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
-    
+    set_max_completion_items(args.max_item_num);
+
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {}", e);
         eprintln!("Error chain:");
@@ -83,7 +83,7 @@ fn try_main() -> Result<()> {
         }
         return Err(e).context("failed to initialize logging");
     }
-    
+
     info!("Server starting...");
     with_extra_thread("LspProxy", run_server)?;
 

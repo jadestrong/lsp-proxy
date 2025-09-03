@@ -9,7 +9,7 @@ pub struct Args {
     pub stdio: bool,
     pub show_help: bool,
     pub show_version: bool,
-    pub max_item_num: u64,
+    pub max_item_num: usize,
 }
 
 impl Args {
@@ -17,7 +17,7 @@ impl Args {
         let mut args = Args::default();
         let mut argv = std::env::args().peekable();
         argv.next(); // skip the program, we don't care about that;
-        
+
         while let Some(arg) = argv.next() {
             match arg.as_str() {
                 "-c" | "--config" => match argv.next().as_deref() {
@@ -60,7 +60,7 @@ impl Args {
         }
         Ok(args)
     }
-    
+
     pub fn print_help() {
         println!("emacs-lsp-proxy {}", env!("CARGO_PKG_VERSION"));
         println!("{}", env!("CARGO_PKG_DESCRIPTION"));
@@ -76,7 +76,7 @@ impl Args {
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");
     }
-    
+
     pub fn print_version() {
         println!("emacs-lsp-proxy {}", env!("CARGO_PKG_VERSION"));
     }

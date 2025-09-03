@@ -8,6 +8,12 @@ use std::{fs, path::PathBuf, str::from_utf8};
 
 static CONFIG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
 static LOG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
+pub static MAX_COMPLETION_ITEMS: once_cell::sync::OnceCell<usize> =
+    once_cell::sync::OnceCell::new();
+
+pub fn set_max_completion_items(max_items: usize) {
+    MAX_COMPLETION_ITEMS.set(max_items).ok();
+}
 
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
     // check specified file exist and is file, then set CONFIG_FILE
@@ -22,7 +28,7 @@ pub fn initialize_config_file(specified_file: Option<PathBuf>) {
 pub fn default_log_file() -> PathBuf {
     let strategy = choose_base_strategy().expect("Unable to find the cache directory!");
     let mut path = strategy.cache_dir();
-    path.push("lsp-copilot");
+    path.push("lsp-proxy");
     path.join("default.log")
 }
 

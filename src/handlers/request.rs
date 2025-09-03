@@ -7,9 +7,7 @@ use lazy_static::lazy_static;
 use log::{debug, error, info};
 use lsp_types::{notification::Notification, request::Request, CodeAction};
 use parking_lot::Mutex;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::Value;
-use std::sync::atomic::{AtomicU64, Ordering as AtomOrdering};
+use serde::de::DeserializeOwned;
 use std::{cmp::Ordering, collections::HashSet, panic, sync::Arc, time::Instant};
 use stringslice::StringSlice;
 
@@ -19,6 +17,7 @@ use crate::{
         action_category, action_fixes_diagnostics, action_preferred, CodeActionOrCommandItem,
     },
     completion_cache::CompletionCache,
+    config::MAX_COMPLETION_ITEMS,
     document::{DiagnosticItem, DiagnosticProvider, DocumentId},
     fuzzy, job,
     lsp::jsonrpc,
@@ -26,7 +25,8 @@ use crate::{
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::{
-        is_diagnostic_vectors_equal, lsp_symbols_to_imenu, sort_imenu_entries_grouped, truncate_completion_item
+        is_diagnostic_vectors_equal, lsp_symbols_to_imenu, sort_imenu_entries_grouped,
+        truncate_completion_item,
     },
 };
 
@@ -216,12 +216,6 @@ pub(crate) async fn handle_goto_references(
 
 lazy_static! {
     static ref COMPLETION_CACHE: Mutex<CompletionCache> = Mutex::new(CompletionCache::new());
-    static ref MAX_COMPLETION_ITEMS: AtomicU64 = AtomicU64::new(20); // Default to 20
-}
-
-// Add a function to set the max items value
-pub fn set_max_completion_items(max_items: u64) {
-    MAX_COMPLETION_ITEMS.store(max_items, AtomOrdering::SeqCst);
 }
 
 pub(crate) async fn handle_completion(
@@ -238,6 +232,7 @@ pub(crate) async fn handle_completion(
             .slice(0..params.text_document_position.position.character as usize);
         debug!("prefix len {} {:?}", prefix_len, pretext);
         let uri = &req.params.uri.to_owned();
+        let max_items = MAX_COMPLETION_ITEMS.get().unwrap_or(&20);
         if trigger_kind != &lsp_types::CompletionTriggerKind::INVOKED {
             if let Some(items) = COMPLETION_CACHE.try_lock().unwrap().get_cached_items(
                 &uri.as_ref().unwrap(),
@@ -253,8 +248,7 @@ pub(crate) async fn handle_completion(
                     &context.prefix,
                 );
                 debug!("filter elapsed {:0.2?}", now.elapsed());
-                let max_items = MAX_COMPLETION_ITEMS.load(AtomOrdering::SeqCst) as usize;
-                let slice_length = std::cmp::min(max_items, filtered_items.len());
+                let slice_length = std::cmp::min(*max_items, filtered_items.len());
                 let slice_items = &filtered_items[..slice_length];
                 if slice_items.len() > 0 {
                     debug!("return cached items");
@@ -426,8 +420,7 @@ pub(crate) async fn handle_completion(
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len == 0 {
                     anyhow::Ok(filtered_items.to_owned())
                 } else {
-                    let max_items = MAX_COMPLETION_ITEMS.load(AtomOrdering::SeqCst) as usize;
-                    let slice_length = std::cmp::min(max_items, filtered_items.len());
+                    let slice_length = std::cmp::min(*max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
                     anyhow::Ok(slice_items.to_owned())
                 }
@@ -1177,15 +1170,32 @@ pub(crate) async fn handle_ra_expand_macro(
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
     debug!("requesting rust-analyzer/expandMacro");
-    for ls in language_servers.iter() {
-        if ls.name() == "rust-analyzer" {
-            let resp = ls.request::<RustAnalyzerExpandMacro>(params).await?;
-            return Ok(Response::new_ok(req.id, resp));
+    let ra = language_servers
+        .iter()
+        .find(|ls| ls.name() == "rust-analyzer");
+    match ra {
+        Some(ls) => {
+            let json = ls
+                .call::<lsp_ext::RustAnalyzerExpandMacro>(req.id.clone(), params)
+                .await;
+            match json {
+                Ok(resp) => {
+                    match serde_json::from_value::<Option<lsp_ext::ExpandMacroResult>>(resp) {
+                        Ok(Some(result)) => Ok(Response::new_ok(req.id, result)),
+                        Ok(None) => {
+                            Err(anyhow::Error::msg(
+                                "Macro expansion not available at this location",
+                            ))
+                        }
+                        Err(err) => Err(err.into()),
+                    }
+                }
+                Err(err) => Err(err.into()),
+            }
         }
+        None => Err(anyhow::Error::msg(format!(
+            "No available language server for {:?}.",
+            req.method
+        ))),
     }
-
-    Err(anyhow::Error::msg(format!(
-        "No available language server for {:?}",
-        req.method
-    )))
 }
