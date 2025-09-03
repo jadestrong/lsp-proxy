@@ -60,18 +60,30 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
   (add-hook 'typescript-ts-mode-hook #'lsp-proxy-mode))
 ```
 
+### DOOM Emacs
+- Recommend
+``` elisp
+(package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
+                :files ("lsp-proxy.el"))
+```
+- Manually
 ```elisp
-;; Doom Emacs
+
 (package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
                 :files ("lsp-proxy.el" "emacs-lsp-proxy")
                 :pre-build (("cargo" "build" "--release") ("cp" "./target/release/emacs-lsp-proxy" "./"))))
+```
 
-(set-lookup-handlers! 'lsp-proxy-mode
+``` elisp
+(use-package! lsp-proxy
+  :config
+  (set-lookup-handlers! 'lsp-proxy-mode
     :definition '(lsp-proxy-find-definition :async t)
     :references '(lsp-proxy-find-references :async t)
     :implementations '(lsp-proxy-find-implementations :async t)
     :type-definition '(lsp-proxy-find-type-definition :async t)
-    :documentation '(lsp-proxy-describe-thing-at-point :async t))
+    :documentation '(lsp-proxy-describe-thing-at-point :async t)))
+
 ```
 
 ## Add a new language
@@ -133,23 +145,9 @@ language-servers = [
 ]
 # or
 # language-servers = [
-#   { name = "typescript-language-server", except-features = ["goto-definition", "goto-implementation", "goto-type-definition", "goto-declaration", "goto-reference"] },
-#   "vtsls"
+#   { name = "vue-language-server", except-features = ["goto-definition", "goto-implementation", "goto-type-definition", "goto-declaration", "goto-reference"] },
+#   "typescript-language-server"
 # ]
-
-# Override the build-in config. The built-in configuration uses vtsls, but it seems incompatible with vue-language-server. It could also be that my configuration is incorrect.
-# Others, such as JavaScript and TSX, can be added as needed.
-[[language]]
-name = "typescript"
-language-id = "typescript"
-file-types = ["ts", "mts", "cts"]
-roots = ["package.json"]
-language-servers = [
-  { name = "typescript-language-server", except-features = [
-    "format",
-  ] },
-  { name = "eslint", support-workspace = true, config-files = [".eslintrc.js", ".eslintrc.cjs", ".eslintrc.yaml", ".eslintrc.yml", ".eslintrc", ".eslintrc.json", , "eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"] },
-]
 ```
 
 - `except-features` can disable server's feature, view the [supported features](https://github.com/jadestrong/lsp-copilot/blob/c3d314d9bc1778b35c6ad2a046fa8b76cad94db4/src/syntax.rs#L150-L168).
