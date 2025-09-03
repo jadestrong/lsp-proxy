@@ -114,6 +114,17 @@ impl LspLogger {
         );
     }
 
+    /// Log multi-line LSP server errors (like stack traces)
+    pub fn log_multiline_error(&self, error: &str) {
+        error!(
+            server = %self.server_name,
+            server_id = self.server_id,
+            message_type = "error",
+            "LSP Server Error (Stack Trace):\n{}",
+            error
+        );
+    }
+
     /// Log general debug information
     pub fn log_debug(&self, message: &str) {
         debug!(

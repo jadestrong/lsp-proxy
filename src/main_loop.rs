@@ -614,23 +614,20 @@ impl Application {
             }
             Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
                 let remote_lsp_manger = self.remote_lsp_manager.clone();
-                tokio::spawn(async move {
-
-                });
-            }
-            Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
-                let remote_config = self.remote_config.clone();
-                let remote_sessions = self.remote_sessions.clone();
                 let sender = self.sender.clone();
                 tokio::spawn(async move {
-                    match crate::handlers::remote::handle_remote_connect(
-                        remote_config,
-                        remote_sessions,
-                        &req,
-                    )
-                    .await
-                    {
-                        Ok(response) => {
+                    // TODO dynamic host param
+                    match remote_lsp_manger.get_connection("orb").await {
+                        Ok(_) => {
+                            // TODO 先检查是否存在，再建立连接并通知
+                            let response = Response::new_ok(
+                                req.id,
+                                json!({
+                                    "success": true,
+                                    "message": format!("Successfully connected to remote server: {}", "orb"),
+                                    "server_name": "orb",
+                                }),
+                            );
                             let _ = sender.send(response.into());
                         }
                         Err(e) => {
@@ -640,6 +637,28 @@ impl Application {
                     }
                 });
             }
+            // Message::Request(req) if req.method == lsp_ext::RemoteConnect::METHOD => {
+            //     let remote_config = self.remote_config.clone();
+            //     let remote_sessions = self.remote_sessions.clone();
+            //     let sender = self.sender.clone();
+            //     tokio::spawn(async move {
+            //         match crate::handlers::remote::handle_remote_connect(
+            //             remote_config,
+            //             remote_sessions,
+            //             &req,
+            //         )
+            //         .await
+            //         {
+            //             Ok(response) => {
+            //                 let _ = sender.send(response.into());
+            //             }
+            //             Err(e) => {
+            //                 let _ =
+            //                     sender.send(create_error_response(&req.id, e.to_string()).into());
+            //             }
+            //         }
+            //     });
+            // }
             Message::Request(req) if req.method == lsp_ext::RemoteDisconnect::METHOD => {
                 match crate::handlers::remote::handle_remote_disconnect(self, &req) {
                     Ok(result) => {
@@ -726,26 +745,27 @@ impl Application {
 
                 // Check if this is a remote file request and handle it via SSH pipe
                 if let Some(uri) = &req.params.uri {
-                    if let Some(remote_lsp_manager) = &self.remote_lsp_manager {
-                        if crate::remote::lsp_client::RemoteLspManager::is_remote_file(uri) {
-                            let remote_manager = Arc::clone(remote_lsp_manager);
-                            let request = req.clone();
-                            let sender = self.sender.clone();
-                            
-                            tokio::spawn(async move {
-                                match Self::handle_remote_lsp_request(remote_manager, request).await {
-                                    Ok(response) => {
-                                        let _ = sender.send(response.into());
-                                    }
-                                    Err(e) => {
-                                        let error_response = create_error_response(&req.id, e.to_string());
-                                        let _ = sender.send(error_response.into());
-                                    }
+                    // if let Some(remote_lsp_manager) = &self.remote_lsp_manager {
+                    if crate::remote::lsp_client::RemoteLspManager::is_remote_file(uri) {
+                        let remote_manager = self.remote_lsp_manager.clone();
+                        let request = req.clone();
+                        let sender = self.sender.clone();
+
+                        tokio::spawn(async move {
+                            match Self::handle_remote_lsp_request(remote_manager, request).await {
+                                Ok(response) => {
+                                    let _ = sender.send(response.into());
                                 }
-                            });
-                            return Ok(());
-                        }
+                                Err(e) => {
+                                    let error_response =
+                                        create_error_response(&req.id, e.to_string());
+                                    let _ = sender.send(error_response.into());
+                                }
+                            }
+                        });
+                        return Ok(());
                     }
+                    // }
                 }
 
                 match self.get_working_document(&req) {
@@ -918,7 +938,13 @@ impl Application {
                     .editor
                     .document_by_uri(&lsp_types::Url::parse(uri).unwrap())
                 {
-                    log::debug!("request {:?}, doc id {:?} doc version: {}, client: {:?}", req.method, doc.id(), doc.version, doc.language_servers.iter().map(|ls| (ls.0, ls.1.id())));
+                    // log::debug!(
+                    //     "request {:?}, doc id {:?} doc version: {}, client: {:?}",
+                    //     req.method,
+                    //     doc.id(),
+                    //     doc.version,
+                    //     doc.language_servers.iter().map(|ls| (ls.0, ls.1.id()))
+                    // );
                     Ok(doc)
                 } else {
                     Err(Error::msg("No document opened"))
@@ -933,19 +959,25 @@ impl Application {
         remote_manager: Arc<crate::remote::lsp_client::RemoteLspManager>,
         req: msg::Request,
     ) -> Result<msg::Response> {
-        let uri = req.params.uri.as_ref()
+        let uri = req
+            .params
+            .uri
+            .as_ref()
             .ok_or_else(|| anyhow::Error::msg("No URI provided in request"))?;
 
         // Extract remote file information from TRAMP path
         let file_info = crate::remote::lsp_client::RemoteLspManager::extract_remote_info(uri)
             .ok_or_else(|| anyhow::Error::msg("Invalid remote file URI"))?;
 
-        log::info!("Forwarding LSP request '{}' to remote host: {} via SSH pipe", 
-                   req.method, file_info.host);
+        log::info!(
+            "Forwarding LSP request '{}' to remote host: {} via SSH pipe",
+            req.method,
+            file_info.host
+        );
 
         // Detect language from file path
-        let language = Self::detect_language_from_path(&file_info.path)
-            .unwrap_or_else(|| "text".to_string());
+        let language =
+            Self::detect_language_from_path(&file_info.path).unwrap_or_else(|| "text".to_string());
 
         // Start remote LSP server if not already running
         let server_id = remote_manager
@@ -970,9 +1002,7 @@ impl Application {
 
     /// Detect programming language from file path
     fn detect_language_from_path(path: &str) -> Option<String> {
-        let extension = std::path::Path::new(path)
-            .extension()?
-            .to_str()?;
+        let extension = std::path::Path::new(path).extension()?.to_str()?;
 
         match extension {
             "rs" => Some("rust".to_string()),
@@ -989,8 +1019,8 @@ impl Application {
 
     /// Convert TRAMP URI to remote file path in LSP request parameters
     fn convert_tramp_uri_to_remote_path(
-        mut params: serde_json::Value, 
-        file_info: &crate::remote::lsp_client::RemoteFileInfo
+        mut params: serde_json::Value,
+        file_info: &crate::remote::lsp_client::RemoteFileInfo,
     ) -> serde_json::Value {
         // Convert textDocument.uri from TRAMP format to remote file path
         if let Some(text_document) = params.get_mut("textDocument") {
@@ -998,7 +1028,11 @@ impl Application {
                 if let Some(uri_str) = uri.as_str() {
                     if uri_str.contains(&file_info.host) {
                         let remote_uri = format!("file://{}", file_info.path);
-                        log::debug!("Converting TRAMP URI {} to remote URI {}", uri_str, remote_uri);
+                        log::debug!(
+                            "Converting TRAMP URI {} to remote URI {}",
+                            uri_str,
+                            remote_uri
+                        );
                         *uri = serde_json::json!(remote_uri);
                     }
                 }
@@ -1025,8 +1059,8 @@ impl Application {
 
     /// Convert remote file paths back to TRAMP URIs in LSP response
     fn convert_remote_paths_to_tramp_uris(
-        mut response: serde_json::Value, 
-        file_info: &crate::remote::lsp_client::RemoteFileInfo
+        mut response: serde_json::Value,
+        file_info: &crate::remote::lsp_client::RemoteFileInfo,
     ) -> serde_json::Value {
         // Handle different response types that may contain file URIs
 
@@ -1060,16 +1094,22 @@ impl Application {
     }
 
     fn convert_uri_in_location(
-        location: &mut serde_json::Value, 
-        file_info: &crate::remote::lsp_client::RemoteFileInfo
+        location: &mut serde_json::Value,
+        file_info: &crate::remote::lsp_client::RemoteFileInfo,
     ) {
         if let Some(uri) = location.get_mut("uri") {
             if let Some(uri_str) = uri.as_str() {
                 if uri_str.starts_with("file://") {
                     let remote_path = &uri_str[7..]; // Remove "file://"
-                    let tramp_uri = format!("file:///{}:{}:{}", 
-                                          file_info.method, file_info.host, remote_path);
-                    log::debug!("Converting remote URI {} back to TRAMP URI {}", uri_str, tramp_uri);
+                    let tramp_uri = format!(
+                        "file:///{}:{}:{}",
+                        file_info.method, file_info.host, remote_path
+                    );
+                    log::debug!(
+                        "Converting remote URI {} back to TRAMP URI {}",
+                        uri_str,
+                        tramp_uri
+                    );
                     *uri = serde_json::json!(tramp_uri);
                 }
             }

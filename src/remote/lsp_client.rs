@@ -55,62 +55,62 @@ pub struct RemoteLspConfig {
     pub host_mapping: Option<HashMap<String, String>>,
 }
 
-impl RemoteLspConfig {
-    /// Convert from legacy format to new format
-    pub fn from_legacy(
-        hosts: HashMap<String, LegacyRemoteHostConfig>,
-        host_mapping: Option<HashMap<String, String>>,
-    ) -> Self {
-        let mut servers = HashMap::new();
+// impl RemoteLspConfig {
+//     /// Convert from legacy format to new format
+//     pub fn from_legacy(
+//         hosts: HashMap<String, LegacyRemoteHostConfig>,
+//         host_mapping: Option<HashMap<String, String>>,
+//     ) -> Self {
+//         let mut servers = HashMap::new();
 
-        for (name, host_config) in hosts {
-            let server_config = RemoteServerConfig {
-                name: name.clone(),
-                host: host_config.host.unwrap_or(name.clone()),
-                port: host_config.port,
-                user: host_config
-                    .user
-                    .unwrap_or_else(|| std::env::var("USER").unwrap_or("root".to_string())),
-                auth: match host_config.connection_type {
-                    LegacyConnectionType::SshPipe => {
-                        if let Some(ssh_config) = host_config.ssh_pipe {
-                            RemoteAuth::SshConfig {
-                                host: Some(ssh_config.host),
-                            }
-                        } else {
-                            RemoteAuth::SshConfig { host: None }
-                        }
-                    }
-                    _ => RemoteAuth::SshConfig { host: None },
-                },
-                workspace_root: None,
-                connection_timeout: None,
-                mode: RemoteMode::Server {
-                    auto_deploy: host_config.server_install_script.is_some(),
-                    server_path: host_config.server_binary_path.map(PathBuf::from),
-                },
-            };
-            servers.insert(name, server_config);
-        }
+//         for (name, host_config) in hosts {
+//             let server_config = RemoteServerConfig {
+//                 name: name.clone(),
+//                 host: host_config.host.unwrap_or(name.clone()),
+//                 port: host_config.port,
+//                 user: host_config
+//                     .user
+//                     .unwrap_or_else(|| std::env::var("USER").unwrap_or("root".to_string())),
+//                 auth: match host_config.connection_type {
+//                     LegacyConnectionType::SshPipe => {
+//                         if let Some(ssh_config) = host_config.ssh_pipe {
+//                             RemoteAuth::SshConfig {
+//                                 host: Some(ssh_config.host),
+//                             }
+//                         } else {
+//                             RemoteAuth::SshConfig { host: None }
+//                         }
+//                     }
+//                     _ => RemoteAuth::SshConfig { host: None },
+//                 },
+//                 workspace_root: None,
+//                 connection_timeout: None,
+//                 mode: RemoteMode::Server {
+//                     auto_deploy: host_config.server_install_script.is_some(),
+//                     server_path: host_config.server_binary_path.map(PathBuf::from),
+//                 },
+//             };
+//             servers.insert(name, server_config);
+//         }
 
-        Self {
-            servers,
-            host_mapping,
-        }
-    }
-}
+//         Self {
+//             servers,
+//             host_mapping,
+//         }
+//     }
+// }
 
 // Legacy configuration types for backward compatibility
-#[derive(Debug, Clone, Deserialize)]
-struct LegacyRemoteHostConfig {
-    pub host: Option<String>,
-    pub port: Option<u16>,
-    pub user: Option<String>,
-    pub connection_type: LegacyConnectionType,
-    pub ssh_pipe: Option<LegacySshPipeConfig>,
-    pub server_install_script: Option<String>,
-    pub server_binary_path: Option<String>,
-}
+// #[derive(Debug, Clone, Deserialize)]
+// struct LegacyRemoteHostConfig {
+//     pub host: Option<String>,
+//     pub port: Option<u16>,
+//     pub user: Option<String>,
+//     pub connection_type: LegacyConnectionType,
+//     pub ssh_pipe: Option<LegacySshPipeConfig>,
+//     pub server_install_script: Option<String>,
+//     pub server_binary_path: Option<String>,
+// }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -120,16 +120,16 @@ enum LegacyConnectionType {
     SshPipe,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct LegacySshPipeConfig {
-    pub host: String,
-    pub port: Option<u16>,
-    pub user: String,
-    pub identity_file: Option<PathBuf>,
-    pub server_install_script: Option<String>,
-    pub server_binary_path: Option<String>,
-    pub config_file: Option<String>,
-}
+// #[derive(Debug, Clone, Deserialize)]
+// struct LegacySshPipeConfig {
+//     pub host: String,
+//     pub port: Option<u16>,
+//     pub user: String,
+//     pub identity_file: Option<PathBuf>,
+//     pub server_install_script: Option<String>,
+//     pub server_binary_path: Option<String>,
+//     pub config_file: Option<String>,
+// }
 
 /// Protocol message types (same as server-side)
 #[derive(Debug, Clone, Serialize, Deserialize)]

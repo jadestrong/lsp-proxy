@@ -3,11 +3,15 @@ use crate::{
     job::Jobs,
     large_file_manager::LargeFileManager,
     msg::{Message, Notification, Response},
+    remote::{
+        config::RemoteConfigManager,
+        lsp_client::{RemoteLspConfig, RemoteLspManager},
+        RemoteSession,
+    },
     req_queue, syntax,
-    remote::{RemoteSession, config::RemoteConfigManager, lsp_client::RemoteLspManager},
 };
 use crossbeam_channel::Sender;
-use std::{sync::Arc, sync::Mutex, time::Instant, collections::HashMap};
+use std::{collections::HashMap, sync::Arc, sync::Mutex, time::Instant};
 
 pub(crate) type ReqHandler = fn(&mut Application, Response);
 type ReqQueue = req_queue::ReqQueue<(String, Instant), ReqHandler>;
@@ -21,7 +25,7 @@ pub(crate) struct Application {
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
     pub remote_sessions: Arc<Mutex<HashMap<String, RemoteSession>>>,
     pub remote_config: Arc<Mutex<RemoteConfigManager>>,
-    pub remote_lsp_manager: Option<Arc<RemoteLspManager>>,
+    pub remote_lsp_manager: Arc<RemoteLspManager>,
 }
 
 impl Application {
@@ -40,7 +44,7 @@ impl Application {
             Ok(config) => {
                 log::info!("Successfully loaded remote configuration");
                 config
-            },
+            }
             Err(err) => {
                 log::warn!("Failed to load remote config: {}, creating default", err);
                 match RemoteConfigManager::new() {
@@ -58,11 +62,14 @@ impl Application {
         let remote_lsp_manager = match crate::remote::lsp_client::load_remote_lsp_config() {
             Ok(config) => {
                 log::info!("Successfully loaded remote LSP configuration");
-                Some(Arc::new(RemoteLspManager::new(config)))
-            },
+                Arc::new(RemoteLspManager::new(config))
+            }
             Err(err) => {
-                log::warn!("Failed to load remote LSP config: {}, remote LSP disabled", err);
-                None
+                log::warn!(
+                    "Failed to load remote LSP config: {}, remote LSP disabled",
+                    err
+                );
+                Arc::new(RemoteLspManager::new(RemoteLspConfig::default()))
             }
         };
 
@@ -159,11 +166,7 @@ impl Application {
 
     /// Get remote session by name
     pub(crate) fn get_remote_session(&self, name: &str) -> Option<RemoteSession> {
-        self.remote_sessions
-            .lock()
-            .ok()?
-            .get(name)
-            .cloned()
+        self.remote_sessions.lock().ok()?.get(name).cloned()
     }
 
     /// Add or update remote session
@@ -175,10 +178,7 @@ impl Application {
 
     /// Remove remote session
     pub(crate) fn remove_remote_session(&self, name: &str) -> Option<RemoteSession> {
-        self.remote_sessions
-            .lock()
-            .ok()?
-            .remove(name)
+        self.remote_sessions.lock().ok()?.remove(name)
     }
 
     /// List all remote sessions

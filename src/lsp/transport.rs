@@ -12,6 +12,7 @@ use tokio::{
         mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedSender},
         Mutex, Notify,
     },
+    time::{timeout, Duration},
 };
 
 #[derive(Debug)]
@@ -248,18 +249,68 @@ impl Transport {
     }
 
     async fn err(transport: Arc<Self>, mut server_stderr: BufReader<ChildStderr>) {
-        let mut recv_buffer = String::new();
+        let mut error_buffer = Vec::new();
+        let mut line_buffer = String::new();
+        
         loop {
-            match Self::recv_server_error(&mut server_stderr, &mut recv_buffer, &transport.logger)
-                .await
-            {
-                Ok(_) => {}
-                Err(err) => {
+            line_buffer.clear();
+            
+            // Try to read a line with a timeout
+            let read_result = timeout(
+                Duration::from_millis(100), // 100ms timeout for detecting end of error block
+                server_stderr.read_line(&mut line_buffer)
+            ).await;
+            
+            match read_result {
+                Ok(Ok(0)) => {
+                    // EOF reached
+                    if !error_buffer.is_empty() {
+                        Self::flush_error_buffer(&mut error_buffer, &transport.logger);
+                    }
+                    error!("err~ {} err: <- StreamClosed", transport.name);
+                    break;
+                }
+                Ok(Ok(_)) => {
+                    // Successfully read a line
+                    let line = line_buffer.trim();
+                    if !line.is_empty() {
+                        error_buffer.push(line.to_string());
+                    }
+                }
+                Ok(Err(err)) => {
+                    // IO error
+                    if !error_buffer.is_empty() {
+                        Self::flush_error_buffer(&mut error_buffer, &transport.logger);
+                    }
                     error!("err~ {} err: <- {err:?}", transport.name);
                     break;
                 }
+                Err(_) => {
+                    // Timeout occurred - likely end of error block
+                    if !error_buffer.is_empty() {
+                        Self::flush_error_buffer(&mut error_buffer, &transport.logger);
+                    }
+                    // Continue reading for more errors
+                }
             }
         }
+    }
+    
+    fn flush_error_buffer(buffer: &mut Vec<String>, logger: &LspLogger) {
+        if buffer.is_empty() {
+            return;
+        }
+        
+        if buffer.len() == 1 {
+            // Single line error - log as before
+            logger.log_error(&buffer[0]);
+        } else {
+            // Multi-line error - combine into single log entry
+            let combined_error = buffer.join("\n");
+            logger.log_multiline_error(&combined_error);
+        }
+        
+        buffer.clear();
     }
 
     async fn recv_server_message(
@@ -308,19 +359,6 @@ impl Transport {
         let output: serde_json::Result<ServerMessage> = serde_json::from_str(msg);
 
         Ok(output?)
-    }
-
-    async fn recv_server_error(
-        err: &mut (impl AsyncBufRead + Unpin + Send),
-        buffer: &mut String,
-        logger: &LspLogger,
-    ) -> Result<()> {
-        buffer.truncate(0);
-        if err.read_line(buffer).await? == 0 {
-            return Err(Error::StreamClosed);
-        };
-        logger.log_error(&buffer.trim());
-        Ok(())
     }
 
     async fn process_server_message(

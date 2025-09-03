@@ -91,7 +91,7 @@ pub fn default_syntax_loader() -> syntax::Configuration {
         .try_into::<syntax::Configuration>()
     {
         Ok(config) => {
-            debug!("serialized config {:?}", config);
+            // debug!("serialized config {:?}", config);
             config
         }
         Err(err) => {
