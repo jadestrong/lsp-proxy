@@ -9,6 +9,7 @@ pub struct Args {
     pub stdio: bool,
     pub show_help: bool,
     pub show_version: bool,
+    pub max_item_num: u64,
 }
 
 impl Args {
@@ -22,6 +23,15 @@ impl Args {
                 "-c" | "--config" => match argv.next().as_deref() {
                     Some(path) => args.config_file = Some(path.into()),
                     None => anyhow::bail!("--config must specify a path to read"),
+                },
+                "--max-item" => match argv.next().as_deref() {
+                    Some(n) => {
+                        args.max_item_num = match n.parse() {
+                            Ok(n) => n,
+                            Err(_) => 20,
+                        }
+                    }
+                    None => args.max_item_num = 20,
                 },
                 "--log-level" => match argv.next().as_deref() {
                     Some(level) => {

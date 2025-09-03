@@ -7,7 +7,9 @@ use lazy_static::lazy_static;
 use log::{debug, error, info};
 use lsp_types::{notification::Notification, request::Request, CodeAction};
 use parking_lot::Mutex;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::atomic::{AtomicU64, Ordering as AtomOrdering};
 use std::{cmp::Ordering, collections::HashSet, panic, sync::Arc, time::Instant};
 use stringslice::StringSlice;
 
@@ -20,7 +22,7 @@ use crate::{
     document::{DiagnosticItem, DiagnosticProvider, DocumentId},
     fuzzy, job,
     lsp::jsonrpc,
-    lsp_ext::{self, CommandItem, CompletionItem},
+    lsp_ext::{self, CommandItem, CompletionItem, RustAnalyzerExpandMacro},
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::{
@@ -214,6 +216,12 @@ pub(crate) async fn handle_goto_references(
 
 lazy_static! {
     static ref COMPLETION_CACHE: Mutex<CompletionCache> = Mutex::new(CompletionCache::new());
+    static ref MAX_COMPLETION_ITEMS: AtomicU64 = AtomicU64::new(20); // Default to 20
+}
+
+// Add a function to set the max items value
+pub fn set_max_completion_items(max_items: u64) {
+    MAX_COMPLETION_ITEMS.store(max_items, AtomOrdering::SeqCst);
 }
 
 pub(crate) async fn handle_completion(
@@ -225,7 +233,7 @@ pub(crate) async fn handle_completion(
         let prefix_len = &context.prefix.len();
         let bounds_start = &context.bounds_start;
         let trigger_kind = &context.trigger_kind;
-        let pretext = &context
+        let pretext = context
             .line
             .slice(0..params.text_document_position.position.character as usize);
         debug!("prefix len {} {:?}", prefix_len, pretext);
@@ -245,7 +253,8 @@ pub(crate) async fn handle_completion(
                     &context.prefix,
                 );
                 debug!("filter elapsed {:0.2?}", now.elapsed());
-                let slice_length = std::cmp::min(20, filtered_items.len());
+                let max_items = MAX_COMPLETION_ITEMS.load(AtomOrdering::SeqCst) as usize;
+                let slice_length = std::cmp::min(max_items, filtered_items.len());
                 let slice_items = &filtered_items[..slice_length];
                 if slice_items.len() > 0 {
                     debug!("return cached items");
@@ -401,7 +410,7 @@ pub(crate) async fn handle_completion(
                     COMPLETION_CACHE.try_lock().unwrap().set_cache(
                         uri.clone(),
                         bounds_start.to_owned(),
-                        pretext.to_owned().to_owned(),
+                        pretext.to_owned(),
                         context.prefix.clone(),
                         items.clone(),
                     );
@@ -417,7 +426,8 @@ pub(crate) async fn handle_completion(
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len == 0 {
                     anyhow::Ok(filtered_items.to_owned())
                 } else {
-                    let slice_length = std::cmp::min(20, filtered_items.len());
+                    let max_items = MAX_COMPLETION_ITEMS.load(AtomOrdering::SeqCst) as usize;
+                    let slice_length = std::cmp::min(max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
                     anyhow::Ok(slice_items.to_owned())
                 }
@@ -1159,4 +1169,23 @@ pub(crate) async fn handle_inline_completion(
         let resp = create_error_response(&req.id, format!("Not a inline completion context"));
         response_sender.send(resp.into()).unwrap();
     }
+}
+
+pub(crate) async fn handle_ra_expand_macro(
+    req: msg::Request,
+    params: <RustAnalyzerExpandMacro as Request>::Params,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    debug!("requesting rust-analyzer/expandMacro");
+    for ls in language_servers.iter() {
+        if ls.name() == "rust-analyzer" {
+            let resp = ls.request::<RustAnalyzerExpandMacro>(params).await?;
+            return Ok(Response::new_ok(req.id, resp));
+        }
+    }
+
+    Err(anyhow::Error::msg(format!(
+        "No available language server for {:?}",
+        req.method
+    )))
 }

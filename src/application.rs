@@ -26,6 +26,7 @@ impl Application {
         sender: Sender<Message>,
         syn_loader_config: syntax::Configuration,
     ) -> Application {
+        // Set the max completion items
         let loader =
             syntax::Loader::new(syn_loader_config).expect("Cound not compile loader for config");
         let syn_loader = std::sync::Arc::new(loader);

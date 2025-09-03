@@ -86,6 +86,11 @@ the buffer when it becomes large."
           (integer :tag "lines")
           (const :tag "Unlimited" t)))
 
+(defcustom lsp-proxy-max-completion-item 20
+  "Maximum numbers of completion sent and by server."
+  :group 'lsp-proxy
+  :type 'integer)
+
 (defcustom lsp-proxy--send-changes-idle-time 0
   "Don't tell server of changes before Emacs's been idle for this many seconds."
   :group 'lsp-proxy
@@ -766,7 +771,7 @@ Only works when mode is `tick or `alive."
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
-                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file)
+                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item))
                                          :coding 'utf-8-emacs-unix
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
@@ -2955,6 +2960,25 @@ NAME is the imenu item name."
    :success-fn (lambda (resp)
                  (message "resp %s" resp))))
 
+(defvar lsp-proxy-rust-analyzer-expand-macro-buffer "*lsp-proxy-expandMacro*"
+  "Buffer for rust-analyzer/expandMacro.")
+
+(defun lsp-proxy-rust-analyzer-expand-macro ()
+  (interactive)
+  (lsp-proxy--async-request
+                'rust-analyzer/expandMacro
+                (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+                :success-fn
+                (lambda (resp)
+                  (when-let* ((expansion (plist-get resp :expansion))
+                              (name (plist-get resp :name))
+                              (buf (get-buffer-create lsp-proxy-rust-analyzer-expand-macro-buffer)))
+                    (with-current-buffer buf
+                      (erase-buffer)
+                      (insert expansion)
+                      (rust-mode)
+                      (run-mode-hooks))
+                    (switch-to-buffer-other-window buf t)))))
 ;;
 ;; hooks
 ;;

@@ -1,5 +1,5 @@
-use std::{collections::HashMap, path::PathBuf, sync::Weak};
 use globset::{GlobBuilder, GlobSetBuilder};
+use std::{collections::HashMap, path::PathBuf, sync::Weak};
 use tokio::sync::mpsc;
 
 use crate::client::Client;
