@@ -102,27 +102,40 @@ language-servers = ["vls"]
 
 - Vue3
 ```sh
-yarn global add @vue/language-server @vue/typescript-plugin
+yarn global add @vue/language-server @vue/typescript-plugin typescript
 ```
 
 ```toml
+# typescript-language-server
 [language-server.typescript-language-server]
 config.plugins = [
-  { name = "@vue/typescript-plugin", location = "${your-path}/node_modules/@vue/typescript-plugin", languages = ["vue"]}
+  { name = "@vue/typescript-plugin", location = "${YOUR-PATH}/node_modules/@vue/typescript-plugin", languages = ["vue"], enableForWorkspaceTypeScriptVersions = true, configNamespace = "typescript" }
+]
+
+# or vtsls
+[language-server.vtsls.config.vtsls.tsserver]
+globalPlugins = [
+  { name = "@vue/typescript-plugin", location = "${YOUR-PATH}/node_modules/@vue/typescript-plugin", languages = ["vue"], enableForWorkspaceTypeScriptVersions = true, configNamespace = "typescript" }
 ]
 
 [language-server.vue-language-server]
 command = "vue-language-server"
 args = ["--stdio"]
-config.typescript = { tsdk = "${your-path}/node_modules/typescript/lib" }
-config.vue = { hybridMode = false }
 
 [[language]]
 name = "vue"
 roots = ["package.json"]
 language-id = "vue"
-file-types = ["vue", "ts"]
-language-servers = ["vue-language-server", "typescript-language-server"]
+file-types = ["vue"]
+language-servers = [
+  { name = "vue-language-server", except-features = ["goto-definition", "goto-implementation", "goto-type-definition", "goto-declaration", "goto-reference"] },
+  "vtsls"
+]
+# or
+# language-servers = [
+#   { name = "typescript-language-server", except-features = ["goto-definition", "goto-implementation", "goto-type-definition", "goto-declaration", "goto-reference"] },
+#   "vtsls"
+# ]
 
 # Override the build-in config. The built-in configuration uses vtsls, but it seems incompatible with vue-language-server. It could also be that my configuration is incorrect.
 # Others, such as JavaScript and TSX, can be added as needed.

@@ -154,7 +154,7 @@ impl Display for LanguageServerFeature {
             GotoDeclaration => "goto-declaration",
             GotoDefinition => "goto-definition",
             GotoTypeDefinition => "goto-type-definition",
-            GotoReference => "goto-type-definition",
+            GotoReference => "goto-reference",
             GotoImplementation => "goto-implementation",
             SignatureHelp => "signature-help",
             Hover => "hover",

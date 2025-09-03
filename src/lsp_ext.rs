@@ -241,3 +241,35 @@ impl Notification for EmacsLargeFileLoadCancel {
 
     const METHOD: &'static str = "emacs/largeFileLoadCancel";
 }
+
+// tsserver/request for Vue
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct TsserverRequestParams(pub u32, pub String, pub serde_json::Value);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TsserverRequestResult {
+    pub body: serde_json::Value,
+}
+
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum TsserverRequest {}
+
+impl Notification for TsserverRequest {
+    type Params = Vec<TsserverRequestParams>;
+
+    const METHOD: &'static str = "tsserver/request";
+}
+
+// tsserver/response for Vue
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+pub struct TsserverResponseParams(pub u32, pub serde_json::Value);
+
+#[derive(Debug)]
+pub enum TsserverResponse {}
+
+impl Notification for TsserverResponse {
+    type Params = Vec<TsserverResponseParams>;
+
+    const METHOD: &'static str = "tsserver/response";
+}

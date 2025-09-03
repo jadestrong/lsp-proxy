@@ -72,7 +72,7 @@ pub struct Client {
     experimental: Option<Value>,
     pub(crate) root_path: std::path::PathBuf,
     root_uri: Option<lsp::Url>,
-    workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
+    pub(crate) workspace_folders: Mutex<Vec<lsp::WorkspaceFolder>>,
     initialize_notify: Arc<Notify>,
     /// workspace folders added while the server is still initializing
     req_timeout: u64,
@@ -927,5 +927,25 @@ impl Client {
         };
 
         Some(self.call::<lsp::request::DocumentDiagnosticRequest>(req_id, pull_params))
+    }
+
+    pub fn execute_command(
+        &self,
+        command: lsp::Command,
+    ) -> Option<impl Future<Output = Result<Value>>> {
+        let capabilities = self.capabilities.get().unwrap();
+
+        // Return early if the language server does not support executing commands
+        capabilities.execute_command_provider.as_ref()?;
+
+        let params = lsp::ExecuteCommandParams {
+            command: command.command,
+            arguments: command.arguments.unwrap_or_default(),
+            work_done_progress_params: lsp::WorkDoneProgressParams {
+                work_done_token: None,
+            },
+        };
+
+        Some(self.call::<lsp::request::ExecuteCommand>(self.next_request_id(), params))
     }
 }

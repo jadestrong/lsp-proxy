@@ -410,6 +410,73 @@ impl Application {
                             },
                         )
                     }
+                    NotificationFromServer::ForwardRequest(params) => {
+                        let language_server = language_server!();
+                        let servers = self
+                            .editor
+                            .language_servers
+                            .get_project_clients(&language_server);
+                        let ts_server = servers.into_iter().find(|ls| {
+                            if let Some(lsp_types::ExecuteCommandOptions { commands, .. }) =
+                                &ls.capabilities().execute_command_provider
+                            {
+                                commands
+                                    .iter()
+                                    .any(|command| command == "typescript.tsserverRequest")
+                            } else {
+                                false
+                            }
+                        });
+                        if let Some(ts_server) = ts_server {
+                            tokio::spawn(async move {
+                                let lsp_ext::TsserverRequestParams(seq, command, args) = params;
+                                let command_request = ts_server
+                                    .execute_command(lsp_types::Command {
+                                        title: "vue_request_forward".to_string(),
+                                        command: "typescript.tsserverRequest".to_string(),
+                                        arguments: Some(vec![command.into(), args]),
+                                    })
+                                    .unwrap();
+                                let resp: Option<lsp_ext::TsserverRequestResult> =
+                                    match command_request.await {
+                                        Ok(value) => {
+                                            match serde_json::from_value(value) {
+                                                Ok(response) => Some(response),
+                                                Err(e) => {
+                                                    tracing::error!("Failed to deserialize tsserver response: {}", e);
+                                                    None
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("Command request failed: {}", e);
+                                            None
+                                        }
+                                    };
+                                if let Err(e) =
+                                    language_server.notify::<lsp_ext::TsserverResponse>(vec![
+                                        lsp_ext::TsserverResponseParams(
+                                            seq,
+                                            resp.map(|r| r.body).unwrap_or(serde_json::Value::Null),
+                                        ),
+                                    ])
+                                {
+                                    tracing::error!(
+                                        "Failed to send tsserver/response notification: {}",
+                                        e
+                                    );
+                                };
+                            });
+                        } else {
+                            error!("No tsserver found.");
+                            self.send_notification::<lsp_types::notification::ShowMessage>(
+                                lsp_types::ShowMessageParams {
+                                    typ: lsp_types::MessageType::ERROR,
+                                    message: format!("[Vue] No tsserver to forward {:?}", params),
+                                },
+                            );
+                        }
+                    }
                 }
             }
             Call::Invalid { id } => {

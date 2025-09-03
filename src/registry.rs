@@ -4,6 +4,7 @@ use crate::{
         file_event,
         jsonrpc::{self, Call},
     },
+    lsp_ext,
     msg::RequestId,
     syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
     utils::path,
@@ -50,12 +51,11 @@ pub enum NotificationFromServer {
     ShowMessage(lsp::ShowMessageParams),
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
+    ForwardRequest(lsp_ext::TsserverRequestParams),
 }
 
 impl NotificationFromServer {
     pub fn parse(method: &str, params: jsonrpc::Params) -> Result<NotificationFromServer> {
-        // let lsp::notification::Notification as _;
-
         let notification = match method {
             lsp::notification::Initialized::METHOD => Self::Initialized,
             lsp::notification::Exit::METHOD => Self::Exit,
@@ -74,6 +74,10 @@ impl NotificationFromServer {
             lsp::notification::Progress::METHOD => {
                 let params: lsp::ProgressParams = params.parse()?;
                 Self::ProgressMessage(params)
+            }
+            lsp_ext::TsserverRequest::METHOD => {
+                let params: Vec<lsp_ext::TsserverRequestParams> = params.parse()?;
+                Self::ForwardRequest(params.into_iter().next().unwrap())
             }
             _ => {
                 return Err(Error::Unhandled);
@@ -236,6 +240,23 @@ impl Registry {
 
         new_clients
     }
+
+    pub fn get_project_clients(&self, known_client: &Arc<Client>) -> Vec<Arc<Client>> {
+        let known_root = &known_client.root_path;
+        let known_workspaces = known_client.workspace_folders.lock();
+
+        self.iter_clients()
+            .filter(|client| {
+                // 1. same root_path clients
+                client.root_path == *known_root ||
+                // 2. share workspace folders clients
+                known_workspaces.iter().any(|known_workspace| {
+                    client.workspace_folders.lock().iter().any(|workspace| workspace.uri == known_workspace.uri)
+                })
+            })
+        .cloned()
+        .collect()
+    }
 }
 
 fn start_client(
@@ -280,7 +301,7 @@ fn start_client(
             error!("failed to initialize language server: {}", e);
             return;
         }
-        debug!("server {:?} capabilities {:?}", _client.name(), value.ok());
+        // debug!("server {:?} capabilities {:?}", _client.name(), value.ok());
         // next up, notify<initialized>
         // _client
         //     .notify::<lsp::notification::Initialized>(lsp::InitializedParams {})
