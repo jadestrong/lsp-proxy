@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process'); // 添加这行
 
 /**
  * Update version in package.json files
@@ -92,6 +93,31 @@ function updateCargoVersion(cargoPath, version) {
   }
 }
 
+function updateCargoLock(cargoDir) {
+  try {
+    console.log(`🔄 Updating Cargo.lock in ${cargoDir}...`);
+    
+    // 检查是否存在 Cargo.toml
+    const cargoTomlPath = path.join(cargoDir, 'Cargo.toml');
+    if (!fs.existsSync(cargoTomlPath)) {
+      console.warn(`⚠️  No Cargo.toml found in ${cargoDir}, skipping Cargo.lock update`);
+      return true;
+    }
+    
+    // 运行 cargo update 命令
+    execSync('cargo update', { 
+      cwd: cargoDir, 
+      stdio: 'inherit' // 显示 cargo 的输出
+    });
+    
+    console.log(`✅ Successfully updated Cargo.lock in ${cargoDir}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Failed to update Cargo.lock in ${cargoDir}:`, error.message);
+    return false;
+  }
+}
+
 function main() {
   const args = process.argv.slice(2);
   
@@ -151,6 +177,8 @@ function main() {
   }
 
   // Process Cargo.toml files
+  const cargoDirectories = new Set(); // 收集需要更新 Cargo.lock 的目录
+  
   for (const cargoFile of cargoFiles) {
     const fullPath = path.join(process.cwd(), cargoFile);
     console.log(`\n🔍 Debug: Checking ${cargoFile} (full path: ${fullPath})`);
@@ -160,11 +188,23 @@ function main() {
       processedCount++;
       if (updateCargoVersion(fullPath, version)) {
         updatedCount++;
+        // 添加包含 Cargo.toml 的目录到集合中
+        cargoDirectories.add(path.dirname(fullPath));
       } else {
         success = false;
       }
     } else {
       console.warn(`⚠️  Cargo file not found: ${fullPath}`);
+    }
+  }
+  
+  // 更新所有相关的 Cargo.lock 文件
+  if (cargoDirectories.size > 0) {
+    console.log(`\n🔄 Updating Cargo.lock files...`);
+    for (const cargoDir of cargoDirectories) {
+      if (!updateCargoLock(cargoDir)) {
+        success = false;
+      }
     }
   }
   

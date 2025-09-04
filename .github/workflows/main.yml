@@ -24,6 +24,11 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
       - name: Extract version from tag
         id: extract_version
         run: |
@@ -67,6 +72,7 @@ jobs:
             LICENSE
             lsp-proxy.el
             Cargo.toml
+            Cargo.lock
 
   # Step 2: Build binaries for all platforms
   build:
@@ -396,6 +402,7 @@ jobs:
           
           # Add all package.json files
           git add Cargo.toml
+          git add Cargo.lock
           git add npm/emacs-lsp-proxy/package.json
           git add npm/@emacs-lsp-proxy/darwin-arm64/package.json
           git add npm/@emacs-lsp-proxy/darwin-x64/package.json
