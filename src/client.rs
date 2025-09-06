@@ -198,28 +198,6 @@ impl Client {
         doc_path: Option<&std::path::PathBuf>,
         features: Option<&LanguageServerFeatures>,
     ) -> registry::Result<(Self, UnboundedReceiver<(usize, Call)>, Arc<Notify>)> {
-        // Resolve path to the binary
-        let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
-
-        let process = Command::new(cmd)
-            .envs(server_envirment)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // make sure the process is reaped on drop
-            .kill_on_drop(true)
-            .spawn();
-        let mut process = process?;
-
-        // TODO: do we need bufreader/writer here? or do we use async wrappers on unblock?
-        let writer = BufWriter::new(process.stdin.take().expect("Failed to open stdin"));
-        let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
-        let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
-
-        let (server_rx, server_tx, initialize_notify) =
-            Transport::start(reader, writer, stderr, id, name.clone());
-
         // 找出 git 目录，如果不存在，则使用当前目录
         let (workspace, workspace_is_cwd) = find_workspace_for_file(doc_path.unwrap());
         let workspace = path::normalize(&workspace);
@@ -236,6 +214,29 @@ impl Client {
         // `root_url` can not, use `workspace` as a fallback
         let root_path = root.clone().unwrap_or_else(|| workspace.clone());
         let root_uri = root.and_then(|root| lsp::Url::from_file_path(root).ok());
+
+        // Resolve path to the binary
+        let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
+
+        let process = Command::new(cmd)
+            .envs(server_envirment)
+            .args(args)
+            .current_dir(&root_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            // make sure the process is reaped on drop
+            .kill_on_drop(true)
+            .spawn();
+        let mut process = process?;
+
+        // TODO: do we need bufreader/writer here? or do we use async wrappers on unblock?
+        let writer = BufWriter::new(process.stdin.take().expect("Failed to open stdin"));
+        let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
+        let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
+
+        let (server_rx, server_tx, initialize_notify) =
+            Transport::start(reader, writer, stderr, id, name.clone());
 
         if let Some(features) = features {
             if features.config_files.len() > 0
