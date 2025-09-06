@@ -517,7 +517,7 @@ impl Application {
                         let sender = self.sender.clone();
                         let doc_id = doc.id().clone();
                         let previous_result_id = doc.previous_diagnostic_id.clone();
-                        // let req = req.clone();
+
                         tokio::spawn(async move {
                             for language_server in language_servers {
                                 let params = from_json(
@@ -611,10 +611,18 @@ impl Application {
                     ));
                     return Ok(());
                 }
-                
+
                 match self.get_working_document(&req) {
                     Ok(doc) => {
-                        Self::on_request(req, self.sender.clone(), doc.get_all_language_servers());
+                        let language_servers = doc.get_all_language_servers();
+                        if language_servers.is_empty() {
+                            self.respond(create_error_response(
+                                &req.id,
+                                format!("No available language server for {:?}.", req.method),
+                            ));
+                            return Ok(());
+                        }
+                        Self::on_request(req, self.sender.clone(), language_servers);
                     }
                     Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
                 }
