@@ -64,14 +64,7 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
 - Recommend
 ``` elisp
 (package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
-                :files ("lsp-proxy.el"))
-```
-- Manually
-```elisp
-
-(package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
-                :files ("lsp-proxy.el" "emacs-lsp-proxy")
-                :pre-build (("cargo" "build" "--release") ("cp" "./target/release/emacs-lsp-proxy" "./"))))
+                :files ("*.el"))
 ```
 
 ``` elisp
