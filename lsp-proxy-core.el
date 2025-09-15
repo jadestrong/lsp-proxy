@@ -68,6 +68,9 @@ that support `textDocument/signatureHelp' request.")
   "Is there any server associated with this buffer
 that support `textDocument/diagnostic' request.")
 
+(defvar-local lsp-proxy--text-document-sync-kind "incremental"
+  "Text document synchronization mode: 'full' or 'incremental'.")
+
 
 ;;; Connection management variables
 
@@ -255,7 +258,8 @@ that support `textDocument/diagnostic' request.")
                        :supportDocumentSymbols support-document-symbols
                        :supportSignatureHelp support-signature-help
                        :supportPullDiagnostic support-pull-diagnostic
-                       :supportInlineCompletion support-inline-completion)
+                       :supportInlineCompletion support-inline-completion
+                       :textDocumentSyncKind text-document-sync-kind)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (file-exists-p filepath)
@@ -266,6 +270,7 @@ that support `textDocument/diagnostic' request.")
             (setq-local lsp-proxy--support-document-symbols (not (eq support-document-symbols :json-false)))
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
+            (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
             (if (not (eq support-inline-completion :json-false))
@@ -400,7 +405,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 (defun lsp-proxy--send-did-change ()
   "Send textDocument/didChange to server."
   (when lsp-proxy--recent-changes
-    (let ((full-sync-p (eq :emacs-messup lsp-proxy--recent-changes)))
+    (let ((full-sync-p (or (eq :emacs-messup lsp-proxy--recent-changes)
+                           (string= lsp-proxy--text-document-sync-kind "full"))))
       (lsp-proxy--notify 'textDocument/didChange
                          (list :textDocument
                                (eglot--VersionedTextDocumentIdentifier)

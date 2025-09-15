@@ -102,9 +102,21 @@ impl Document {
             support_signature_help: false,
             support_pull_diagnostic: false,
             support_inline_completion: false,
+            text_document_sync_kind: "incremental".to_string(), // Default to incremental
         };
 
+        let mut has_any_servers = false;
+        let mut all_support_incremental = true;
+
         self.language_servers().for_each(|ls| {
+            has_any_servers = true;
+            
+            // Check text document sync capability
+            let sync_kind = ls.get_text_document_sync_kind();
+            if sync_kind == "full" {
+                all_support_incremental = false;
+            }
+
             if let Some(lsp_types::CompletionOptions {
                 trigger_characters: Some(triggers),
                 ..
@@ -135,6 +147,12 @@ impl Document {
                 server_capabilities.support_inline_completion = true;
             }
         });
+
+        // If any server only supports full sync, use full sync for all
+        // If all servers support incremental (or no servers), use incremental
+        if has_any_servers && !all_support_incremental {
+            server_capabilities.text_document_sync_kind = "full".to_string();
+        }
 
         server_capabilities
     }

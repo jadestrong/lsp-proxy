@@ -949,4 +949,32 @@ impl Client {
 
         Some(self.call::<lsp::request::ExecuteCommand>(self.next_request_id(), params))
     }
+
+    /// Get the text document sync capability of this language server
+    /// Returns "full" for full sync, "incremental" for incremental sync, or "none" if not supported
+    pub fn get_text_document_sync_kind(&self) -> String {
+        let capabilities = match self.capabilities.get() {
+            Some(caps) => caps,
+            None => return "none".to_string(),
+        };
+
+        match &capabilities.text_document_sync {
+            Some(lsp_types::TextDocumentSyncCapability::Kind(kind)) => match *kind {
+                lsp_types::TextDocumentSyncKind::NONE => "none".to_string(),
+                lsp_types::TextDocumentSyncKind::FULL => "full".to_string(),
+                lsp_types::TextDocumentSyncKind::INCREMENTAL => "incremental".to_string(),
+                _ => "none".to_string(),
+            },
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
+                match options.change {
+                    Some(lsp_types::TextDocumentSyncKind::NONE) => "none".to_string(),
+                    Some(lsp_types::TextDocumentSyncKind::FULL) => "full".to_string(),
+                    Some(lsp_types::TextDocumentSyncKind::INCREMENTAL) => "incremental".to_string(),
+                    Some(_) => "none".to_string(),
+                    None => "none".to_string(),
+                }
+            }
+            None => "none".to_string(),
+        }
+    }
 }
