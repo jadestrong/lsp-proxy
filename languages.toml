@@ -285,10 +285,10 @@ file-types = ["scss"]
 language-servers = ["css-ls"]
 
 [[language]]
-
 name = "css"
+language-id = "css"
 file-types = ["css"]
-language-servers = ["vscode-css-language-server"]
+language-servers = ["css-ls"]
 
 [[language]]
 name = "python"
