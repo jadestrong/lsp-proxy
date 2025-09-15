@@ -225,15 +225,6 @@ impl Notification for EmacsLargeFileChunk {
 }
 
 #[derive(Debug)]
-pub enum EmacsLargeFileLoadComplete {}
-
-impl Notification for EmacsLargeFileLoadComplete {
-    type Params = LargeFileLoadCompleteParams;
-
-    const METHOD: &'static str = "emacs/largeFileLoadComplete";
-}
-
-#[derive(Debug)]
 pub enum EmacsLargeFileLoadCancel {}
 
 impl Notification for EmacsLargeFileLoadCancel {

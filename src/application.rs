@@ -1,7 +1,7 @@
 use crate::{
     editor::Editor,
     job::Jobs,
-    large_file_manager::{LargeFileManager, LargeFileStats},
+    large_file_manager::LargeFileManager,
     msg::{Message, Notification, Response},
     req_queue, syntax,
 };
@@ -18,7 +18,6 @@ pub(crate) struct Application {
     pub jobs: Jobs,
     pub shutdown_requested: bool,
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
-    pub large_file_stats: Arc<Mutex<LargeFileStats>>,
 }
 
 impl Application {
@@ -39,7 +38,6 @@ impl Application {
             jobs: Jobs::new(),
             shutdown_requested: false,
             large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),
-            large_file_stats: Arc::new(Mutex::new(LargeFileStats::default())),
         }
     }
 
@@ -89,7 +87,7 @@ impl Application {
 
     pub(crate) fn cleanup_resources(&mut self) {
         log::info!("Cleaning up resources before exit");
-        
+
         // Shutdown all language servers
         for client in self.editor.language_servers.iter_clients() {
             log::debug!("Shutting down language server: {}", client.name());
@@ -98,13 +96,13 @@ impl Application {
                 let _ = client.shutdown_and_exit();
             }
         }
-        
+
         // Clear documents
         self.editor.documents.clear();
-        
+
         // Clear request queue
         self.req_queue = req_queue::ReqQueue::default();
-        
+
         log::info!("Resource cleanup complete");
     }
 }

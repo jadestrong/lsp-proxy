@@ -229,13 +229,6 @@ pub fn handle_large_file_chunk(
     Ok(())
 }
 
-pub fn handle_large_file_load_complete(
-    app: &mut Application,
-    params: lsp_ext::LargeFileLoadCompleteParams,
-) -> anyhow::Result<()> {
-    handle_large_file_load_complete_internal(app, params.uri)
-}
-
 pub fn handle_large_file_load_cancel(
     app: &mut Application,
     params: lsp_ext::LargeFileLoadCancelParams,
