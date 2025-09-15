@@ -90,11 +90,6 @@ that support `textDocument/diagnostic' request.")
 
 ;;; External variables (to be defined by main module)
 (defvar lsp-proxy-max-completion-item)
-(defvar lsp-proxy--diagnostics-map)
-(defvar lsp-proxy--recent-changes)
-(defvar lsp-proxy-diagnostics--flycheck-enabled)
-(defvar lsp-proxy-diagnostics--flymake-enabled)
-(defvar lsp-proxy-on-idle-hook)
 (defvar lsp-proxy-mode)
 
 ;;; External functions from eglot (for backward compatibility)
@@ -107,10 +102,8 @@ that support `textDocument/diagnostic' request.")
 (defvar eglot--versioned-identifier)
 
 ;;; External functions (to be defined by other modules)
-(declare-function lsp-proxy--idle-reschedule "lsp-proxy")
-(declare-function lsp-proxy-diagnostics--flycheck-buffer "lsp-proxy-diagnostics")
-(declare-function lsp-proxy-diagnostics--flymake-after-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-diagnostics--request-pull-diagnostics "lsp-proxy-diagnostics")
+(declare-function lsp-proxy-diagnostics--handle-publish-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-activate-inlay-hints-mode "lsp-proxy-inlay-hints")
 (declare-function lsp-proxy-inline-completion-mode "lsp-proxy")
 (declare-function lsp-proxy--set-work-done-token "lsp-proxy")
@@ -247,25 +240,7 @@ that support `textDocument/diagnostic' request.")
 (defun lsp-proxy--handle-notification (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'textDocument/publishDiagnostics)
-    (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) msg
-      (let ((filepath (lsp-proxy--uri-to-path uri)))
-        (if (file-exists-p filepath)
-            (with-current-buffer (find-file-noselect filepath)
-              (let ((workspace-diagnostics (lsp-proxy--ensure-project-map
-                                            (lsp-proxy-project-root)
-                                            lsp-proxy--diagnostics-map))
-                    (file (lsp-proxy--fix-path-casing filepath)))
-                (if (seq-empty-p diagnostics)
-                    (remhash file workspace-diagnostics)
-                  (puthash file (append diagnostics nil) workspace-diagnostics)))
-              (cond (lsp-proxy-diagnostics--flycheck-enabled
-                     (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
-                     (lsp-proxy--idle-reschedule (current-buffer)))
-                    (lsp-proxy-diagnostics--flymake-enabled
-                     (lsp-proxy-diagnostics--flymake-after-diagnostics))
-                    (t (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active."))))
-          (if (> lsp-proxy-log-level 1)
-              (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
+    (lsp-proxy-diagnostics--handle-publish-diagnostics msg))
   (when  (eql method 'window/logMessage)
     (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
@@ -390,19 +365,19 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                 (lsp-proxy--get-initial-content)
                               (eglot--widening
                                (buffer-substring-no-properties (point-min) (point-max))))))
-    (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
-    (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
-    (lsp-proxy--notify 'textDocument/didOpen
-                       (list :textDocument (append (eglot--TextDocumentIdentifier)
-                                                   (list
-                                                    :text initial-content
-                                                    :languageId ""
-                                                    :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
-                                                    :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
-    ;; send large file content
-    (when (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
-      (require 'lsp-proxy-large-file)
-      (lsp-proxy--async-load-large-file (current-buffer))))))
+      (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
+      (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
+      (lsp-proxy--notify 'textDocument/didOpen
+                         (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                     (list
+                                                      :text initial-content
+                                                      :languageId ""
+                                                      :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
+                                                      :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
+      ;; send large file content
+      (when (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
+        (require 'lsp-proxy-large-file)
+        (lsp-proxy--async-load-large-file (current-buffer))))))
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."

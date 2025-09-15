@@ -77,6 +77,28 @@
 ;;; External variables (defined in other modules)
 (defvar lsp-proxy-mode)
 
+(defun lsp-proxy-diagnostics--handle-publish-diagnostics (msg)
+  "Handle publish diagnostics notification MSG."
+  (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) msg
+    (let ((filepath (lsp-proxy--uri-to-path uri)))
+      (if (file-exists-p filepath)
+          (with-current-buffer (find-file-noselect filepath)
+            (let ((workspace-diagnostics (lsp-proxy--ensure-project-map
+                                          (lsp-proxy-project-root)
+                                          lsp-proxy--diagnostics-map))
+                  (file (lsp-proxy--fix-path-casing filepath)))
+              (if (seq-empty-p diagnostics)
+                  (remhash file workspace-diagnostics)
+                (puthash file (append diagnostics nil) workspace-diagnostics)))
+            (cond (lsp-proxy-diagnostics--flycheck-enabled
+                   (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
+                   (lsp-proxy--idle-reschedule (current-buffer)))
+                  (lsp-proxy-diagnostics--flymake-enabled
+                   (lsp-proxy-diagnostics--flymake-after-diagnostics))
+                  (t (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active."))))
+        (if (> lsp-proxy-log-level 1)
+            (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
+
 ;;; Flycheck integration
 
 (defun lsp-proxy-diagnostics--flycheck-buffer ()
@@ -319,22 +341,22 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
 
 (defun lsp-proxy--diagnostics-setup ()
   "Setup diagnostics."
-    (cond
-     ((or (and (eq lsp-proxy-diagnostics-provider :auto)
-               (functionp 'flycheck-mode))
-          (and (eq lsp-proxy-diagnostics-provider :flycheck)
-               (or (functionp 'flycheck-mode)
-                   (user-error "The lsp-proxy-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
-      (require 'flycheck nil t)
-      (lsp-proxy-diagnostics-flycheck-enable))
-     ((or (eq lsp-proxy-diagnostics-provider :auto)
-          (eq lsp-proxy-diagnostics-provider :flymake)
-          (eq lsp-proxy-diagnostics-provider t))
-      (require 'flymake)
-      (lsp-proxy-diagnostics-flymake-enable))
-     ((not (eq lsp-proxy-diagnostics-provider :none))
-      (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
-     (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered."))))
+  (cond
+   ((or (and (eq lsp-proxy-diagnostics-provider :auto)
+             (functionp 'flycheck-mode))
+        (and (eq lsp-proxy-diagnostics-provider :flycheck)
+             (or (functionp 'flycheck-mode)
+                 (user-error "The lsp-proxy-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
+    (require 'flycheck nil t)
+    (lsp-proxy-diagnostics-flycheck-enable))
+   ((or (eq lsp-proxy-diagnostics-provider :auto)
+        (eq lsp-proxy-diagnostics-provider :flymake)
+        (eq lsp-proxy-diagnostics-provider t))
+    (require 'flymake)
+    (lsp-proxy-diagnostics-flymake-enable))
+   ((not (eq lsp-proxy-diagnostics-provider :none))
+    (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
+   (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered."))))
 
 (defun lsp-proxy--diagnostics-teardown ()
   "Teardown disagnostics."

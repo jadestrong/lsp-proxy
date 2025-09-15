@@ -25,10 +25,12 @@
 
 (defcustom lsp-proxy-lazy-xref-threshold 10000
   "Threshold for using lazy xref evaluation.
-Files with more than this many lines will use optimized evaluation to improve performance.
-Set to nil to always use lazy evaluation, or a very large number to disable it."
-  :type '(choice (const :tag "Always lazy" nil)
-                 (integer :tag "Line count threshold"))
+When the target file is visiting in a buffer, files with more than
+this many lines will use optimized/lazy evaluation to improve
+performance.  For files that are not currently visited, the check
+falls back to a quick byte-size based heuristic (via
+`lsp-proxy--large-file-p') as an approximation."
+  :type 'number
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-xref-optimization-strategy 'optimized
@@ -52,6 +54,7 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
 
 ;;; External functions
 (declare-function lsp-proxy--progressing-p "lsp-proxy")
+(declare-function lsp-proxy--large-file-p "lsp-proxy-large-file")
 
 ;;; Xref backend
 
@@ -136,18 +139,16 @@ Set to nil to always use lazy evaluation, or a very large number to disable it."
 
 (defun lsp-proxy--should-use-lazy-xref-p (filepath)
   "Determine if FILEPATH should use lazy xref evaluation based on file size."
-  (and lsp-proxy-lazy-xref-threshold
-       (file-exists-p filepath)
-       (let ((visiting (find-buffer-visiting filepath)))
-         (cond
-          (visiting
-           ;; If buffer is already open, check line count directly
-           (with-current-buffer visiting
-             (> (line-number-at-pos (point-max)) lsp-proxy-lazy-xref-threshold)))
-          (t
-           ;; For unopened files, estimate based on file size (rough heuristic)
-           ;; Assume average ~50 characters per line
-           (> (/ (nth 7 (file-attributes filepath)) 50) lsp-proxy-lazy-xref-threshold))))))
+  (when (and lsp-proxy-lazy-xref-threshold
+             (file-exists-p filepath))
+    (let ((visiting (find-buffer-visiting filepath)))
+      (if visiting
+          ;; If buffer is already open, check line count directly
+          (with-current-buffer visiting
+            (> (line-number-at-pos (point-max)) lsp-proxy-lazy-xref-threshold))
+        ;; For unopened files, fallback to byte-size based heuristic from
+        ;; `lsp-proxy--large-file-p' as a quick approximation.
+        (lsp-proxy--large-file-p filepath)))))
 
 (defun lsp-proxy--process-location-eager (location-data)
   "Process a single location using eager evaluation (original method)."
@@ -266,9 +267,6 @@ by the server (assuming `file-locations' was in that order)."
                             (end-line (plist-get end :line))
                             (end-column (plist-get end :character)))
                        ;; Advance to required line efficiently.
-                       ;; (while (< current-line start-line)
-                       ;;   (forward-line 1)
-                       ;;   (setq current-line (1+ current-line)))
                        (forward-line (- start-line current-line))
                        (setq current-line start-line)
                        (let* ((bol (line-beginning-position))

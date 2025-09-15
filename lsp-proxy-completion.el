@@ -50,12 +50,12 @@ Without common substring required. PAT TABLE PRED POINT."
 
 ;;; Hooks for completion
 
-(defun lsp-proxy--post-self-insert-hook ()
-  "Set `lsp-proxy--last-inserted-char'."
+(defun lsp-proxy--track-last-input ()
+  "Track the last inserted character."
   (setq lsp-proxy--last-inserted-char last-input-event))
 
-(defun lsp-proxy--pre-command-hook ()
-  "Rest some temporary variables."
+(defun lsp-proxy--reset-input-tracking ()
+  "Reset input tracking variables.."
   (setq lsp-proxy--last-inserted-char nil))
 
 ;;; Completion boundaries

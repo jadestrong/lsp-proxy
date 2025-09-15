@@ -44,8 +44,8 @@
 (require 'lsp-proxy-core)
 (require 'lsp-proxy-diagnostics)
 (require 'lsp-proxy-completion)
-(require 'lsp-proxy-xref)
 (require 'lsp-proxy-large-file)
+(require 'lsp-proxy-xref)
 (require 'lsp-proxy-signature)
 (require 'lsp-proxy-imenu)
 (require 'lsp-proxy-inlay-hints)
@@ -202,6 +202,14 @@
   (when lsp-proxy-mode
     (lsp-proxy--on-doc-open)))
 
+(defun lsp-proxy--post-self-insert-hook ()
+  "Handle after `self-insert-command'."
+  (lsp-proxy--track-last-input))
+
+(defun lsp-proxy--pre-command-hook ()
+  "Handle after `pre-command-hook'."
+  (lsp-proxy--reset-input-tracking))
+
 (defun lsp-proxy--post-command-hook ()
   "Post command hook."
   (lsp-proxy--cleanup-highlights-if-needed)
@@ -261,16 +269,17 @@
                                        (unless (lsp-proxy--init-if-visible)
                                          (add-hook 'window-configuration-change-hook #'lsp-proxy--init-if-visible)))))))))
 (defun lsp-proxy--cleanup ()
-  "Clean up."
+  "Clean up when restart."
+  ;; clear all opened buffer
   (setq lsp-proxy--opened-buffers nil)
-  ;; progress map
+  ;; clear all progress in map
   (clrhash lsp-proxy--project-hashmap)
-  ;; diagnostics
+  ;; clear all diagnostics
   (clrhash lsp-proxy--diagnostics-map)
-  ;; document highlights
+  ;; clear current buffer's highlights
   (when lsp-proxy--highlights
     (mapc #'delete-overlay lsp-proxy--highlights))
-  ;; inlay hints
+  ;; clear current buffer's inlay hints
   (remove-overlays nil nil 'lsp-proxy--inlay-hint t))
 
 (defun lsp-proxy--mode-exit ()
@@ -287,8 +296,13 @@
   (lsp-proxy--completion-teardown)
   (lsp-proxy--diagnostics-teardown)
 
+  (lsp-proxy-cancel-large-file-loading)
 
-  (lsp-proxy--cleanup)
+  ;; document highlights
+  (when lsp-proxy--highlights
+    (mapc #'delete-overlay lsp-proxy--highlights))
+  ;; inlay hints
+  (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
 
   ;; Send the close event for the active buffer
   (lsp-proxy--on-doc-close))

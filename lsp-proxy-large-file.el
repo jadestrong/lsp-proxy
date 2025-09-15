@@ -71,14 +71,6 @@
        (let ((size (nth 7 (file-attributes file-path))))
          (and size (> size lsp-proxy-large-file-threshold)))))
 
-(defun lsp-proxy--get-initial-content ()
-  "Get initial content to send for large files."
-  (let ((file-name (file-name-nondirectory buffer-file-name))
-        (file-size (nth 7 (file-attributes buffer-file-name))))
-    (format ";; Large file: %s\n;; Size: %s\n;; Loading content asynchronously...\n\n"
-            file-name
-            (lsp-proxy--format-file-size file-size))))
-
 ;;; Large file loading cancellation
 
 (defun lsp-proxy-cancel-large-file-loading ()

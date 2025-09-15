@@ -61,50 +61,51 @@ Example: `(`emacs-lisp-mode' `python-mode')'"
 
 ;;; Functions
 
-(defun lsp-proxy--update-inlay-hints (from to)
+;; see eglot--update-hints
+(cl-defun lsp-proxy--update-inlay-hints (from to)
   "Jit-lock function for lsp-proxy inlay hints.
 Update the range of `(FROM TO)'."
-  (when lsp-proxy--support-inlay-hints
-    (cl-symbol-macrolet ((region lsp-proxy--outstanding-inlay-hints-region)
+  ;; XXX: We're relying on knowledge of jit-lock internals here.
+  ;; Comparing `jit-lock-context-unfontify-pos' (if non-nil) to
+  ;; `point-max' tells us whether this call to `jit-lock-functions'
+  ;; happens after `jit-lock-context-timer' has just run.
+  (when (and jit-lock-context-unfontify-pos
+             (/= jit-lock-context-unfontify-pos (point-max)))
+    (cl-return-from lsp-proxy--update-inlay-hints))
+  (cl-symbol-macrolet ((region lsp-proxy--outstanding-inlay-hints-region)
                          (last-region lsp-proxy--outstanding-inlay-hints-last-region)
                          (timer lsp-proxy--outstanding-inlay-regions-timer))
       (setcar region (min (or (car region) (point-max)) from))
       (setcdr region (max (or (cdr region) (point-min)) to))
-      ;; HACK: We're relying on knowledge of jit-lock internals here.  The
-      ;; condition comparing `jit-lock-context-unfontify-pos' to
-      ;; `point-max' is a heuristic for telling whether this call to
-      ;; `jit-lock-functions' happens after `jit-lock-context-timer' has
-      ;; just run.  Only after this delay should we start the smoothing
-      ;; timer that will eventually call `lsp-proxy--update-hints-1' with the
-      ;; coalesced region.  I wish we didn't need the timer, but sometimes
-      ;; a lot of "non-contextual" calls come in all at once and do verify
-      ;; the condition.  Notice it is a 0 second timer though, so we're
-      ;; not introducing any more delay over jit-lock's timers.
-      (when (= jit-lock-context-unfontify-pos (point-max))
-        (if timer (cancel-timer timer))
-        (let ((buf (current-buffer)))
-          (setq timer (run-at-time
-                       0 nil
-                       (lambda ()
-                         (eglot--when-live-buffer buf
-                           ;; HACK: In some pathological situations
-                           ;; (Emacs's own coding.c, for example),
-                           ;; jit-lock is calling `lsp-proxy--update-hints'
-                           ;; repeatedly with same sequence of
-                           ;; arguments, which leads to
-                           ;; `lsp-proxy--update-hints-1' being called with
-                           ;; the same region repeatedly.  This happens
-                           ;; even if the hint-painting code does
-                           ;; nothing else other than widen, narrow,
-                           ;; move point then restore these things.
-                           ;; Possible Emacs bug, but this fixes it.
-                           (unless (equal last-region region)
-                             (lsp-proxy--update-hints-1 (max (car region) (point-min))
-                                                        (min (cdr region) (point-max)))
-                             (setq last-region region))
-                           (setq region (cons nil nil)
-                                 timer nil))))))))))
+      ;; XXX: Then there is a smoothing timer.  I wish we didn't need it,
+      ;; but sometimes a lot of calls come in all at once and do make it
+      ;; past the check above.  Notice it is a 0 second timer though, so
+      ;; we're not introducing any more delay over jit-lock's timers.
+      (when timer (cancel-timer timer))
+      (setq timer (run-at-time
+                   0 nil
+                   (lambda (buf)
+                     (eglot--when-live-buffer buf
+                       ;; HACK: In some pathological situations
+                       ;; (Emacs's own coding.c, for example),
+                       ;; jit-lock is calling `lsp-proxy--update-hints'
+                       ;; repeatedly with same sequence of
+                       ;; arguments, which leads to
+                       ;; `lsp-proxy--update-hints-1' being called with
+                       ;; the same region repeatedly.  This happens
+                       ;; even if the hint-painting code does
+                       ;; nothing else other than widen, narrow,
+                       ;; move point then restore these things.
+                       ;; Possible Emacs bug, but this fixes it.
+                       (unless (equal last-region region)
+                         (lsp-proxy--update-hints-1 (max (car region) (point-min))
+                                                    (min (cdr region) (point-max)))
+                         (setq last-region region))
+                       (setq region (cons nil nil)
+                             timer nil)))
+                   (current-buffer)))))
 
+;; see eglot--update-hints-1
 (defun lsp-proxy--update-hints-1 (from to)
   "Do most work for `lsp-proxy--update-hints', including LSP request."
   (let* ((buf (current-buffer))
@@ -147,8 +148,7 @@ Update the range of `(FROM TO)'."
                            (overlay-put ov 'lsp-proxy--inlay-hint t)
                            (overlay-put ov 'evaporate t)
                            (overlay-put ov 'lsp-proxy--overlay t))))
-                    (if (stringp label)
-                        (do-it label left-pad right-pad 0 1)
+                    (if (stringp label) (do-it label left-pad right-pad 0 1)
                       (cl-loop
                        for i from 0 for ldetail across label
                        do (lsp-proxy--dbind (:value value) ldetail
@@ -156,28 +156,30 @@ Update the range of `(FROM TO)'."
                                    (and (zerop i) left-pad)
                                    (and (= i (1- (length label))) right-pad)
                                    i (length label))))))))))))
-    (save-excursion
-      (save-restriction
-        (widen)
-        (remove-overlays from to 'lsp-proxy--inlay-hint t)
-        (lsp-proxy--async-request
-         'textDocument/inlayHint
-         (lsp-proxy--request-or-notify-params
-          (list :textDocument (eglot--TextDocumentIdentifier)
-                :range (list :start (eglot--pos-to-lsp-position from)
-                            :end (eglot--pos-to-lsp-position to))))
-         :success-fn (lambda (hints)
-                       (eglot--when-live-buffer buf
-                         (save-excursion
-                           (save-restriction
-                             (widen)
-                             (remove-overlays from to 'lsp-proxy--overlay
-                                              (lambda (o v)
-                                                (pcase v
-                                                  ((pred booleanp) v)
-                                                  (_ (memq v '(lsp-proxy--inlay-hint))))))
-                             (mapc paint-hint hints)))))
-         :deferred 'lsp-proxy--update-hints-1)))))
+    (lsp-proxy--async-request
+     'textDocument/inlayHint
+     (lsp-proxy--request-or-notify-params
+      (list :textDocument (eglot--TextDocumentIdentifier)
+            :range (list :start (eglot--pos-to-lsp-position from)
+                         :end (eglot--pos-to-lsp-position to))))
+     :success-fn (lambda (hints)
+                   (eglot--when-live-buffer buf
+                     (eglot--widening
+                      ;; Overlays ending right at FROM with an
+                      ;; `after-string' property logically belong to
+                      ;; the (FROM TO) region.  Likewise, such
+                      ;; overlays ending at TO don't logically belong
+                      ;; to it.
+                      (dolist (o (overlays-in (1- from) to))
+                        (when (and (overlay-get o 'lsp-proxy--inlay-hint)
+                                   (cond ((eq (overlay-end o) from)
+                                          (overlay-get o 'after-string))
+                                         ((eq (overlay-end o) to)
+                                          (overlay-get o 'before-string))
+                                         (t)))
+                          (delete-overlay o)))
+                      (mapc paint-hint hints))))
+     :deferred 'lsp-proxy--update-hints-1)))
 
 (defun lsp-proxy-activate-inlay-hints-mode ()
   "Activate `lsp-proxy-inlay-hints-mode` for the current buffer
@@ -194,7 +196,9 @@ if `lsp-proxy-inlay-hints-mode-config` allows it."
   :lighter nil
   (cond
    (lsp-proxy-inlay-hints-mode
-    (jit-lock-register #'lsp-proxy--update-inlay-hints 'contextual))
+    (if lsp-proxy--support-inlay-hints
+        (jit-lock-register #'lsp-proxy--update-inlay-hints 'contextual)
+      (lsp-proxy-inlay-hints-mode -1)))
    (t
     (jit-lock-unregister #'lsp-proxy--update-inlay-hints)
     (remove-overlays nil nil 'lsp-proxy--inlay-hint t))))
