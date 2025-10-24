@@ -19,10 +19,9 @@ impl Connection {
         let writer = thread::spawn(move || {
             let stdout = stdout();
             let mut stdout = stdout.lock();
-            // 将接收到的数据都直接传递给 stdout
             writer_receiver
                 .into_iter()
-                .try_for_each(|it| it.write(&mut stdout))?;
+                .try_for_each(|message| message.write(&mut stdout))?;
             Ok(())
         });
         let (reader_sender, reader_receiver) = bounded::<Message>(0);

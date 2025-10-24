@@ -235,16 +235,6 @@ LSP server result."
   (let ((rest (apply 'append args)))
     (append (append (eglot--TextDocumentIdentifier) `(:params ,params)) rest)))
 
-;;; JSON parsing advice
-
-(defun lsp-proxy--advice-json-parse (old-fn &rest args)
-  "Try to parse bytecode instead of json."
-  (or
-   (when (equal (following-char) ?#)
-     (let ((bytecode (read (current-buffer))))
-       (when (byte-code-function-p bytecode)
-         (funcall bytecode))))
-   (apply old-fn args)))
 
 ;;; Hash table project management utilities
 

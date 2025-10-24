@@ -730,6 +730,15 @@ Use this for custom bindings in `lsp-proxy-mode'.")
 
 ;;; JSON parsing setup for handling bytecode from server
 
+(defun lsp-proxy--advice-json-parse (old-fn &rest args)
+  "Try to parse bytecode instead of json."
+  (or
+   (when (and lsp-proxy-enable-bytecode (equal (following-char) ?#))
+     (let ((bytecode (read (current-buffer))))
+       (when (byte-code-function-p bytecode)
+         (funcall bytecode))))
+   (apply old-fn args)))
+
 (advice-add (if (progn (require 'json)
                        (fboundp 'json-parse-buffer))
                 'json-parse-buffer

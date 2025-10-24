@@ -28,7 +28,9 @@ mod utils;
 
 use anyhow::{Context, Result};
 use args::Args;
-use config::{initialize_config_file, initialize_log_file, set_max_completion_items};
+use config::{
+    initialize_config_file, initialize_log_file, set_enable_bytecode, set_max_completion_items,
+};
 use log::{error, info};
 use logging::init_tracing;
 
@@ -72,6 +74,7 @@ fn try_main() -> Result<()> {
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
     set_max_completion_items(args.max_item_num);
+    set_enable_bytecode(args.enable_bytecode);
 
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {}", e);
@@ -85,7 +88,7 @@ fn try_main() -> Result<()> {
     }
 
     info!("Server starting...");
-    with_extra_thread("LspProxy", run_server)?;
+    with_extra_thread("LspProxy", move || run_server())?;
 
     Ok(())
 }

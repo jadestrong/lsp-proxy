@@ -223,9 +223,11 @@ impl Message {
     }
 
     pub fn write(self, w: &mut impl Write) -> io::Result<()> {
-        self._write(w)
+        let enable_bytecode = crate::config::ENABLE_BYTECODE.get().unwrap_or(&false);
+        self._write_with_bytecode(w, *enable_bytecode)
     }
-    pub fn _write(self, w: &mut impl Write) -> io::Result<()> {
+
+    pub fn _write_with_bytecode(self, w: &mut impl Write, enable_bytecode: bool) -> io::Result<()> {
         #[derive(Serialize)]
         struct JsonRpc {
             jsonrpc: &'static str,
@@ -237,24 +239,33 @@ impl Message {
             jsonrpc: "2.0",
             msg: out_msg.clone(),
         })?;
+        debug!("> {json_val}");
 
-        match bytecode::generate_bytecode_repl(
-            &json_val,
-            bytecode::BytecodeOptions {
-                object_type: bytecode::ObjectType::Plist,
-                null_value: bytecode::LispObject::Nil,
-                false_value: bytecode::LispObject::Keyword("json-false".into()),
-            },
-        ) {
-            Ok(bytecode_str) => write_msg_text(w, &bytecode_str),
-            Err(err) => {
-                warn!("Failed to convert json to bytecode: {}", err);
-                let text = serde_json::to_string(&JsonRpc {
-                    jsonrpc: "2.0",
-                    msg: out_msg,
-                })?;
-                write_msg_text(w, &text)
+        if enable_bytecode {
+            match bytecode::generate_bytecode_repl(
+                &json_val,
+                bytecode::BytecodeOptions {
+                    object_type: bytecode::ObjectType::Plist,
+                    null_value: bytecode::LispObject::Nil,
+                    false_value: bytecode::LispObject::Keyword("json-false".into()),
+                },
+            ) {
+                Ok(bytecode_str) => write_msg_text(w, &bytecode_str),
+                Err(err) => {
+                    warn!("Failed to convert json to bytecode: {err}");
+                    let text = serde_json::to_string(&JsonRpc {
+                        jsonrpc: "2.0",
+                        msg: out_msg,
+                    })?;
+                    write_msg_text(w, &text)
+                }
             }
+        } else {
+            let text = serde_json::to_string(&JsonRpc {
+                jsonrpc: "2.0",
+                msg: out_msg,
+            })?;
+            write_msg_text(w, &text)
         }
     }
 }
@@ -362,12 +373,12 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
     buf.resize(size, 0);
     inp.read_exact(&mut buf)?;
     let buf = String::from_utf8(buf).map_err(invalid_data)?;
-    debug!("< {}", buf);
+    debug!("< {buf}");
     Ok(Some(buf))
 }
 
 fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
-    write!(out, "Content-Length: {}\r\n\r\n", msg.len())?;
+    write!(out, "Content-Length: {}\r\n\r\n", msg.as_bytes().len())?;
     out.write_all(msg.as_bytes())?;
     out.flush()?;
     Ok(())

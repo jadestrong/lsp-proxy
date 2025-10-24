@@ -48,6 +48,14 @@ Enabling event logging may slightly affect performance."
   :group 'lsp-proxy
   :type 'number)
 
+(defcustom lsp-proxy-enable-bytecode t
+  "Enable bytecode optimization for JSON-RPC communication.
+When enabled, lsp-proxy will use Emacs Lisp bytecode format for better
+performance. Disable this if you experience encoding issues with non-ASCII
+characters, especially in newer Emacs versions (31+)."
+  :type 'boolean
+  :group 'lsp-proxy)
+
 (defvar-local lsp-proxy--support-inlay-hints nil
   "Is there any server associated with this buffer
  that support `textDocument/inlayHint' request.")
@@ -214,8 +222,8 @@ that support `textDocument/diagnostic' request.")
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
-                                         :command (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item))
-                                         :coding 'utf-8-emacs-unix
+                                         :command (append (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item))
+                                                          (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
                                          :noquery t))))

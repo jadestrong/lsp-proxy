@@ -975,8 +975,7 @@ pub(crate) async fn pull_diagnostics_for_document(
 
     match future.await {
         Ok(result) => {
-            let result = serde_json::from_value(result).ok();
-            result
+            serde_json::from_value(result).ok()
         }
         Err(err) => {
             log::error!("Pull diagnostic request failed: {err}");
@@ -1015,7 +1014,7 @@ pub(crate) async fn handle_pull_diagnostic_response(
                     if let Some(diags) = diagnostics {
                         let old_diags = doc.get_diagnostics_by_provider(&provider);
                         if old_diags.is_none()
-                            || !is_diagnostic_vectors_equal(&old_diags.as_ref().unwrap(), &diags)
+                            || !is_diagnostic_vectors_equal(old_diags.as_ref().unwrap(), &diags)
                         {
                             let diagnostics: Vec<DiagnosticItem> = diags
                                 .iter()
@@ -1070,7 +1069,7 @@ pub(crate) async fn handle_pull_diagnostic_response(
                 if let Some(diags) = diags {
                     let old_diags = doc.get_diagnostics_by_provider(&provider);
                     if old_diags.is_none()
-                        || !is_diagnostic_vectors_equal(&old_diags.as_ref().unwrap(), &diags)
+                        || !is_diagnostic_vectors_equal(old_diags.as_ref().unwrap(), &diags)
                     {
                         let diagnostics: Vec<DiagnosticItem> = diags
                             .iter()
@@ -1119,24 +1118,22 @@ pub(crate) async fn handle_inline_completion(
                     return;
                 }
                 let doc_version = context.doc_version;
-                let future = match language_server.name() {
-                    _ => {
-                        let request = language_server
-                            .inline_completion(req.id.clone(), params.clone())
-                            .unwrap();
-                        async move {
-                            let json = request.await?;
-                            let resp: Option<lsp_types::InlineCompletionResponse> =
-                                serde_json::from_value(json)?;
-                            let items = match resp {
-                                Some(lsp_types::InlineCompletionResponse::Array(items)) => items,
-                                Some(lsp_types::InlineCompletionResponse::List(list)) => list.items,
-                                None => Vec::new(),
-                            };
-                            anyhow::Ok(items)
-                        }
-                        .boxed()
+                let future = {
+                    let request = language_server
+                        .inline_completion(req.id.clone(), params.clone())
+                        .unwrap();
+                    async move {
+                        let json = request.await?;
+                        let resp: Option<lsp_types::InlineCompletionResponse> =
+                            serde_json::from_value(json)?;
+                        let items = match resp {
+                            Some(lsp_types::InlineCompletionResponse::Array(items)) => items,
+                            Some(lsp_types::InlineCompletionResponse::List(list)) => list.items,
+                            None => Vec::new(),
+                        };
+                        anyhow::Ok(items)
                     }
+                    .boxed()
                 };
                 let res = match future.await {
                     Ok(lsp_items) => Response::new_ok(
@@ -1151,15 +1148,13 @@ pub(crate) async fn handle_inline_completion(
                 response_sender.send(res.into()).unwrap();
             }
             Err(e) => {
-                let resp = create_error_response(
-                    &req.id,
-                    format!("parse inline completion error {}", e.to_string()),
-                );
+                let resp =
+                    create_error_response(&req.id, format!("parse inline completion error {e}"));
                 response_sender.send(resp.into()).unwrap();
             }
         }
     } else {
-        let resp = create_error_response(&req.id, format!("Not a inline completion context"));
+        let resp = create_error_response(&req.id, "Not a inline completion context".to_string());
         response_sender.send(resp.into()).unwrap();
     }
 }
@@ -1182,11 +1177,9 @@ pub(crate) async fn handle_ra_expand_macro(
                 Ok(resp) => {
                     match serde_json::from_value::<Option<lsp_ext::ExpandMacroResult>>(resp) {
                         Ok(Some(result)) => Ok(Response::new_ok(req.id, result)),
-                        Ok(None) => {
-                            Err(anyhow::Error::msg(
-                                "Macro expansion not available at this location",
-                            ))
-                        }
+                        Ok(None) => Err(anyhow::Error::msg(
+                            "Macro expansion not available at this location",
+                        )),
                         Err(err) => Err(err.into()),
                     }
                 }

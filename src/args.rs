@@ -10,6 +10,7 @@ pub struct Args {
     pub show_help: bool,
     pub show_version: bool,
     pub max_item_num: usize,
+    pub enable_bytecode: bool,
 }
 
 impl Args {
@@ -47,6 +48,7 @@ impl Args {
                     None => anyhow::bail!("--log must specify path to write"),
                 },
                 "--stdio" => args.stdio = true,
+                "--bytecode" => args.enable_bytecode = true,
                 "-h" | "--help" => {
                     args.show_help = true;
                     return Ok(args);
@@ -73,6 +75,7 @@ impl Args {
         println!("        --log <FILE>          Set log file path");
         println!("        --log-level <LEVEL>   Set log level (0-3, default: 1)");
         println!("        --stdio               Enable stdio communication mode (required)");
+        println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");
     }

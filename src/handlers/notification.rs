@@ -45,9 +45,9 @@ pub(crate) fn handle_did_open_text_document(
                     lsp_types::ShowMessageParams {
                         typ: MessageType::INFO,
                         message: if configed_servers.is_empty() {
-                            format!("No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.")
+                            "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
                         } else {
-                            format!("Connected to {:?}.", configed_servers)
+                            format!("Connected to {configed_servers}.")
                         }
                     },
                 )
@@ -163,7 +163,7 @@ pub fn handle_did_focus_text_document(
 
 pub fn handle_exit(app: &mut Application, _params: ()) -> Result<()> {
     log::info!("Received exit notification, preparing to shutdown");
-    
+
     // Check if shutdown was called first (following LSP spec)
     let exit_code = if app.shutdown_requested {
         log::info!("Shutdown was called before exit, exiting with code 0");
@@ -172,10 +172,10 @@ pub fn handle_exit(app: &mut Application, _params: ()) -> Result<()> {
         log::warn!("Exit called without shutdown, exiting with code 1");
         1
     };
-    
+
     // Cleanup all resources
     app.cleanup_resources();
-    
+
     // Exit the process
     std::process::exit(exit_code);
 }
