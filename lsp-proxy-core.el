@@ -76,6 +76,10 @@ that support `textDocument/signatureHelp' request.")
   "Is there any server associated with this buffer
 that support `textDocument/diagnostic' request.")
 
+(defvar-local lsp-proxy--support-hover nil
+  "Is there any server associated with this buffer
+that support `textDocument/hover' request.")
+
 (defvar-local lsp-proxy--text-document-sync-kind "incremental"
   "Text document synchronization mode: 'full' or 'incremental'.")
 
@@ -267,6 +271,7 @@ that support `textDocument/diagnostic' request.")
                        :supportSignatureHelp support-signature-help
                        :supportPullDiagnostic support-pull-diagnostic
                        :supportInlineCompletion support-inline-completion
+                       :supportHover support-hover
                        :textDocumentSyncKind text-document-sync-kind)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
@@ -278,6 +283,7 @@ that support `textDocument/diagnostic' request.")
             (setq-local lsp-proxy--support-document-symbols (not (eq support-document-symbols :json-false)))
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
+            (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)

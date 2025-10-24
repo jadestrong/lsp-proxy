@@ -102,6 +102,7 @@ impl Document {
             support_signature_help: false,
             support_pull_diagnostic: false,
             support_inline_completion: false,
+            support_hover: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
         };
 
@@ -110,7 +111,7 @@ impl Document {
 
         self.language_servers().for_each(|ls| {
             has_any_servers = true;
-            
+
             // Check text document sync capability
             let sync_kind = ls.get_text_document_sync_kind();
             if sync_kind == "full" {
@@ -145,6 +146,10 @@ impl Document {
 
             if ls.supports_feature(LanguageServerFeature::InlineCompletion) {
                 server_capabilities.support_inline_completion = true;
+            }
+
+            if ls.supports_feature(LanguageServerFeature::Hover) {
+                server_capabilities.support_hover = true;
             }
         });
 

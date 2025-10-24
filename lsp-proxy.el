@@ -85,6 +85,11 @@
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-enable-hover-eldoc nil
+  "Enable automatic hover at point."
+  :type 'boolean
+  :group 'lsp-proxy)
+
 (defcustom lsp-proxy-progress-prefix "⌛ "
   "Prefix for progress messages."
   :type 'string
@@ -245,8 +250,9 @@
     (lsp-proxy--setup-large-file-handling (current-buffer))
 
     (setq eldoc-documentation-strategy #'eldoc-documentation-compose-eagerly)
-    (add-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function nil t)
+    (add-hook 'eldoc-documentation-functions #'lsp-proxy-highlight-eldoc-function nil t)
     (add-hook 'eldoc-documentation-functions #'lsp-proxy-signature-eldoc-function nil t)
+    (add-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function nil t)
     (eldoc-mode 1)
 
     ;; Hook onto window change functions
@@ -289,8 +295,9 @@
     (remove-hook (car hook) (cdr hook) t))
   (remove-hook 'window-selection-change-functions #'lsp-proxy--on-doc-focus 'local)
   (remove-hook 'window-buffer-change-functions #'lsp-proxy--on-doc-focus 'local)
-  (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
+  (remove-hook 'eldoc-documentation-functions #'lsp-proxy-highlight-eldoc-function 'local)
   (remove-hook 'eldoc-documentation-functions #'lsp-proxy-signature-eldoc-function 'local)
+  (remove-hook 'eldoc-documentation-functions #'lsp-proxy-hover-eldoc-function 'local)
 
   (lsp-proxy--imenu-teardown)
   (lsp-proxy--completion-teardown)
@@ -634,10 +641,26 @@ Request codeAction/resolve for more info if server supports."
                        (run-mode-hooks))
                    (lsp-proxy--info "%s" "No content at point.")))))
 
+(defun lsp-proxy-hover-eldoc-function (cb &rest _ignored)
+  "A member of `eldoc-documentation-functions', for hover."
+  (when (and lsp-proxy--support-hover
+             lsp-proxy-enable-hover-eldoc)
+    (let ((buf (current-buffer)))
+      (lsp-proxy--async-request
+       'textDocument/hover
+       (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+       :success-fn (lambda (hover-help)
+                     (eglot--when-buffer-window buf
+                       (let ((info (unless (string-empty-p hover-help)
+                                     (eglot--format-markup hover-help))))
+                         (funcall cb info
+                                  :echo (and info (string-match "\n" info))))))))
+    t))
+
 ;;; Symbol highlighting
 
 (defvar-local lsp-proxy--symbol-bounds-of-last-highlight-invocation nil
-  "The bounds of the symbol from which `lsp-proxy-hover-eldoc-function'
+  "The bounds of the symbol from which `lsp-proxy-highlight-eldoc-function'
 most recently requested highlights.")
 
 (defun lsp-proxy--point-on-highlight? ()
@@ -653,7 +676,7 @@ most recently requested highlights.")
     (mapc #'delete-overlay lsp-proxy--highlights)
     (setq lsp-proxy--highlights nil)))
 
-(defun lsp-proxy-hover-eldoc-function (_cb)
+(defun lsp-proxy-highlight-eldoc-function (_cb)
   "A member of `eldoc-documentation-function', for hover."
   (when (and lsp-proxy--support-document-highlight
              lsp-proxy-enable-symbol-highlighting

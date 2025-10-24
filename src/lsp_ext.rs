@@ -30,6 +30,7 @@ pub struct CustomServerCapabilitiesParams {
     pub support_pull_diagnostic: bool,
     pub support_inline_completion: bool,
     pub text_document_sync_kind: String, // "full" or "incremental"
+    pub support_hover: bool,
 }
 
 impl Notification for CustomServerCapabilities {
