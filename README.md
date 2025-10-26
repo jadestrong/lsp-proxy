@@ -79,63 +79,104 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
 
 ```
 
-## How to add a new language
+## Language Configuration
 
-### Supported Language Servers
+LSP-Proxy uses a TOML-based configuration system compatible with [Helix editor](https://docs.helix-editor.com/languages.html). The configuration consists of two main sections: language servers and language definitions.
 
-**Built-in Support:**
-- **JavaScript/TypeScript**: [vtsls](https://github.com/yioneko/vtsls), [typescript-language-server](https://github.com/typescript-language-server/typescript-language-server)
-- **Web Technologies**: [vscode-langservers-extracted](https://github.com/hrsh7th/vscode-langservers-extracted) (eslint, html, css)
-- **CSS Framework**: [@tailwindcss/language-server](https://www.npmjs.com/package/@tailwindcss/language-server)
-- **Rust**: rust-analyzer
-- **Python**: basedpyright, pylsp
-- **Go**: gopls
-- And many more in the built-in configuration
+### Configuration File
 
-### Quick Setup Guide
+Open your user configuration:
+```elisp
+M-x lsp-proxy-open-config-file
+```
 
-1. **Open configuration file**
-   ```elisp
-   M-x lsp-proxy-open-config-file
-   ```
+This opens `${user-emacs-directory}/lsp-proxy/languages.toml`, which merges with built-in defaults (3 levels deep).
 
-2. **Add language server definition**
-   ```toml
-   [language-server.your-server]
-   command = "your-language-server"     # Required: executable command
-   args = ["--stdio"]                   # Optional: command arguments
-   environment = { VAR = "value" }      # Optional: environment variables  
-   timeout = 20                         # Optional: request timeout (default: 20s)
-   config = { key = "value" }           # Optional: initializationOptions 
-   experimental = { key = "value" }     # Optional: experimental client capabilities., e.g. rust-analyzer
-   ```
+### Language Server Configuration
 
-3. **Define language mapping**
-   ```toml
-   [[language]]
-   name = "your-language"               # Required: unique language name
-   language-id = "your-language"        # Required: LSP language identifier
-   file-types = ["ext1", "ext2"]        # Required: file extensions
-   roots = ["project-file.json"]        # Optional: project root detection files
-   language-servers = ["your-server"]   # Required: associated servers
-   ```
-   
-   The `language-servers` field can be a simple string array containing the server names you configured above. It can also be configured with detailed options. See the **Advanced Configuration** section for more information.
-   
-   **Note:** The language's name can be customized, but the `language-id` should correspond to the `file-types`. For example:
-   - `["js", "mjs", "cjs"]` files correspond to `javascript` language ID
-   - `[jsx]` files correspond to `javascriptreact` language ID  
-   - `[tsx]` files correspond to `typescriptreact` language ID
+Define language servers in the `[language-server.<name>]` section:
 
-4. **Restart LSP-Proxy**
-   ```elisp
-   M-x lsp-proxy-restart
-   ```
+```toml
+[language-server.mylang-lsp]
+command = "mylang-lsp"
+args = ["--stdio"]
+timeout = 20
+environment = { "RUST_BACKTRACE" = "1" }
+```
 
-### Advanced Configuration
+**Available options:**
 
-#### Multi-Server Setup
-Configure multiple language servers for a single language:
+| Key | Description |
+|-----|-------------|
+| `command` | Language server binary name or path (required) |
+| `args` | Arguments passed to the language server |
+| `timeout` | Request timeout in seconds (default: 20) |
+| `environment` | Environment variables as key-value pairs |
+| `config` | LSP `initializationOptions` and `workspace/configuration` |
+| `experimental` | Experimental client capabilities (e.g., rust-analyzer) |
+
+**Configuration syntax:**
+
+Use dot notation or TOML tables for nested config:
+
+```toml
+# Dot notation
+[language-server.mylang-lsp]
+config.provideFormatter = true
+config.lint.enable = true
+
+# Table notation (equivalent)
+[language-server.mylang-lsp.config]
+provideFormatter = true
+
+[language-server.mylang-lsp.config.lint]
+enable = true
+```
+
+### Language Configuration
+
+Define languages in `[[language]]` array sections:
+
+```toml
+[[language]]
+name = "rust"
+language-id = "rust"
+file-types = ["rs"]
+roots = ["Cargo.toml", "Cargo.lock"]
+language-servers = ["rust-analyzer"]
+```
+
+**Available options:**
+
+| Key | Description |
+|-----|-------------|
+| `name` | Unique language identifier (required) |
+| `language-id` | LSP language identifier (required) |
+| `file-types` | File extensions or glob patterns (required) |
+| `roots` | Project root markers for workspace detection |
+| `language-servers` | Associated language servers (required) |
+
+**File type patterns:**
+
+```toml
+file-types = [
+  "js",                    # Extension
+  { glob = ".prettierrc" } # Glob pattern
+]
+```
+
+**Language ID mapping:**
+
+The `language-id` must match LSP specifications:
+- `["js", "mjs", "cjs"]` → `javascript`
+- `["jsx"]` → `javascriptreact`
+- `["ts"]` → `typescript`
+- `["tsx"]` → `typescriptreact`
+
+### Multiple Language Servers
+
+Configure multiple servers per language:
+
 ```toml
 [[language]]
 name = "typescript"
@@ -145,90 +186,112 @@ language-servers = [
 ]
 ```
 
-You can configure multiple language servers together for a single file type. For example, you can use `vtsls`, `eslint`, and `tailwindcss` for TypeScript/JSX files, or `eslint`, `vue-language-server`, and `tailwindcss` for Vue files. 
+**Server-specific options:**
 
-When multiple language servers support the same feature, you can control which server provides specific functionality by using `except-features` or `only-features`. For example, you can disable the `format` feature from the `vtsls` language server while keeping it enabled for other servers.
+| Key | Description |
+|-----|-------------|
+| `name` | Language server name (required) |
+| `except-features` | Disable specific features (blacklist) |
+| `only-features` | Enable only specific features (whitelist) |
+| `support-workspace` | Share server instance across workspaces |
+| `library-directories` | External library paths for navigation |
+| `config-files` | Activate only if config file exists |
 
-#### Feature Control Options
-- **`except-features`**: Disable specific server capabilities. See the **Supported LSP Features** section for available features.
-- **`only-features`**: Enable only specified features (whitelist). See the **Supported LSP Features**  section for available features.
-- **`support-workspace`**: Enable multi-workspace support, allowing language servers like `eslint` to share a single server instance across multiple projects.
-- **`library-directories`**: Additional library search paths for external dependencies. Some language servers manage libraries outside the project directory (e.g., rust-analyzer uses `~/.cargo/registry/src` and `~/.rustup/toolchains`, Dart uses `~/.pub-cache`). Since these libraries are shared across multiple projects, LSP-Proxy needs to send proper notifications (like `didOpen`) to the associated language server when navigating to files in these directories.
-- **`config-files`**: Optional configuration files for server activation. When configured, the language server will only activate if at least one of the specified configuration files exists in the workspace root (e.g., `eslint.config.ts` for ESLint server, `vue.config.ts` for vue-language-server).
+**Supported features:**
 
-#### Server Configuration Examples
+Navigation: `goto-declaration`, `goto-definition`, `goto-type-definition`, `goto-reference`, `goto-implementation`
 
-There are two syntaxes for setting a language server's configuration. Your configured values will be passed to the language server in the `initialize` request's `initializationOptions` and will also be used for `workspace/configuration` requests.
+Code Intelligence: `completion`, `inline-completion`, `completion-resolve`, `signature-help`, `hover`, `document-highlight`, `inlay-hints`
 
-**Python with advanced configuration:**
+Code Quality: `diagnostics`, `pull-diagnostics`, `code-action`, `rename-symbol`, `format`
+
+Workspace: `document-symbols`, `workspace-symbols`, `workspace-command`
+
+**Library directories:**
+
+For external dependencies outside project roots:
+
 ```toml
-[language-server.basedpyright]
-command = "basedpyright-langserver"
-args = ["--stdio"]
-config.basedpyright.analysis.typeCheckingMode = "basic"
-
 [[language]]
-name = "python"
+name = "rust"
 language-servers = [
-  { name = "basedpyright", library-directories = ["~/.local/lib/python3.*/site-packages"] }
+  { name = "rust-analyzer", library-directories = [
+    "~/.cargo/registry/src",
+    "~/.rustup/toolchains"
+  ]}
 ]
 ```
 
-The following syntax is different from the above example, but achieves the same effect as long as it follows valid TOML syntax:
-``` toml
-[language-server.basedpyright.config.basedpyright]
-analysis.typeCheckingMode = "basic"
+**Conditional activation:**
+
+Only activate if config file exists:
+
+```toml
+[[language]]
+name = "javascript"
+language-servers = [
+  { name = "eslint", config-files = [
+    ".eslintrc.json",
+    "eslint.config.js"
+  ]}
+]
 ```
 
-### Supported LSP Features
+### Complete Example
 
-LSP-Proxy supports all major Language Server Protocol features:
+```toml
+[language-server.gopls]
+command = "gopls"
 
-**Navigation & References:**
-- `goto-declaration` - Jump to symbol declarations
-- `goto-definition` - Jump to symbol definitions  
-- `goto-type-definition` - Jump to type definitions
-- `goto-reference` - Find all references
-- `goto-implementation` - Find implementations
+[language-server.gopls.config]
+gofumpt = true
 
-**Code Intelligence:**
-- `completion` - Auto-completion with snippets
-- `inline-completion` - Inline completion suggestions
-- `completion-resolve` - Detailed completion information
-- `signature-help` - Function signature assistance
-- `hover` - Symbol documentation on hover
-- `document-highlight` - Symbol highlighting
-- `inlay-hints` - Inline type and parameter hints
+[language-server.gopls.config.hints]
+assignVariableTypes = true
+parameterNames = true
 
-**Code Quality:**
-- `diagnostics` - Error and warning reporting
-- `pull-diagnostics` - On-demand diagnostic retrieval
-- `code-action` - Quick fixes and refactoring
-- `rename-symbol` - Symbol renaming across workspace
-- `format` - Code formatting
+[[language]]
+name = "go"
+language-id = "go"
+file-types = ["go"]
+roots = ["go.mod", "go.work"]
+language-servers = ["gopls"]
+```
 
-**Workspace Features:**
-- `document-symbols` - File outline and structure
-- `workspace-symbols` - Project-wide symbol search
-- `workspace-command` - Execute workspace-specific commands
+### Built-in Language Servers
 
-### Configuration Sources
+LSP-Proxy includes default configurations for:
 
-LSP-Proxy uses a layered configuration system:
+- **JavaScript/TypeScript**: vtsls, typescript-language-server, eslint
+- **Web**: vscode-html-language-server, vscode-css-language-server, tailwindcss-language-server
+- **Rust**: rust-analyzer
+- **Python**: basedpyright
+- **Go**: gopls
+- **C/C++**: clangd
+- **Ruby**: solargraph
+- **Lua**: lua-language-server
+- **Java**: jdtls
+- **Dart**: dart
+- **Bash**: bash-language-server
+- **JSON**: vscode-json-language-server
+- **TOML**: taplo
 
-1. **Built-in configuration**: Default language servers and settings
-2. **User configuration**: Custom overrides in `${user-emacs-directory}/lsp-proxy/languages.toml`, opened by `M-x lsp-proxy-open-config-file`
-3. **Deep merging**: User config merges with built-in defaults (3 levels deep)
-
-The configuration format is compatible with [Helix editor](https://github.com/helix-editor/helix/blob/master/languages.toml) language definitions, focusing on LSP-related fields only.
+See the built-in `languages.toml` for complete configurations.
 
 ### Troubleshooting
 
-- **Server not starting**: Check `command` path and `args` correctness
-- **No completions**: Verify `language-id` matches server expectations
-- **Project not detected**: Ensure `roots` files exist in your project
-- **Features missing**: Check server capabilities and `except-features` configuration
-- **Debug**: Use `M-x lsp-proxy-open-log-file` and set `(setq lsp-proxy-log-level 3)`
+| Issue | Solution |
+|-------|----------|
+| Server not starting | Verify `command` is in PATH or use absolute path |
+| No completions | Check `language-id` matches server expectations |
+| Project not detected | Add appropriate files to `roots` array |
+| Features not working | Check server capabilities and `except-features` |
+| Debug issues | Set `(setq lsp-proxy-log-level 3)` and run `M-x lsp-proxy-open-log-file` |
+
+After configuration changes, restart:
+```elisp
+M-x lsp-proxy-restart
+```
 
 ## Example
 
@@ -308,17 +371,80 @@ language-servers = [
  - `lsp-proxy-describe-thing-at-point`
  - `lsp-proxy-show-project-diagnostics`
 
- -----
- - lsp-proxy-open-log-file
- - lsp-proxy-open-config-file
- - lsp-proxy-restart: Restart the server
- - lsp-proxy-workspace-restart: Restart the LSP server for the current project
+-----
+- lsp-proxy-open-log-file
+- lsp-proxy-open-config-file
+- lsp-proxy-restart: Restart the server
+- lsp-proxy-workspace-restart: Restart the LSP server for the current project
 
 ## Customization
-| Variable                        | Default                                         | Description                                                                                |
-| lsp-proxy-user-languages-config | `user-emacs-directory/lsp-proxy/languages.toml` | Where custom language server configurations are stored                                     |
-| lsp-proxy-log-file-directory    | temporary-file-directory                        | Log file storage directory                                                                 |
-| lsp-proxy-log-level             | 1                                               | A number indicating the log level. Defaults to 1. Warn = 0, Info = 1, Debug = 2, Trace = 3 |
+
+Below is a complete list of user-facing customization variables (`defcustom`) provided by the Emacs side of lsp-proxy. You can inspect or change them via `M-x customize-group RET lsp-proxy RET`, or set them in your init file with `setq` / `setq-default`.
+
+### Core & Logging
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-log-file-directory` | `temporary-file-directory` | Directory where the external server writes its log file. Set to a persistent path if you want logs across restarts. |
+| `lsp-proxy-user-languages-config` | `${user-emacs-directory}/lsp-proxy/languages.toml` | User TOML config overriding/augmenting built-in language server definitions. Edited via `M-x lsp-proxy-open-config-file`. |
+| `lsp-proxy-log-max` | `0` | Max size (lines/events) of internal events buffer; `0` disables; `nil` infinite. Enable only while debugging. |
+| `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
+| `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
+
+### Change / Idle Handling
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy--send-changes-idle-time` | `0` | Seconds Emacs must be idle before sending buffered `didChange` events. Raise to reduce traffic in huge files. |
+| `lsp-proxy-idle-delay` | `0.500` | Debounce interval for batching after-change hooks before running idle tasks. |
+| `lsp-proxy-on-idle-hook` | `nil` | Hook list run after idle delay (e.g., refresh diagnostics/Xref). Add buffer‑local functions as needed. |
+| `lsp-proxy-enable-bytecode` | `t` | Use bytecode encoding (emacs-lsp-booster style) to reduce JSON parsing overhead. Disable if you see non-ASCII encoding issues. |
+
+### Completion (Popup & Inline)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-max-completion-item` | `20` | Maximum completion items requested/returned per query. Lower for speed, higher for breadth. |
+| `lsp-proxy-inline-completion-enable-predicates` | `(evil-insert-state-p)` | All zero-arg predicates must return non-nil to allow inline completion. Customize for editing states. |
+| `lsp-proxy-inline-completion-disable-predicates` | `nil` | Any predicate returning non-nil blocks inline completion (override failsafe). |
+| `lsp-proxy-inline-completion-trigger-characters` | `()` | Characters that immediately trigger an inline completion request when typed. Use a list of string/char tokens. |
+| `lsp-proxy-inline-completion-idle-delay` | `0.3` | Idle delay (seconds) before showing inline completion suggestions after predicates are satisfied. |
+
+### Diagnostics
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-diagnostics-provider` | `:auto` | Backend selector: `:auto` prefers Flycheck if present; `:flycheck`, `:flymake` force; `:none` disable; `t` prefer Flymake; `nil` prefer Flycheck. |
+
+### Navigation & Symbols
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-enable-imenu` | `t` | Enable Imenu outline via `textDocument/documentSymbol` when server capability is present. |
+| `lsp-proxy-lazy-xref-threshold` | `10000` | Line-count threshold above which lazy/optimized Xref evaluation is considered for large buffers. |
+| `lsp-proxy-xref-optimization-strategy` | `'optimized` | Strategy for Xref processing: `eager` original; `lazy` minimal preview; `optimized` balanced (fast with previews). |
+| `lsp-proxy-enable-symbol-highlighting` | `t` | Highlight occurrences of symbol at point using `documentHighlight` support. |
+| `lsp-proxy-enable-hover-eldoc` | `nil` | Request hover info automatically and integrate into Eldoc while moving point. |
+
+### Inlay Hints
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-inlay-hints-mode-config` | `nil` | Controls inlay hint activation: `nil` disable; `t` enable globally; list of major mode symbols limits to those modes. |
+
+### Large File Handling
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-large-file-threshold` | `(* 10 1024 1024)` | Byte size threshold (≈10MB) beyond which files load asynchronously chunk by chunk. |
+| `lsp-proxy-large-file-loading-timeout` | `30` | Seconds before aborting a pending/loading large file operation. |
+| `lsp-proxy-large-file-chunk-size` | `(* 1 1024 1024)` | Chunk size (≈1MB) used when streaming large file contents to the server. Adjust for speed vs memory. |
+
+### Formatting Hooks
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-trim-trailing-whitespace` | `t` | Trim trailing spaces on lines when syncing/saving (align with project style). |
+| `lsp-proxy-insert-final-newline` | `t` | Ensure file ends with a single newline. |
+| `lsp-proxy-trim-final-newlines` | `t` | Remove surplus blank lines after the final newline. |
+
+### Usage Tips
+- For heavy projects, increase `lsp-proxy--send-changes-idle-time` and maybe lower `lsp-proxy-max-completion-item`.
+- If inline completion feels intrusive, add predicates to `lsp-proxy-inline-completion-disable-predicates` (e.g., `(company--active-p)` or mode-specific checks).
+- Set `lsp-proxy-log-level` to `2` temporarily when investigating protocol issues, together with `lsp-proxy-log-max` > 0.
+- Disabling `lsp-proxy-enable-bytecode` can help pinpoint serialization issues on bleeding-edge Emacs versions.
 
 
 ## Recommend config
