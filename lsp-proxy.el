@@ -276,8 +276,12 @@
                                          (add-hook 'window-configuration-change-hook #'lsp-proxy--init-if-visible)))))))))
 (defun lsp-proxy--cleanup ()
   "Clean up when restart."
-  ;; clear all opened buffer
-  (setq lsp-proxy--opened-buffers nil)
+  ;; clear all opened buffer flags
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (and (boundp 'lsp-proxy--buffer-opened) lsp-proxy--buffer-opened)
+          (setq-local lsp-proxy--buffer-opened nil)))))
   ;; clear all progress in map
   (clrhash lsp-proxy--project-hashmap)
   ;; clear all diagnostics
@@ -385,11 +389,14 @@
    :success-fn (lambda (data)
                  ;; Clean up opened files for the project
                  (let ((paths (seq-into data 'list)))
-                   (setq lsp-proxy--opened-buffers
-                         (cl-remove-if
-                          (lambda (elt)
-                            (member (buffer-file-name elt) paths))
-                          lsp-proxy--opened-buffers)))
+                   (dolist (buf (buffer-list))
+                     (when (and (buffer-live-p buf)
+                                (buffer-local-value 'lsp-proxy-mode buf)
+                                (buffer-local-value 'lsp-proxy--buffer-opened buf))
+                       (with-current-buffer buf
+                         (when (and buffer-file-name
+                                    (member buffer-file-name paths))
+                           (setq-local lsp-proxy--buffer-opened nil))))))
                  ;; Clean up diagnostics information
                  (lsp-proxy--remove-project (lsp-proxy-project-root) lsp-proxy--diagnostics-map)
                  ;; Clean up progress information

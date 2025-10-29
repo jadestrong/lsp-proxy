@@ -95,8 +95,8 @@ that support `textDocument/hover' request.")
 (defvar lsp-proxy--log-file nil
   "Path to the current log file.")
 
-(defvar lsp-proxy--opened-buffers nil
-  "List of buffers opened with lsp-proxy.")
+(defvar-local lsp-proxy--buffer-opened nil
+  "Whether this buffer has been opened with lsp-proxy.")
 
 (defvar lsp-proxy--base-dir (if load-file-name
                                 (file-name-directory load-file-name)
@@ -177,7 +177,7 @@ that support `textDocument/hover' request.")
      (if (or (eq ,method 'textDocument/didOpen)
              (eq ,method 'textDocument/willSave)
              (eq ,method 'textDocument/didSave)
-             (-contains-p lsp-proxy--opened-buffers (current-buffer)))
+             lsp-proxy--buffer-opened)
          (let ((new-params (append (eglot--TextDocumentIdentifier) (list :params ,@params))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
        (lsp-proxy--on-doc-open))))
@@ -188,7 +188,7 @@ that support `textDocument/hover' request.")
      (lsp-proxy--ensure-connection)
      (if (not (eq ,method 'textDocument/diagnostic))
          (lsp-proxy--send-did-change))
-     (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
+     (unless lsp-proxy--buffer-opened
        (lsp-proxy--on-doc-open))
      ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
      (let ((buf (current-buffer)))
@@ -211,7 +211,7 @@ that support `textDocument/hover' request.")
      (when lsp-proxy-mode
        (lsp-proxy--ensure-connection)
        (lsp-proxy--send-did-change)
-       (unless (-contains-p lsp-proxy--opened-buffers (current-buffer))
+       (unless lsp-proxy--buffer-opened
          (lsp-proxy--on-doc-open))
        (jsonrpc-request lsp-proxy--connection ,@args))))
 
@@ -360,7 +360,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   ;; send a notification for the window gaining focus and only if the buffer has
   ;; lsp-proxy-mode enabled.
   (when (and lsp-proxy-mode (eq window (selected-window)))
-    (if (-contains-p lsp-proxy--opened-buffers (current-buffer))
+    (if lsp-proxy--buffer-opened
         (lsp-proxy--notify ':textDocument/didFocus
                            (list :textDocument (eglot--TextDocumentIdentifier)))
       (lsp-proxy--on-doc-open))))
@@ -384,7 +384,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                 (lsp-proxy--get-initial-content)
                               (eglot--widening
                                (buffer-substring-no-properties (point-min) (point-max))))))
-      (add-to-list 'lsp-proxy--opened-buffers (current-buffer))
+      (setq-local lsp-proxy--buffer-opened t)
       (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
       (lsp-proxy--notify 'textDocument/didOpen
                          (list :textDocument (append (eglot--TextDocumentIdentifier)
@@ -400,10 +400,10 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
-  (when (-contains-p lsp-proxy--opened-buffers (current-buffer))
+  (when lsp-proxy--buffer-opened
     (lsp-proxy--notify 'textDocument/didClose
                        (list :textDocument (eglot--TextDocumentIdentifier)))
-    (setq lsp-proxy--opened-buffers (delete (current-buffer) lsp-proxy--opened-buffers))))
+    (setq-local lsp-proxy--buffer-opened nil)))
 
 (defun lsp-proxy--will-save ()
   "Send textDocument/willSave notification."
