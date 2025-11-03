@@ -15,18 +15,13 @@
 
 (require 'cl-lib)
 (require 'eglot)
+(require 'lsp-proxy-core)
 (require 'lsp-proxy-utils)
 
 (defcustom lsp-proxy-enable-imenu t
   "Enable imenu integration."
   :type 'boolean
   :group 'lsp-proxy)
-
-;;; External functions
-(declare-function lsp-proxy--request "lsp-proxy-core")
-
-;;; External variables
-(defvar lsp-proxy--support-document-symbols)
 
 (cl-defun lsp-proxy-imenu ()
   "LSP-Proxy's `imenu-create-index-function'.

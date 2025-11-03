@@ -16,12 +16,10 @@
 (require 'cl-lib)
 (require 'eglot)
 (require 'dash)
+(require 'lsp-proxy-core)
 (require 'lsp-proxy-utils)
 
 (defvar lsp-proxy-inline-completion-mode)
-
-;;; External functions
-(declare-function lsp-proxy--async-request "lsp-proxy-core")
 
 ;;; Configuration
 

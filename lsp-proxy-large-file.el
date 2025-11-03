@@ -14,6 +14,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'lsp-proxy-core)
 (require 'lsp-proxy-utils)
 
 ;;; Configuration
@@ -32,9 +33,6 @@
   "Chunk size for loading large files."
   :type 'integer
   :group 'lsp-proxy)
-
-;;; External functions
-(declare-function lsp-proxy--notify "lsp-proxy-core")
 
 ;;; Variables
 
