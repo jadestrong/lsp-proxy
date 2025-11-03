@@ -14,13 +14,8 @@
 ;;; Code:
 
 (require 'eglot)
+(require 'lsp-proxy-core)
 (require 'lsp-proxy-utils)
-
-;;; External functions
-(declare-function lsp-proxy--async-request "lsp-proxy-core")
-
-;;; External variables
-(defvar lsp-proxy--support-signature-help)
 
 (defun lsp-proxy-signature-eldoc-function (cb)
   "Eldoc function for signature help with callback CB."
