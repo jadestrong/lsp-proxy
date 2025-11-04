@@ -376,7 +376,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 (defun lsp-proxy--on-doc-open ()
   "On doc open."
   (setq lsp-proxy--recent-changes nil
-        eglot--versioned-identifier 0)
+        eglot--versioned-identifier 0
+        eglot--TextDocumentIdentifier-cache nil)
   (when buffer-file-name
     (when (not (file-exists-p buffer-file-name))
       (save-buffer))
