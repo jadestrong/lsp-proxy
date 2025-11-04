@@ -373,31 +373,38 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
             file-name
             (lsp-proxy--format-file-size file-size))))
 
+(defvar-local lsp-proxy--skip-auto-open nil
+  "Flag indicating if document open has canceled.")
+
 (defun lsp-proxy--on-doc-open ()
   "On doc open."
   (setq lsp-proxy--recent-changes nil
         eglot--versioned-identifier 0
         eglot--TextDocumentIdentifier-cache nil)
-  (when buffer-file-name
-    (when (not (file-exists-p buffer-file-name))
-      (save-buffer))
-    (let* ((initial-content (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
-                                (lsp-proxy--get-initial-content)
-                              (eglot--widening
-                               (buffer-substring-no-properties (point-min) (point-max))))))
-      (setq-local lsp-proxy--buffer-opened t)
-      (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
-      (lsp-proxy--notify 'textDocument/didOpen
-                         (list :textDocument (append (eglot--TextDocumentIdentifier)
-                                                     (list
-                                                      :text initial-content
-                                                      :languageId ""
-                                                      :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
-                                                      :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
-      ;; send large file content
-      (when (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
-        (require 'lsp-proxy-large-file)
-        (lsp-proxy--async-load-large-file (current-buffer))))))
+  (when (and buffer-file-name (not lsp-proxy--skip-auto-open))
+    (condition-case nil
+        (progn
+          (unless (file-exists-p buffer-file-name)
+            (save-buffer))
+          (let* ((initial-content (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
+                                      (lsp-proxy--get-initial-content)
+                                    (eglot--widening
+                                     (buffer-substring-no-properties (point-min) (point-max))))))
+            (setq-local lsp-proxy--buffer-opened t)
+            (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
+            (lsp-proxy--notify 'textDocument/didOpen
+                               (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                           (list
+                                                            :text initial-content
+                                                            :languageId ""
+                                                            :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
+                                                            :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
+            ;; send large file content
+            (when (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
+              (require 'lsp-proxy-large-file)
+              (lsp-proxy--async-load-large-file (current-buffer)))))
+      (error
+       (setq-local lsp-proxy--skip-auto-open t)))))
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
@@ -415,7 +422,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 (defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
   (lsp-proxy--notify 'textDocument/didSave
-                     (list :textDocument (eglot--TextDocumentIdentifier))))
+                     (list :textDocument (eglot--TextDocumentIdentifier)))
+  (setq-local lsp-proxy--skip-auto-open nil))
 
 (defun lsp-proxy--send-did-change ()
   "Send textDocument/didChange to server."
