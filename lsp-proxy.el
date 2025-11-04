@@ -198,13 +198,15 @@
 ;;; Hook functions
 
 (defun lsp-proxy--before-revert-hook ()
-  "Handle before revert hook."
-  (when lsp-proxy-mode
+  "Handle before revert hook.
+Skip closing/opening notifications for buffers not currently visible."
+  (when (and lsp-proxy-mode (lsp-proxy--buffer-visible-p))
     (lsp-proxy--on-doc-close)))
 
 (defun lsp-proxy--after-revert-hook ()
-  "Handle after revert hook."
-  (when lsp-proxy-mode
+  "Handle after revert hook.
+Skip reopening notifications for buffers not currently visible."
+  (when (and lsp-proxy-mode (lsp-proxy--buffer-visible-p))
     (lsp-proxy--on-doc-open)))
 
 (defun lsp-proxy--post-self-insert-hook ()
