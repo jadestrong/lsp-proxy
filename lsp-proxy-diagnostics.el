@@ -95,7 +95,8 @@
                    (lsp-proxy--idle-reschedule (current-buffer)))
                   (lsp-proxy-diagnostics--flymake-enabled
                    (lsp-proxy-diagnostics--flymake-after-diagnostics))
-                  (t (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active."))))
+                  (t (when lsp-proxy-mode
+                       (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active.")))))
         (if (> lsp-proxy-log-level 1)
             (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
 
