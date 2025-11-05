@@ -18,6 +18,7 @@ dart = { command = "dart", args = [
 ] }
 clangd = { command = "clangd" }
 solargraph = { command = "solargraph", args = ["stdio"] }
+sourcekit-lsp = { command = "sourcekit-lsp" }
 
 [language-server.css-ls]
 command = "vscode-css-language-server"
@@ -519,3 +520,9 @@ file-types = [
   "cshtml",
 ]
 language-servers = ["vscode-html-language-server"]
+
+[[language]]
+name = "swift"
+file-types = ["swift", "swiftinterface"]
+roots = [ "Package.swift" ]
+language-servers = [ "sourcekit-lsp" ]
