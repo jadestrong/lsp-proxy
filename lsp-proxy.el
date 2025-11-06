@@ -85,7 +85,7 @@
   :type 'boolean
   :group 'lsp-proxy)
 
-(defcustom lsp-proxy-enable-hover-eldoc nil
+(defcustom lsp-proxy-enable-hover-eldoc t
   "Enable automatic hover at point."
   :type 'boolean
   :group 'lsp-proxy)
@@ -651,7 +651,7 @@ Request codeAction/resolve for more info if server supports."
                    (lsp-proxy--info "%s" "No content at point.")))))
 
 (defun lsp-proxy-hover-eldoc-function (cb &rest _ignored)
-  "A member of `eldoc-documentation-functions', for hover."
+  "A member of `eldoc-documentation-functions' for hover."
   (when (and lsp-proxy--support-hover
              lsp-proxy-enable-hover-eldoc)
     (let ((buf (current-buffer)))
