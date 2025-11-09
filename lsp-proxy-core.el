@@ -386,12 +386,14 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
         (progn
           (unless (file-exists-p buffer-file-name)
             (save-buffer))
-          (let* ((initial-content (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
+          (let* ((is-large-file (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file))
+                 (initial-content (if is-large-file
                                       (lsp-proxy--get-initial-content)
                                     (eglot--widening
                                      (buffer-substring-no-properties (point-min) (point-max))))))
             (setq-local lsp-proxy--buffer-opened t)
-            (setq-local lsp-proxy--support-document-highlight (< (line-number-at-pos (point-max)) 10000))
+            (if is-large-file
+                (setq-local lsp-proxy--support-document-highlight nil))
             (lsp-proxy--notify 'textDocument/didOpen
                                (list :textDocument (append (eglot--TextDocumentIdentifier)
                                                            (list
@@ -400,7 +402,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                                             :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
                                                             :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
             ;; send large file content
-            (when (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)
+            (when is-large-file
               (require 'lsp-proxy-large-file)
               (lsp-proxy--async-load-large-file (current-buffer)))))
       (error
