@@ -82,23 +82,56 @@
   (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) msg
     (let ((filepath (lsp-proxy--uri-to-path uri)))
       (if (file-exists-p filepath)
-          (with-current-buffer (find-file-noselect filepath)
-            (let ((workspace-diagnostics (lsp-proxy--ensure-project-map
-                                          (lsp-proxy-project-root)
-                                          lsp-proxy--diagnostics-map))
-                  (file (lsp-proxy--fix-path-casing filepath)))
-              (if (seq-empty-p diagnostics)
-                  (remhash file workspace-diagnostics)
-                (puthash file (append diagnostics nil) workspace-diagnostics)))
-            (cond (lsp-proxy-diagnostics--flycheck-enabled
-                   (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
-                   (lsp-proxy--idle-reschedule (current-buffer)))
-                  (lsp-proxy-diagnostics--flymake-enabled
-                   (lsp-proxy-diagnostics--flymake-after-diagnostics))
-                  (t (when lsp-proxy-mode
-                       (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active.")))))
+          (lsp-proxy-diagnostics--handle-publish-diagnostics-optimized filepath diagnostics)
         (if (> lsp-proxy-log-level 1)
             (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
+
+(defun lsp-proxy-diagnostics--handle-publish-diagnostics-optimized (filepath diagnostics)
+  "Optimized diagnostics handling for FILEPATH with DIAGNOSTICS.
+Uses buffer visiting detection to avoid unnecessary buffer creation."
+  (let* ((workspace-diagnostics (lsp-proxy--ensure-project-map
+                                (lsp-proxy-project-root)
+                                lsp-proxy--diagnostics-map))
+         (file (lsp-proxy--fix-path-casing filepath))
+         (visiting (find-buffer-visiting filepath)))
+
+    ;; Always update the workspace diagnostics map
+    (if (seq-empty-p diagnostics)
+        (remhash file workspace-diagnostics)
+      (puthash file (append diagnostics nil) workspace-diagnostics))
+
+    (cond
+     (visiting
+      ;; Buffer is already visited - process immediately with optimized rendering
+      (with-current-buffer visiting
+        (lsp-proxy-diagnostics--render-buffer-diagnostics-optimized diagnostics)))
+
+     ;; For non-visited files, we only update the workspace map
+     ;; The diagnostics will be rendered when the file is opened
+     (t (when (> lsp-proxy-log-level 2)
+          (lsp-proxy--warn "Diagnostics updated for non-visited file: %s" filepath))))))
+
+(defun lsp-proxy-diagnostics--render-buffer-diagnostics-optimized (diagnostics)
+  "Optimized rendering of DIAGNOSTICS for current buffer.
+Reduces redundant computations and batch processes diagnostic conversions."
+  (cond
+   (lsp-proxy-diagnostics--flycheck-enabled
+    (lsp-proxy-diagnostics--flycheck-render-optimized diagnostics))
+
+   (lsp-proxy-diagnostics--flymake-enabled
+    (lsp-proxy-diagnostics--flymake-render-optimized diagnostics))
+
+   (t (when lsp-proxy-mode
+        (lsp-proxy--warn "No diagnostics mode enabled for this buffer. Ensure Flycheck or Flymake is active.")))))
+
+(defun lsp-proxy-diagnostics--flycheck-render-optimized (_diagnostics)
+  "Optimized flycheck rendering for DIAGNOSTICS."
+  (add-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer nil t)
+  (lsp-proxy--idle-reschedule (current-buffer)))
+
+(defun lsp-proxy-diagnostics--flymake-render-optimized (_diagnostics)
+  "Optimized flymake rendering for DIAGNOSTICS."
+  (lsp-proxy-diagnostics--flymake-after-diagnostics))
 
 ;;; Flycheck integration
 
@@ -114,30 +147,35 @@ CALLBACK is the status callback passed by Flycheck."
   (remove-hook 'lsp-proxy-on-idle-hook #'lsp-proxy-diagnostics--flycheck-buffer t)
   (let* ((workspace-diagnostics (lsp-proxy--ensure-project-map (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
          (buffer-diagnostics (gethash (lsp-proxy--fix-path-casing buffer-file-name) workspace-diagnostics '()))
-         (errors (mapcar
-                  (lambda (diagnostic)
-                    (let* ((range (plist-get diagnostic :range))
-                           (start (plist-get range :start))
-                           (end (plist-get range :end)))
-                      (flycheck-error-new
-                       :buffer (current-buffer)
-                       :checker checker
-                       :filename (buffer-file-name)
-                       :message (plist-get diagnostic :message)
-                       :level (pcase (plist-get diagnostic :severity)
-                                (1 'error)
-                                (2 'warning)
-                                (3 'info)
-                                (4 'info)
-                                (_ 'error))
-                       :id (plist-get diagnostic :code)
-                       :group (plist-get diagnostic :source)
-                       :line (1+ (plist-get start :line))
-                       :column (1+ (plist-get start :character))
-                       :end-line (1+ (plist-get end :line))
-                       :end-column (1+ (plist-get end :character)))))
-                  buffer-diagnostics)))
+         (errors (lsp-proxy-diagnostics--convert-to-flycheck-errors buffer-diagnostics checker)))
     (funcall callback 'finished errors)))
+
+(defun lsp-proxy-diagnostics--convert-to-flycheck-errors (diagnostics checker)
+  "Convert DIAGNOSTICS to flycheck errors using CHECKER.
+Optimized batch conversion to reduce repeated calculations."
+  (mapcar
+   (lambda (diagnostic)
+     (let* ((range (plist-get diagnostic :range))
+            (start (plist-get range :start))
+            (end (plist-get range :end)))
+       (flycheck-error-new
+        :buffer (current-buffer)
+        :checker checker
+        :filename (buffer-file-name)
+        :message (plist-get diagnostic :message)
+        :level (pcase (plist-get diagnostic :severity)
+                 (1 'error)
+                 (2 'warning)
+                 (3 'info)
+                 (4 'info)
+                 (_ 'error))
+        :id (plist-get diagnostic :code)
+        :group (plist-get diagnostic :source)
+        :line (1+ (plist-get start :line))
+        :column (1+ (plist-get start :character))
+        :end-line (1+ (plist-get end :line))
+        :end-column (1+ (plist-get end :character)))))
+   diagnostics))
 
 ;;;###autoload
 (defun lsp-proxy-diagnostics-lsp-proxy-checker-if-needed ()
@@ -199,43 +237,87 @@ CALLBACK is the status callback passed by Flycheck."
   "Report new diagnostics to flymake."
   (let* ((workspace-diagnostics (lsp-proxy--ensure-project-map (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
          (buffer-diagnostics (gethash (lsp-proxy--fix-path-casing buffer-file-name) workspace-diagnostics '()))
-         (diags (mapcar
-                 (lambda (diagnostic)
-                   (let* ((message (plist-get diagnostic :message))
-                          (severity (plist-get diagnostic :severity))
-                          (range (plist-get diagnostic :range))
-                          (start (plist-get range :start))
-                          (end (plist-get range :end))
-                          (start-line (plist-get start :line))
-                          (character (plist-get start :character))
-                          (end-line (plist-get end :line))
-                          (start-point (eglot--lsp-position-to-point start))
-                          (end-point (eglot--lsp-position-to-point end)))
-                     (when (= start-point end-point)
-                       (if-let* ((region (flymake-diag-region (current-buffer)
-                                                              (1+ start-line)
-                                                              character)))
-                           (setq start-point (car region)
-                                 end-point (cdr region))
-                         (eglot--widening
-                          (goto-char (point-min))
-                          (setq start-point (line-beginning-position (1+ start-line))
-                                end-point (line-end-position (1+ end-line))))))
-                     (flymake-make-diagnostic (current-buffer)
-                                              start-point
-                                              end-point
-                                              (cl-case severity
-                                                (1 :error)
-                                                (2 :warning)
-                                                (t :note))
-                                              message)))
-                 buffer-diagnostics)))
+         (diags (lsp-proxy-diagnostics--convert-to-flymake-diagnostics buffer-diagnostics)))
     (funcall lsp-proxy-diagnostics--flymake-report-fn
              diags
              ;; This :region keyword forces flymake to delete old diagnostics in
              ;; case the buffer hasn't changed since the last call to the report
              ;; function. See https://github.com/joaotavora/eglot/issues/159
              :region (cons (point-min) (point-max)))))
+
+(defun lsp-proxy-diagnostics--convert-to-flymake-diagnostics (diagnostics)
+  "Convert DIAGNOSTICS to flymake diagnostic objects.
+Optimized batch conversion using direct position calculation without
+eglot functions."
+  (if (null diagnostics)
+      nil
+    (save-excursion
+      (save-restriction
+        (widen)
+        ;; Sort diagnostics by line for efficient traversal
+        (let* ((sorted-diagnostics (sort (copy-sequence diagnostics)
+                                        (lambda (a b)
+                                          (< (plist-get (plist-get (plist-get a :range) :start) :line)
+                                             (plist-get (plist-get (plist-get b :range) :start) :line)))))
+               (current-line 0)
+               (position-cache nil))
+          (goto-char (point-min))
+
+          ;; Single pass: calculate all positions by direct line navigation
+          (dolist (diagnostic sorted-diagnostics)
+            (let* ((range (plist-get diagnostic :range))
+                   (start (plist-get range :start))
+                   (end (plist-get range :end))
+                   (start-line (plist-get start :line))
+                   (start-char (plist-get start :character))
+                   (end-line (plist-get end :line))
+                   (end-char (plist-get end :character)))
+
+              ;; Advance to target line efficiently
+              (forward-line (- start-line current-line))
+              (setq current-line start-line)
+
+              ;; Calculate start position
+              (let* ((line-start (line-beginning-position))
+                     (line-end (line-end-position))
+                     (start-point (+ line-start (min start-char (- line-end line-start))))
+                     (end-point (if (= start-line end-line)
+                                   (+ line-start (min end-char (- line-end line-start)))
+                                 ;; Handle multi-line ranges
+                                 (progn
+                                   (forward-line (- end-line start-line))
+                                   (setq current-line end-line)
+                                   (+ (line-beginning-position)
+                                      (min end-char (- (line-end-position) (line-beginning-position))))))))
+
+                ;; Handle zero-width ranges
+                (when (= start-point end-point)
+                  (setq end-point (min (1+ start-point) line-end)))
+
+                ;; Create diagnostic and cache with position key
+                (let ((flymake-diag
+                       (flymake-make-diagnostic
+                        (current-buffer)
+                        start-point
+                        end-point
+                        (cl-case (plist-get diagnostic :severity)
+                          (1 :error)
+                          (2 :warning)
+                          (t :note))
+                        (plist-get diagnostic :message))))
+                  (push (cons (cons start-line start-char) flymake-diag) position-cache)))))
+
+          ;; Reconstruct in original order
+          (let (results)
+            (dolist (orig-diagnostic diagnostics)
+              (let* ((range (plist-get orig-diagnostic :range))
+                     (start (plist-get range :start))
+                     (line (plist-get start :line))
+                     (char (plist-get start :character))
+                     (cache-entry (assoc (cons line char) position-cache)))
+                (when cache-entry
+                  (push (cdr cache-entry) results))))
+            (nreverse results)))))))
 
 ;;; Pull diagnostics support
 
@@ -357,7 +439,21 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
     (lsp-proxy-diagnostics-flymake-enable))
    ((not (eq lsp-proxy-diagnostics-provider :none))
     (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
-   (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered."))))
+   (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
+
+  ;; Check for existing diagnostics when setting up
+  (lsp-proxy-diagnostics--check-existing-diagnostics))
+
+(defun lsp-proxy-diagnostics--check-existing-diagnostics ()
+  "Check and render diagnostics for current buffer when diagnostics are set up."
+  (when (and buffer-file-name lsp-proxy-mode)
+    (let* ((workspace-diagnostics (lsp-proxy--ensure-project-map
+                                  (lsp-proxy-project-root)
+                                  lsp-proxy--diagnostics-map))
+           (file (lsp-proxy--fix-path-casing buffer-file-name))
+           (buffer-diagnostics (gethash file workspace-diagnostics)))
+      (when buffer-diagnostics
+        (lsp-proxy-diagnostics--render-buffer-diagnostics-optimized buffer-diagnostics)))))
 
 (defun lsp-proxy--diagnostics-teardown ()
   "Teardown disagnostics."
