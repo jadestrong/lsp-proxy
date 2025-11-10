@@ -198,7 +198,7 @@ CALLBACK is the status callback passed by Flycheck."
 (defun lsp-proxy-diagnostics--flymake-update-diagnostics ()
   "Report new diagnostics to flymake."
   (let* ((workspace-diagnostics (lsp-proxy--ensure-project-map (lsp-proxy-project-root) lsp-proxy--diagnostics-map))
-         (buffer-diagnostics (gethash (buffer-file-name) workspace-diagnostics '()))
+         (buffer-diagnostics (gethash (lsp-proxy--fix-path-casing buffer-file-name) workspace-diagnostics '()))
          (diags (mapcar
                  (lambda (diagnostic)
                    (let* ((message (plist-get diagnostic :message))
