@@ -105,6 +105,7 @@ that support `textDocument/hover' request.")
 
 ;;; External variables (to be defined by main module)
 (defvar lsp-proxy-max-completion-item)
+(defvar lsp-proxy-diagnostics-max-push-count)
 (defvar lsp-proxy-mode)
 
 ;;; External functions from eglot (for backward compatibility)
@@ -226,7 +227,7 @@ that support `textDocument/hover' request.")
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
-                                         :command (append (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item))
+                                         :command (append (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item) "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count))
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")

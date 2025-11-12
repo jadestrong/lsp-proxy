@@ -1,6 +1,7 @@
 use crate::{
     application::Application,
     client::{Client, RegisteredCapability},
+    config,
     connection::Connection,
     controller::Controller,
     dispatch::{NotificationDispatcher, RequestDispatcher},
@@ -28,10 +29,54 @@ use anyhow::{Error, Result};
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use lsp_types::{notification::Notification, request::Request, LogMessageParams};
+use lsp_types::{
+    notification::Notification, request::Request, DiagnosticSeverity, LogMessageParams,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+
+// Diagnostic configuration constants
+const DEFAULT_MAX_DIAGNOSTICS_PUSH: usize = 50;
+const DIAGNOSTIC_SEVERITY_PRIORITY: [DiagnosticSeverity; 4] = [
+    DiagnosticSeverity::ERROR,
+    DiagnosticSeverity::WARNING,
+    DiagnosticSeverity::INFORMATION,
+    DiagnosticSeverity::HINT,
+];
+
+/// Limit and prioritize diagnostics for push notifications
+fn limit_diagnostics_for_push(
+    diagnostics: &[lsp_types::Diagnostic],
+    max_count: usize,
+) -> Vec<lsp_types::Diagnostic> {
+    if diagnostics.len() <= max_count {
+        return diagnostics.to_vec();
+    }
+
+    // Sort diagnostics by severity priority
+    let mut sorted_diagnostics = diagnostics.to_vec();
+    sorted_diagnostics.sort_by(|a, b| {
+        let severity_a = a.severity.unwrap_or(DiagnosticSeverity::HINT);
+        let severity_b = b.severity.unwrap_or(DiagnosticSeverity::HINT);
+
+        // Find priority index in DIAGNOSTIC_SEVERITY_PRIORITY array
+        let priority_a = DIAGNOSTIC_SEVERITY_PRIORITY
+            .iter()
+            .position(|&s| s == severity_a)
+            .unwrap_or(3);
+        let priority_b = DIAGNOSTIC_SEVERITY_PRIORITY
+            .iter()
+            .position(|&s| s == severity_b)
+            .unwrap_or(3);
+
+        // Lower index = higher priority
+        priority_a.cmp(&priority_b)
+    });
+
+    // Take the most important diagnostics
+    sorted_diagnostics.into_iter().take(max_count).collect()
+}
 
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
     let (sender_for_application, mut recevier_by_application) = unbounded_channel();
@@ -377,18 +422,39 @@ impl Application {
                                 })
                                 .collect();
                             doc.replace_diagnostics(diagnostics, &provider);
-                            let diagnostics: Vec<lsp_types::Diagnostic> = match doc
+                            let all_diagnostics: Vec<lsp_types::Diagnostic> = match doc
                                 .diagnostics()
                                 .as_ref()
                             {
                                 Some(diags) => diags.iter().map(|diag| diag.item.clone()).collect(),
                                 None => vec![],
                             };
+
+                            // Apply diagnostic limiting for push notification
+                            let total_count = all_diagnostics.len();
+                            let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
+                                .get()
+                                .copied()
+                                .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
+                            let limited_diagnostics =
+                                limit_diagnostics_for_push(&all_diagnostics, max_diagnostics_push);
+
+                            // Log diagnostic limiting info
+                            if total_count > max_diagnostics_push {
+                                debug!(
+                                    "Limiting diagnostics for {}: {} -> {} diagnostics (max: {})",
+                                    params.uri,
+                                    total_count,
+                                    limited_diagnostics.len(),
+                                    max_diagnostics_push
+                                );
+                            }
+
                             self.send_notification::<lsp_types::notification::PublishDiagnostics>(
                                 lsp_types::PublishDiagnosticsParams {
                                     version: Some(version),
                                     uri: params.uri,
-                                    diagnostics,
+                                    diagnostics: limited_diagnostics,
                                 },
                             )
                         } else {

@@ -10,11 +10,17 @@ static CONFIG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCe
 static LOG_FILE: once_cell::sync::OnceCell<PathBuf> = once_cell::sync::OnceCell::new();
 pub static MAX_COMPLETION_ITEMS: once_cell::sync::OnceCell<usize> =
     once_cell::sync::OnceCell::new();
+pub static MAX_DIAGNOSTICS_PUSH: once_cell::sync::OnceCell<usize> =
+    once_cell::sync::OnceCell::new();
 pub static ENABLE_BYTECODE: once_cell::sync::OnceCell<bool> =
     once_cell::sync::OnceCell::new();
 
 pub fn set_max_completion_items(max_items: usize) {
     MAX_COMPLETION_ITEMS.set(max_items).ok();
+}
+
+pub fn set_max_diagnostics_push(max_diagnostics: usize) {
+    MAX_DIAGNOSTICS_PUSH.set(max_diagnostics).ok();
 }
 
 pub fn set_enable_bytecode(enable: bool) {

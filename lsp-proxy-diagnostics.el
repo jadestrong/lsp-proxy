@@ -35,6 +35,20 @@
   :type 'string
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-diagnostics-max-push-count 50
+  "Maximum number of diagnostics to push to Emacs for each file.
+When a file has more diagnostics than this limit, only the most
+severe diagnostics will be pushed automatically."
+  :type 'integer
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-diagnostics-show-limit-warning t
+  "Whether to show a warning when diagnostics are limited.
+When enabled, shows a message indicating that only a subset
+of diagnostics are displayed due to the limit."
+  :type 'boolean
+  :group 'lsp-proxy)
+
 
 ;;; External declarations
 
@@ -114,6 +128,12 @@ Uses buffer visiting detection to avoid unnecessary buffer creation."
 (defun lsp-proxy-diagnostics--render-buffer-diagnostics-optimized (diagnostics)
   "Optimized rendering of DIAGNOSTICS for current buffer.
 Reduces redundant computations and batch processes diagnostic conversions."
+  ;; Check if diagnostics might be limited and warn user
+  (when (and lsp-proxy-diagnostics-show-limit-warning
+             (>= (length diagnostics) lsp-proxy-diagnostics-max-push-count))
+    (lsp-proxy--warn "Diagnostics count (%d) may have been limited."
+                     (length diagnostics)))
+
   (cond
    (lsp-proxy-diagnostics--flycheck-enabled
     (lsp-proxy-diagnostics--flycheck-render-optimized diagnostics))

@@ -10,6 +10,7 @@ pub struct Args {
     pub show_help: bool,
     pub show_version: bool,
     pub max_item_num: usize,
+    pub max_diagnostics_push: usize,
     pub enable_bytecode: bool,
 }
 
@@ -33,6 +34,15 @@ impl Args {
                         }
                     }
                     None => args.max_item_num = 20,
+                },
+                "--max-diagnostics-push" => match argv.next().as_deref() {
+                    Some(n) => {
+                        args.max_diagnostics_push = match n.parse() {
+                            Ok(n) => n,
+                            Err(_) => 50,
+                        }
+                    }
+                    None => args.max_diagnostics_push = 50,
                 },
                 "--log-level" => match argv.next().as_deref() {
                     Some(level) => {
@@ -74,6 +84,8 @@ impl Args {
         println!("    -c, --config <FILE>       Set configuration file path");
         println!("        --log <FILE>          Set log file path");
         println!("        --log-level <LEVEL>   Set log level (0-3, default: 1)");
+        println!("        --max-item <NUM>      Maximum completion items (default: 20)");
+        println!("        --max-diagnostics-push <NUM>  Maximum diagnostics to push (default: 50)");
         println!("        --stdio               Enable stdio communication mode (required)");
         println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
         println!("    -h, --help               Print help information");
