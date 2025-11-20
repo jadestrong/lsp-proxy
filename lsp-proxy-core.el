@@ -48,11 +48,11 @@ Enabling event logging may slightly affect performance."
   :group 'lsp-proxy
   :type 'number)
 
-(defcustom lsp-proxy-enable-bytecode t
+(defcustom lsp-proxy-enable-bytecode (version< emacs-version "30.2")
   "Enable bytecode optimization for JSON-RPC communication.
 When enabled, lsp-proxy will use Emacs Lisp bytecode format for better
 performance. Disable this if you experience encoding issues with non-ASCII
-characters, especially in newer Emacs versions (31+)."
+characters, especially in newer Emacs versions (30.2+)."
   :type 'boolean
   :group 'lsp-proxy)
 
