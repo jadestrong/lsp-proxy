@@ -1,6 +1,6 @@
 {
   "name": "emacs-lsp-proxy",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "scripts": {
     "postinstall": "node ./install.js"
   },
@@ -17,11 +17,11 @@
   ],
   "author": "jadestrong",
   "optionalDependencies": {
-    "@emacs-lsp-proxy/darwin-x64": "0.5.10",
-    "@emacs-lsp-proxy/darwin-arm64": "0.5.10",
-    "@emacs-lsp-proxy/linux-x64": "0.5.10",
-    "@emacs-lsp-proxy/linux-arm64": "0.5.10",
-    "@emacs-lsp-proxy/win32-x64": "0.5.10"
+    "@emacs-lsp-proxy/darwin-x64": "0.5.11",
+    "@emacs-lsp-proxy/darwin-arm64": "0.5.11",
+    "@emacs-lsp-proxy/linux-x64": "0.5.11",
+    "@emacs-lsp-proxy/linux-arm64": "0.5.11",
+    "@emacs-lsp-proxy/win32-x64": "0.5.11"
   },
   "license": "ISC",
   "description": "An LSP client for Emacs implemented in Rust."

@@ -1,6 +1,6 @@
 {
   "name": "@emacs-lsp-proxy/linux-x64",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "main": "index.js",
   "license": "ISC",
   "description": "The Linux 64-bit binary for emacs-lsp-proxy.",
