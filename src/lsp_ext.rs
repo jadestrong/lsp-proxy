@@ -119,6 +119,33 @@ impl Request for GetCommands {
     const METHOD: &'static str = "emacs/getCommands";
 }
 
+// emacs/getWorkspaceInfo
+#[derive(Debug)]
+pub enum GetWorkspaceInfo {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfo {
+    pub file_path: String,
+    pub workspace_root: String,
+    pub language_servers: Vec<LanguageServerInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageServerInfo {
+    pub name: String,
+    pub root_path: String,
+    pub support_workspace: bool,
+}
+
+impl Request for GetWorkspaceInfo {
+    type Params = ();
+    type Result = Option<WorkspaceInfo>;
+    const METHOD: &'static str = "emacs/getWorkspaceInfo";
+}
+
+
 // $/progress
 #[derive(Debug)]
 pub enum CustomProgress {}

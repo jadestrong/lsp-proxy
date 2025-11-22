@@ -359,6 +359,30 @@ Skip reopening notifications for buffers not currently visible."
           (insert (format "Flycheck Enabled: %s\n" flycheck-status))
           (insert (format "Flymake Enabled: %s\n" flymake-status))))
 
+      ;; Workspace information
+      (when (and buffer-file-name (lsp-proxy--connection-alivep))
+        (lsp-proxy--async-request
+         'emacs/getWorkspaceInfo
+         (lsp-proxy--request-or-notify-params nil)
+         :success-fn
+         (lambda (workspace-info)
+           (with-current-buffer debug-buffer
+             (insert "\n=== Workspace Information ===\n")
+             (if workspace-info
+                 (progn
+                   (insert (format "File: %s\n" (plist-get workspace-info :filePath)))
+                   (insert (format "Workspace Root: %s\n" (plist-get workspace-info :workspaceRoot)))
+                   (insert "\nLanguage Servers:\n")
+                   (let ((servers (plist-get workspace-info :languageServers)))
+                     ;; Convert vector to list if needed
+                     (when (vectorp servers)
+                       (setq servers (append servers nil)))
+                     (dolist (ls servers)
+                       (insert (format "  - %s\n" (plist-get ls :name)))
+                       (insert (format "    Root: %s\n" (plist-get ls :rootPath)))
+                       (insert (format "    Support Workspace: %s\n"
+                                       (if (eq (plist-get ls :supportWorkspace) :json-false) "No" "Yes"))))))
+               (insert "No workspace information available\n"))))))
 
       ;; Print diagnostics for current buffer if available
       (when (and buffer-file-name (hash-table-p lsp-proxy--diagnostics-map))
@@ -367,7 +391,7 @@ Skip reopening notifications for buffers not currently visible."
                                            (lsp-proxy-project-root)
                                            lsp-proxy--diagnostics-map))))
           (with-current-buffer debug-buffer
-            (insert (format "\nCurrent Buffer Diagnostics (%s):\n" file))
+            (insert (format "\n=== Current Buffer Diagnostics ===\nFile: %s\n" file))
             (if diagnostics
                 (dolist (diag diagnostics)
                   (insert (format "- %s: %s\n"

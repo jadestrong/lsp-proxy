@@ -7,7 +7,7 @@ use crate::{
     lsp_ext,
     msg::RequestId,
     syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
-    utils::path,
+    utils::{path, find_lsp_workspace},
 };
 use anyhow::anyhow;
 use futures_util::stream::SelectAll;
@@ -122,30 +122,47 @@ impl Registry {
                       ..
                   }| {
                 if let Some(clients) = self.inner.get(name) {
-                    if let Some((_, client)) = clients.iter().enumerate().find(|(_, client)| {
-                        client.try_add_doc(
-                            &language_config.roots,
-                            doc_path,
-                            support_workspace.to_owned(),
-                        )
-                    }) {
+                    // 计算当前文件所属的项目根（子包优先）
+                    let file_root = find_lsp_workspace(doc_path.map(|p| p.as_path()), &language_config.roots);
+                    
+                    // 根据 support_workspace 决定客户端复用策略
+                    let reusable_client = if *support_workspace {
+                        // 支持多工作区：可以跨项目复用，通过 try_add_doc 判断是否可添加
+                        clients.iter().find(|client| {
+                            client.try_add_doc(&language_config.roots, doc_path, true)
+                        })
+                    } else {
+                        // 不支持多工作区：只能复用相同项目根的客户端
+                        clients.iter().find(|client| client.root_path == file_root)
+                    };
+
+                    if let Some(client) = reusable_client {
+                        debug!(
+                            "Reusing client '{}': support_workspace={}, file={:?}, root={:?}",
+                            name, support_workspace, doc_path, client.root_path
+                        );
                         return (name.to_owned(), Ok(client.clone()));
                     }
 
-                    // If library_directories exists, check whether the file belongs to it; if it dones, return the latest active client.
-                    if let Some(_) = library_directories.iter().find(|dir| {
+                    // If library_directories exists, check whether the file belongs to it; if it does, return the latest active client.
+                    if library_directories.iter().any(|dir| {
                         path::path_is_ancestor_of(dir, &doc_path.unwrap().to_string_lossy())
                     }) {
                         if let Some(client) = clients
                             .iter()
                             .max_by_key(|item| *item.activate_time.try_lock().unwrap())
                         {
-                            debug!("the latest workspace is {:?}", client.root_path);
+                            debug!("Using library directory client for '{}' at {:?}", name, client.root_path);
                             return (name.to_owned(), Ok(client.clone()));
                         }
                     }
                 }
 
+                // 创建新客户端
+                debug!(
+                    "Creating new client '{}': support_workspace={}, file={:?}",
+                    name, support_workspace, doc_path
+                );
                 match self.start_client(name.clone(), language_config, doc_path) {
                     Ok(client) => {
                         self.inner
@@ -190,7 +207,14 @@ impl Registry {
             .ok_or_else(|| anyhow!("Language server '{name}' not defined."))?;
         let id = self.counter;
         self.counter += 1;
-        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path)?;
+
+        // 查找对应的语言服务器特性配置
+        let ls_features = ls_config
+            .language_servers
+            .iter()
+            .find(|features| features.name == name);
+
+        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path, ls_features)?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -265,6 +289,7 @@ fn start_client(
     config: &LanguageConfiguration,
     ls_config: &LanguageServerConfiguration,
     doc_path: Option<&std::path::PathBuf>,
+    ls_features: Option<&LanguageServerFeatures>,
 ) -> Result<NewClient> {
     let (client, incoming, initialize_notify) = Client::start(
         &ls_config.command,
@@ -277,10 +302,7 @@ fn start_client(
         name.clone(),
         ls_config.timeout,
         doc_path,
-        config
-            .language_servers
-            .iter()
-            .find(|features| &features.name == &name),
+        ls_features,
     )?;
 
     let client = Arc::new(client);

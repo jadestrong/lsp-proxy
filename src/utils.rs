@@ -1,4 +1,3 @@
-use log::{debug, error};
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -7,10 +6,9 @@ use std::{
 use stringslice::StringSlice;
 
 pub fn current_working_dir() -> PathBuf {
-    let path = std::env::current_dir()
+    std::env::current_dir()
         .and_then(dunce::canonicalize)
-        .expect("Cound't determine current working directory");
-    path
+        .expect("Cound't determine current working directory")
 }
 
 pub mod path {
@@ -164,18 +162,7 @@ pub mod path {
 /// and returns the first directory that contains `.git`.
 /// If no workspace was found returns (CWD, true).
 /// Otherwise (workspace, false) is returned.
-// pub fn find_workspace() -> (PathBuf, bool) {
-//     let current_dir = current_working_dir();
-//     for ancestor in current_dir.ancestors() {
-//         if ancestor.join(".git").exists() {
-//             return (ancestor.to_owned(), false);
-//         }
-//     }
-
-//     (current_dir, true)
-// }
-
-pub fn find_workspace_for_file(filepath: &PathBuf) -> (PathBuf, bool) {
+pub fn find_workspace_for_file(filepath: &Path) -> (PathBuf, bool) {
     let current_dir = filepath.parent().unwrap().to_path_buf();
     for ancestor in current_dir.ancestors() {
         if ancestor.join(".git").exists() {
@@ -183,60 +170,6 @@ pub fn find_workspace_for_file(filepath: &PathBuf) -> (PathBuf, bool) {
         }
     }
     (current_dir, true)
-}
-
-/// Find an LSP workspace of a file using the following mechanism:
-/// * if the file is outside `workspace` return `None`
-/// * start at `file` and search the file tree upward
-/// * stop the search at the first `root_dirs` entry that contains `file`
-/// * if no `root_dirs` matches `file` stop at workspace
-/// * Returns the top most directory that contains a `root_marker`
-/// * If no root marker and we stopped at a `root_dirs` entry, return the directory we stopped at
-/// * If we stopped at `workspace` instead and `workspace_is_cwd == false` return `None`
-/// * If we stoped at `workspace` instead and `workspace_is_cwd == true` return `workspace`
-/// * Copied from helix: <https://github.com/helix-editor/helix/blob/9ba691cd3a8ffb021cb194bd3185317a65c3194a/helix-lsp/src/lib.rs#L938>
-pub fn find_lsp_workspace(
-    file: &str,
-    root_markers: &[String],
-    workspace: &Path,
-    workspace_is_cwd: bool,
-) -> Option<PathBuf> {
-    let file = std::path::Path::new(file);
-    // 将 file 参数格式化成一个绝对路径的格式
-    let mut file = if file.is_absolute() {
-        file.to_path_buf()
-    } else {
-        error!("Not support relative path");
-        let current_dir = current_working_dir();
-        current_dir.join(file)
-    };
-    file = path::normalize(&file);
-
-    // 这种只可能是传入的是一个决定路径，此时不在 workspace 路径下，则直接返回
-    if !file.starts_with(workspace) {
-        return None;
-    }
-
-    let mut top_marker = None;
-    for ancestor in file.ancestors() {
-        if root_markers
-            .iter()
-            .any(|marker| ancestor.join(marker).exists())
-        {
-            top_marker = Some(ancestor);
-        }
-
-        if ancestor == workspace {
-            debug!("~~~ {:?}", workspace);
-            // if the workspace is the CWD, let the LSP decide what the workspace
-            // is
-            return top_marker
-                .or_else(|| (!workspace_is_cwd).then_some(workspace))
-                .map(Path::to_owned);
-        }
-    }
-    debug_assert!(false, "workspace must be an ancestor of <file>");
-    None
 }
 
 pub fn find_workspace_folder_for_uri(uri: &lsp_types::Url) -> Option<(String, String)> {
@@ -259,6 +192,34 @@ pub fn find_workspace_folder_for_uri(uri: &lsp_types::Url) -> Option<(String, St
         }
     }
     None
+}
+
+/// Find the closest root directory for a file.
+/// This function searches upward from the file path to find the most specific
+/// directory that contains any of the root markers, but doesn't go beyond the git workspace.
+///
+/// Returns the most specific (closest to file) root marker directory,
+/// or the git workspace root if no markers are found.
+pub fn find_lsp_workspace(doc_path: Option<&Path>, root_markers: &[String]) -> PathBuf {
+    let Some(doc_path) = doc_path else {
+        return current_working_dir();
+    };
+
+    let (git_workspace, _) = find_workspace_for_file(doc_path);
+    let git_workspace = path::normalize(&git_workspace);
+    let current_dir = doc_path.parent().unwrap_or(doc_path);
+
+    current_dir
+        .ancestors()
+        .take_while(|ancestor| {
+            // 包含 git_workspace 本身，但不超过它
+            ancestor.starts_with(&git_workspace) || *ancestor == git_workspace
+        })
+        .find(|ancestor| {
+            root_markers.iter().any(|marker| ancestor.join(marker).exists())
+        })
+        .map(|p| p.to_path_buf())
+        .unwrap_or(git_workspace)
 }
 
 pub fn from_json<T: DeserializeOwned>(

@@ -653,6 +653,39 @@ pub(crate) async fn handle_get_commands(
     Ok(Response::new_ok(req.id.clone(), execute_commands))
 }
 
+pub(crate) async fn handle_get_workspace_info(
+    req: msg::Request,
+    _params: (),
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    use crate::lsp_ext::{LanguageServerInfo, WorkspaceInfo};
+    
+    let file_path = req.params.uri.as_ref().map(|u| u.to_string());
+    
+    if file_path.is_none() || language_servers.is_empty() {
+        return Ok(Response::new_ok(req.id.clone(), None::<WorkspaceInfo>));
+    }
+    
+    let workspace_root = language_servers[0].root_path.to_string_lossy().to_string();
+    let language_server_infos: Vec<LanguageServerInfo> = language_servers
+        .iter()
+        .map(|ls| LanguageServerInfo {
+            name: ls.name().to_string(),
+            root_path: ls.root_path.to_string_lossy().to_string(),
+            support_workspace: ls.support_workspace(),
+        })
+        .collect();
+    
+    let info = WorkspaceInfo {
+        file_path: file_path.unwrap(),
+        workspace_root,
+        language_servers: language_server_infos,
+    };
+    
+    Ok(Response::new_ok(req.id.clone(), Some(info)))
+}
+
+
 pub(crate) async fn handle_hover(
     req: msg::Request,
     params: lsp_types::HoverParams,

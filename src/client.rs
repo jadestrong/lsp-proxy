@@ -34,11 +34,8 @@ use crate::{
     msg::RequestId,
     registry,
     syntax::{LanguageServerFeature, LanguageServerFeatures},
-    utils::{
-        defer, find_lsp_workspace, find_workspace_for_file, get_activate_time, path,
-    },
+    utils::{defer, find_lsp_workspace, get_activate_time, path},
 };
-
 
 fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {
@@ -88,26 +85,12 @@ impl Client {
         doc_path: Option<&std::path::PathBuf>,
         may_support_workspace: bool,
     ) -> bool {
-        // 找到文件所属的项目目录
-        let (workspace, workspace_is_cwd) = find_workspace_for_file(doc_path.unwrap());
-        let workspace = path::normalize(&workspace);
-        // FIXME 当非 git 项目时得到的 workspace 地址是错误的
-        let root = find_lsp_workspace(
-            doc_path
-                .and_then(|x| x.parent().and_then(|x| x.to_str()))
-                .unwrap_or("."),
-            root_markers,
-            &workspace,
-            workspace_is_cwd,
-        );
+        let file_root = find_lsp_workspace(doc_path.map(|p| p.as_path()), root_markers);
+        let root_uri = lsp::Url::from_file_path(&file_root).ok();
 
-        let root_uri = root
-            .as_ref()
-            .and_then(|root| lsp::Url::from_file_path(root).ok());
-
-        // 如果 lsp_workspace root 和当前 client 的对的上，就证明这个 client 属于该文件
-        if self.root_path == root.unwrap_or(workspace)
-            || root_uri.as_ref().map_or(false, |root_uri| {
+        // Check whether the file belongs to this client
+        if self.root_path == file_root
+            || root_uri.as_ref().is_some_and(|root_uri| {
                 self.workspace_folders
                     .lock()
                     .iter()
@@ -121,27 +104,20 @@ impl Client {
             return false;
         }
 
-        // 验证服务端返回的 workspace folder FIXME 弄明白什么意思
-        let Some(capabilities) = self.capabilities.get() else {
+        // If the client supports multiple workspaces, add the workspace folder.
+        let Some(_capabilities) = self.capabilities.get() else {
             let client = Arc::clone(self);
             tokio::spawn(async move {
                 client.initialize_notify.notified().await;
-                if let Some(workspace_folders_caps) = client
-                    .capabilities()
-                    .workspace
-                    .as_ref()
-                    .and_then(|cap| cap.workspace_folders.as_ref())
-                    .filter(|cap| cap.supported.unwrap_or(false))
-                {
-                    client.add_workspace_folder(
-                        root_uri,
-                        &workspace_folders_caps.change_notifications,
-                    );
-                }
+                client.try_add_workspace_folder(root_uri);
             });
-
             return true;
         };
+        self.try_add_workspace_folder(root_uri)
+    }
+
+    fn try_add_workspace_folder(&self, root_uri: Option<lsp::Url>) -> bool {
+        let capabilities = self.capabilities();
 
         if let Some(workspace_folders_caps) = capabilities
             .workspace
@@ -180,7 +156,6 @@ impl Client {
             // and that we can therefore reuse the client (but are done now)
             return;
         }
-        // tokio::spawn();
         self.did_change_workspace(vec![workspace_for_uri(root_uri)], Vec::new())
             .unwrap();
     }
@@ -198,22 +173,17 @@ impl Client {
         doc_path: Option<&std::path::PathBuf>,
         features: Option<&LanguageServerFeatures>,
     ) -> registry::Result<(Self, UnboundedReceiver<(usize, Call)>, Arc<Notify>)> {
-        // 找出 git 目录，如果不存在，则使用当前目录
-        let (workspace, workspace_is_cwd) = find_workspace_for_file(doc_path.unwrap());
-        let workspace = path::normalize(&workspace);
-        let root = find_lsp_workspace(
-            doc_path
-                .and_then(|x| x.parent().and_then(|x| x.to_str()))
-                .unwrap_or("."),
-            root_markers,
-            &workspace,
-            workspace_is_cwd,
-        );
+        // find the closest root directory as the LSP workspace
+        let root_path = find_lsp_workspace(doc_path.map(|p| p.as_path()), root_markers);
+        let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
-        // `root_uri` and `workspace_folder` can be empty is case there is no workspace
-        // `root_url` can not, use `workspace` as a fallback
-        let root_path = root.clone().unwrap_or_else(|| workspace.clone());
-        let root_uri = root.and_then(|root| lsp::Url::from_file_path(root).ok());
+        log::debug!(
+            "Starting LSP client '{}': support_workspace={:?}, file={:?}, root={:?}",
+            name,
+            features.map(|f| f.support_workspace),
+            doc_path,
+            root_path
+        );
 
         // Resolve path to the binary
         let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
@@ -285,6 +255,13 @@ impl Client {
 
     pub fn id(&self) -> usize {
         self.id
+    }
+
+    pub fn support_workspace(&self) -> bool {
+        self.features
+            .as_ref()
+            .map(|f| f.support_workspace)
+            .unwrap_or(false)
     }
 
     pub fn config(&self) -> Option<&Value> {
@@ -965,15 +942,13 @@ impl Client {
                 lsp_types::TextDocumentSyncKind::INCREMENTAL => "incremental".to_string(),
                 _ => "none".to_string(),
             },
-            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => {
-                match options.change {
-                    Some(lsp_types::TextDocumentSyncKind::NONE) => "none".to_string(),
-                    Some(lsp_types::TextDocumentSyncKind::FULL) => "full".to_string(),
-                    Some(lsp_types::TextDocumentSyncKind::INCREMENTAL) => "incremental".to_string(),
-                    Some(_) => "none".to_string(),
-                    None => "none".to_string(),
-                }
-            }
+            Some(lsp_types::TextDocumentSyncCapability::Options(options)) => match options.change {
+                Some(lsp_types::TextDocumentSyncKind::NONE) => "none".to_string(),
+                Some(lsp_types::TextDocumentSyncKind::FULL) => "full".to_string(),
+                Some(lsp_types::TextDocumentSyncKind::INCREMENTAL) => "incremental".to_string(),
+                Some(_) => "none".to_string(),
+                None => "none".to_string(),
+            },
             None => "none".to_string(),
         }
     }
