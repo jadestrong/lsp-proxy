@@ -109,7 +109,8 @@ Or nil if none."
                               :prefix ,prefix
                               :boundsStart ,bounds-start
                               :startPoint ,(point)
-                              :triggerKind ,(if (null lsp-proxy--last-inserted-char) 1 2)))) ;; 只用来区分是否是空字符触发的，如果是空认为是主动触发，否则就是自动触发
+                              ;; Used to distinguish trigger type: 1 for manual invocation (no character), 2 for automatic trigger (character typed)
+                              :triggerKind ,(if (null lsp-proxy--last-inserted-char) 1 2))))
                           :cancel-on-input t))
                    (items (mapcar (lambda (candidate)
                                     (let* ((item (plist-get candidate :item))
