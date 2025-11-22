@@ -266,9 +266,9 @@ impl Document {
                 //     .sort_unstable_by_key(|diagnostic| diagnostic.item.range.start);
                 diags.sort_by(|a, b| {
                     if a.item.range.start.eq(&b.item.range.start) {
-                        return a.item.range.end.partial_cmp(&b.item.range.end).unwrap();
+                        a.item.range.end.partial_cmp(&b.item.range.end).unwrap()
                     } else {
-                        return a.item.range.start.partial_cmp(&b.item.range.start).unwrap();
+                        a.item.range.start.partial_cmp(&b.item.range.start).unwrap()
                     }
                 })
             }
@@ -294,7 +294,7 @@ impl Document {
         &self,
         provider: &DiagnosticProvider,
     ) -> Option<Vec<&Diagnostic>> {
-        self.diagnostics.as_ref().and_then(|diags| {
+        self.diagnostics.as_ref().map(|diags| {
             let items: Vec<&Diagnostic> = diags
                 .iter()
                 .filter_map(|diagnostic| {
@@ -304,7 +304,7 @@ impl Document {
                     None
                 })
                 .collect();
-            Some(items)
+            items
         })
     }
 

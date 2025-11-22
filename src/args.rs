@@ -28,28 +28,19 @@ impl Args {
                 },
                 "--max-item" => match argv.next().as_deref() {
                     Some(n) => {
-                        args.max_item_num = match n.parse() {
-                            Ok(n) => n,
-                            Err(_) => 20,
-                        }
+                        args.max_item_num = n.parse().unwrap_or(20)
                     }
                     None => args.max_item_num = 20,
                 },
                 "--max-diagnostics-push" => match argv.next().as_deref() {
                     Some(n) => {
-                        args.max_diagnostics_push = match n.parse() {
-                            Ok(n) => n,
-                            Err(_) => 50,
-                        }
+                        args.max_diagnostics_push = n.parse().unwrap_or(50)
                     }
                     None => args.max_diagnostics_push = 50,
                 },
                 "--log-level" => match argv.next().as_deref() {
                     Some(level) => {
-                        args.log_level = match level.parse() {
-                            Ok(num) => num,
-                            Err(_) => 1,
-                        }
+                        args.log_level = level.parse().unwrap_or(1)
                     }
                     None => anyhow::bail!("--log-level must specify to a level"),
                 },
@@ -67,7 +58,7 @@ impl Args {
                     args.show_version = true;
                     return Ok(args);
                 }
-                _ => anyhow::bail!("unknown argument: {}", arg),
+                _ => anyhow::bail!("unknown argument: {arg}"),
             }
         }
         Ok(args)

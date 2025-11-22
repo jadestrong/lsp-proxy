@@ -127,8 +127,8 @@ pub mod path {
 
     /// 判断两个给定的文件路径是否指向相同的文件或目录
     pub fn paths_are_same(path_a: &str, path_b: &str) -> bool {
-        let a = canonicalize(&path_a);
-        let b = canonicalize(&path_b);
+        let a = canonicalize(path_a);
+        let b = canonicalize(path_b);
         // let a = normalize(&path_a.expand_home().unwrap());
         // let b = normalize(&path_b.expand_home().unwrap());
         if a.exists() && b.exists() {
@@ -142,8 +142,8 @@ pub mod path {
         if paths_are_same(path_a, path_b) {
             return false;
         }
-        let a = canonicalize(&path_a);
-        let b = canonicalize(&path_b);
+        let a = canonicalize(path_a);
+        let b = canonicalize(path_b);
         // let a = normalize(&path_a.expand_home().unwrap());
         // let b = normalize(&path_b.expand_home().unwrap());
 
@@ -151,7 +151,7 @@ pub mod path {
             return false;
         }
 
-        return b.starts_with(a);
+        b.starts_with(a)
     }
 }
 
@@ -444,7 +444,7 @@ fn nested_symbols_to_imenu(symbols: &[DocumentSymbol]) -> Vec<(String, ImenuEntr
 
             match &sym.children {
                 Some(children) if !children.is_empty() => {
-                    let children_entries = nested_symbols_to_imenu(&children);
+                    let children_entries = nested_symbols_to_imenu(children);
                     let group_entry = (name.clone(), ImenuEntry::Group(children_entries));
                     vec![position_entry, group_entry]
                 }

@@ -101,12 +101,11 @@ impl<'de> Deserialize<'de> for FileType {
                         globset::Glob::new(glob.as_str())
                             .map(FileType::Glob)
                             .map_err(|err| {
-                                serde::de::Error::custom(format!("invalid `glob` pattern: {}", err))
+                                serde::de::Error::custom(format!("invalid `glob` pattern: {err}"))
                             })
                     }
                     Some((key, _value)) => Err(serde::de::Error::custom(format!(
-                        "unknown key in `file-types` list: {}",
-                        key
+                        "unknown key in `file-types` list: {key}"
                     ))),
                     None => Err(serde::de::Error::custom(
                         "expected a `suffix` key in the `file-types` entry",

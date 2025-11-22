@@ -164,7 +164,7 @@ impl Params {
     {
         let value: Value = self.into();
         serde_json::from_value(value)
-            .map_err(|err| Error::invalid_params(format!("Invalid params: {}", err)))
+            .map_err(|err| Error::invalid_params(format!("Invalid params: {err}")))
     }
 
     pub fn is_none(&self) -> bool {

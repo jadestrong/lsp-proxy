@@ -24,7 +24,7 @@ impl Jobs {
             Ok(None) => {}
             Ok(Some(call)) => call(editor),
             Err(e) => {
-                log::error!("Async job failed: {}", e);
+                log::error!("Async job failed: {e}");
             }
         }
     }

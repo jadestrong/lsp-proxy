@@ -46,8 +46,8 @@ fn setup_logging(verbosity: u64) -> Result<()> {
 
 fn main() {
     if let Err(err) = try_main() {
-        error!("Unexpected error: {}", err);
-        eprintln!("{}", err);
+        error!("Unexpected error: {err}");
+        eprintln!("{err}");
     }
 }
 
@@ -79,18 +79,18 @@ fn try_main() -> Result<()> {
     set_enable_bytecode(args.enable_bytecode);
 
     if let Err(e) = setup_logging(args.log_level) {
-        eprintln!("Failed to setup logging: {}", e);
+        eprintln!("Failed to setup logging: {e}");
         eprintln!("Error chain:");
         let mut source = e.source();
         while let Some(err) = source {
-            eprintln!("  Caused by: {}", err);
+            eprintln!("  Caused by: {err}");
             source = err.source();
         }
         return Err(e).context("failed to initialize logging");
     }
 
     info!("Server starting...");
-    with_extra_thread("LspProxy", move || run_server())?;
+    with_extra_thread("LspProxy", run_server)?;
 
     Ok(())
 }

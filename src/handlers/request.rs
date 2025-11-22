@@ -31,7 +31,7 @@ use crate::{
 };
 
 pub fn create_error_response(id: &RequestId, message: String) -> Response {
-    error!("result to response err {}", message);
+    error!("result to response err {message}");
     Response::new_err(id.clone(), jsonrpc::ErrorCode::InternalError, message)
 }
 
@@ -138,8 +138,7 @@ where
                 Err(err) => Err(err.into()),
             }
         }
-        None => Err(anyhow::Error::msg(format!(
-            "No language server available. Please check the log file by M-x lsp-proxy-open-log-file."))),
+        None => Err(anyhow::Error::msg("No language server available. Please check the log file by M-x lsp-proxy-open-log-file.".to_string())),
     }
 }
 
@@ -178,7 +177,7 @@ where
                             .collect();
                         resp = lsp_types::GotoDefinitionResponse::Array(locations);
                     }
-                    Ok(Response::new_ok(req.id, resp).into())
+                    Ok(Response::new_ok(req.id, resp))
                 }
                 Err(e) => Err(e.into()),
             },
@@ -187,7 +186,7 @@ where
     } else {
         let ls_names = language_servers.iter().map(|ls| ls.name()).join("、");
         let error_msg = if ls_names.is_empty() {
-            format!("No language server available. Please check the log file by M-x lsp-proxy-open-log-file.")
+            "No language server available. Please check the log file by M-x lsp-proxy-open-log-file.".to_string()
         } else {
             format!(
                 "Language server {:?} not support {:?}.",
@@ -210,8 +209,7 @@ pub(crate) async fn handle_goto_references(
         Some(LanguageServerFeature::GotoReference),
         None,
     )
-    .await
-    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 lazy_static! {
@@ -230,15 +228,15 @@ pub(crate) async fn handle_completion(
         let pretext = context
             .line
             .slice(0..params.text_document_position.position.character as usize);
-        debug!("prefix len {} {:?}", prefix_len, pretext);
+        debug!("prefix len {prefix_len} {pretext:?}");
         let uri = &req.params.uri.to_owned();
         let max_items = MAX_COMPLETION_ITEMS.get().unwrap_or(&20);
         if trigger_kind != &lsp_types::CompletionTriggerKind::INVOKED {
             if let Some(items) = COMPLETION_CACHE.try_lock().unwrap().get_cached_items(
-                &uri.as_ref().unwrap(),
+                uri.as_ref().unwrap(),
                 pretext,
                 &context.prefix,
-                &bounds_start,
+                bounds_start,
             ) {
                 let now = Instant::now();
                 let filtered_items = fuzzy::filter::filter(
@@ -250,9 +248,9 @@ pub(crate) async fn handle_completion(
                 debug!("filter elapsed {:0.2?}", now.elapsed());
                 let slice_length = std::cmp::min(*max_items, filtered_items.len());
                 let slice_items = &filtered_items[..slice_length];
-                if slice_items.len() > 0 {
+                if !slice_items.is_empty() {
                     debug!("return cached items");
-                    return Ok(Response::new_ok(req.id.clone(), slice_items).into());
+                    return Ok(Response::new_ok(req.id.clone(), slice_items));
                 }
             } else {
                 debug!("no cache {:?}", &bounds_start);
@@ -269,7 +267,7 @@ pub(crate) async fn handle_completion(
             .into_iter()
             .filter(|ls| {
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len != 0 {
-                    return seen_language_servers.insert(ls.id());
+                    seen_language_servers.insert(ls.id())
                 } else if ls.name() == "typescript-language-server" && pretext.ends_with(" ") {
                     // typescript-language-server 未拦截空格触发的情况，但 vscode 和 vtsls 支持拦截
                     return false;
@@ -309,7 +307,7 @@ pub(crate) async fn handle_completion(
                                 {
                                     None
                                 } else {
-                                    trigger_character.map(|c| c.clone())
+                                    trigger_character.cloned()
                                 },
                                 trigger_kind: if trigger_kind
                                     == &lsp_types::CompletionTriggerKind::INVOKED
@@ -371,7 +369,7 @@ pub(crate) async fn handle_completion(
                             },
                             language_server_name: language_server_name.clone(),
                             start: context.start_point,
-                            end: context.start_point as i32
+                            end: context.start_point
                                 + (*label_len as i32 - *prefix_len as i32),
                         }
                     })
@@ -392,7 +390,7 @@ pub(crate) async fn handle_completion(
                         }
                         Ok(None) => break,
                         Err(e) => {
-                            error!("Future Error: {}", e);
+                            error!("Future Error: {e}");
                             continue;
                         }
                     }
@@ -437,7 +435,7 @@ pub(crate) async fn handle_completion(
         info!("completion await end {:0.2?}", requst_start.elapsed());
         Ok(resp)
     } else {
-        Err(anyhow::anyhow!("Not get a completion context: {:?}.", req))
+        Err(anyhow::anyhow!("Not get a completion context: {req:?}."))
     }
 }
 
@@ -457,7 +455,7 @@ pub(crate) async fn handle_completion_resolve(
             Some(context.language_server_id),
         )
         .await
-        .and_then(|(mut resp, language_server_name)| {
+        .map(|(mut resp, language_server_name)| {
             let documentation = &resp.documentation;
             let detail = &resp.detail;
             if detail.is_some()
@@ -509,7 +507,7 @@ pub(crate) async fn handle_completion_resolve(
                         }));
                 }
             }
-            Ok(Response::new_ok(
+            Response::new_ok(
                 req.id.clone(),
                 CompletionItem {
                     item: resp,
@@ -518,7 +516,7 @@ pub(crate) async fn handle_completion_resolve(
                     start: context.start,
                     end: context.end,
                 },
-            ))
+            )
         })
     } else {
         error!("No Resolve Context {:?}", req.params);
@@ -542,9 +540,7 @@ pub(crate) async fn handle_code_action_resolve(
             None,
             Some(context.language_server_id),
         )
-        .await
-        .and_then(|(action, _)| {
-            Ok(Response::new_ok(
+        .await.map(|(action, _)| Response::new_ok(
                 req.id,
                 CodeActionOrCommandItem {
                     lsp_item: action.into(),
@@ -552,7 +548,6 @@ pub(crate) async fn handle_code_action_resolve(
                     language_server_name: format!("{:?}", context.language_server_id),
                 },
             ))
-        })
     } else {
         Err(anyhow::Error::msg(format!(
             "No CodeAction Resolve Context {:?}",
@@ -574,9 +569,9 @@ pub(crate) async fn handle_formating(
         None,
     )
     .await
-    .and_then(|(resp, _)| {
-        let edits = resp.unwrap_or_else(|| Default::default());
-        Ok(Response::new_ok(req.id.clone(), edits).into())
+    .map(|(resp, _)| {
+        let edits = resp.unwrap_or_else(Default::default);
+        Response::new_ok(req.id.clone(), edits)
     })
 }
 
@@ -602,8 +597,7 @@ pub(crate) async fn handle_execute_command(
                     None,
                     Some(context.language_server_id),
                 )
-                .await
-                .and_then(|_| Ok(Response::new_ok(req.id, "")));
+                .await.map(|_| Response::new_ok(req.id, ""));
             }
         }
         call_single_language_server::<lsp_types::request::ExecuteCommand>(
@@ -613,8 +607,7 @@ pub(crate) async fn handle_execute_command(
             None,
             Some(context.language_server_id),
         )
-        .await
-        .and_then(|_| Ok(Response::new_ok(req.id, "")))
+        .await.map(|_| Response::new_ok(req.id, ""))
     } else {
         Err(anyhow::Error::msg(format!(
             "No context params of {:?}",
@@ -685,7 +678,6 @@ pub(crate) async fn handle_get_workspace_info(
     Ok(Response::new_ok(req.id.clone(), Some(info)))
 }
 
-
 pub(crate) async fn handle_hover(
     req: msg::Request,
     params: lsp_types::HoverParams,
@@ -749,10 +741,7 @@ pub(crate) async fn handle_signature_help(
 
     let results: Vec<lsp_types::SignatureHelp> = resps
         .into_iter()
-        .filter_map(|resp| match resp {
-            Some(signature_help) => Some(signature_help),
-            None => None,
-        })
+        .flatten()
         .collect();
     Ok(Response::new_ok(req.id, results.first()))
 }
@@ -793,7 +782,7 @@ pub(crate) async fn handle_code_action(
                         trigger_kind: Some(lsp_types::CodeActionTriggerKind::INVOKED),
                     };
 
-                    if code_action_context.diagnostics.len() == 0 {
+                    if code_action_context.diagnostics.is_empty() {
                         return None;
                     }
 
@@ -905,7 +894,7 @@ pub(crate) async fn handle_code_action(
         Err(e) => {
             let resp = create_error_response(
                 &req.id,
-                format!("parse code action error {}", e.to_string()),
+                format!("parse code action error {e}"),
             );
             response_sender.send(resp.into()).unwrap();
         }
@@ -918,8 +907,7 @@ pub(crate) async fn handle_view_file_text(
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
     call_first_language_server::<lsp_ext::ViewFileText>(&req, params, &language_servers)
-        .await
-        .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+        .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_inlay_hints(
@@ -934,8 +922,7 @@ pub(crate) async fn handle_inlay_hints(
         Some(LanguageServerFeature::InlayHints),
         None,
     )
-    .await
-    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_document_highlight(
@@ -950,8 +937,7 @@ pub(crate) async fn handle_document_highlight(
         Some(LanguageServerFeature::DocumentHighlight),
         None,
     )
-    .await
-    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_rename(
@@ -966,8 +952,7 @@ pub(crate) async fn handle_rename(
         Some(LanguageServerFeature::RenameSymbol),
         None,
     )
-    .await
-    .and_then(|(resp, _)| Ok(Response::new_ok(req.id.clone(), resp)))
+    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_document_symbols(
@@ -983,10 +968,10 @@ pub(crate) async fn handle_document_symbols(
         None,
     )
     .await
-    .and_then(|(resp, _)| {
+    .map(|(resp, _)| {
         let mut result = lsp_symbols_to_imenu(resp);
-        let _ = sort_imenu_entries_grouped(&mut result);
-        Ok(Response::new_ok(req.id.clone(), result))
+        sort_imenu_entries_grouped(&mut result);
+        Response::new_ok(req.id.clone(), result)
     })
 }
 

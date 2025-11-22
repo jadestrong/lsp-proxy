@@ -127,12 +127,10 @@ impl Handler {
                     options: ops,
                 } => {
                     log::debug!(
-                        "Registering didChangeWatchedFiles for client '{}' with id '{}'",
-                        client_id,
-                        registration_id,
+                        "Registering didChangeWatchedFiles for client '{client_id}' with id '{registration_id}'",
                     );
 
-                    let entry = state.entry(client_id).or_insert_with(ClientState::default);
+                    let entry = state.entry(client_id).or_default();
                     entry.client = client;
 
                     let mut builder = GlobSetBuilder::new();
@@ -165,9 +163,7 @@ impl Handler {
                     registration_id,
                 } => {
                     log::debug!(
-                        "Unregistering didChangeWatchedFiles with id '{}' for client '{}'",
-                        registration_id,
-                        client_id
+                        "Unregistering didChangeWatchedFiles with id '{registration_id}' for client '{client_id}'"
                     );
                     if let Some(client_state) = state.get_mut(&client_id) {
                         client_state.registered.remove(&registration_id);

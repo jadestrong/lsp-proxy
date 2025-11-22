@@ -31,7 +31,7 @@ fn compare_substring(
     } else if a_len > b_len {
         return 1;
     }
-    return 0;
+    0
 }
 
 fn compare_substring_ignore_case(
@@ -78,9 +78,9 @@ fn compare_substring_ignore_case(
     } else if a_len > b_len {
         return 1;
     }
-    return 0;
+    0
 }
 
 fn is_lower_ascii_letter(code: u32) -> bool {
-    code >= 97 && code <= 122
+    (97..=122).contains(&code)
 }

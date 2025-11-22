@@ -145,7 +145,6 @@ impl Request for GetWorkspaceInfo {
     const METHOD: &'static str = "emacs/getWorkspaceInfo";
 }
 
-
 // $/progress
 #[derive(Debug)]
 pub enum CustomProgress {}

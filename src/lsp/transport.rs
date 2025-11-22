@@ -119,7 +119,7 @@ impl Transport {
                         match tx.send(Err(Error::StreamClosed)).await {
                             Ok(_) => (),
                             Err(_) => {
-                                error!("Could not close request on a closed channel (id={:?})", id)
+                                error!("Could not close request on a closed channel (id={id:?})")
                             }
                         }
                     }
@@ -137,7 +137,7 @@ impl Transport {
                     {
                         Ok(_) => {}
                         Err(err) => {
-                            error!("stream closed err: <- {:?}", err);
+                            error!("stream closed err: <- {err:?}");
                         }
                     }
                     break;
@@ -319,7 +319,7 @@ impl Transport {
         if err.read_line(buffer).await? == 0 {
             return Err(Error::StreamClosed);
         };
-        logger.log_error(&buffer.trim());
+        logger.log_error(buffer.trim());
         Ok(())
     }
 
@@ -361,14 +361,12 @@ impl Transport {
             match tx.send(result).await {
                 Ok(_) => (),
                 Err(_) => error!(
-                    "Tried sending response into a closed channel (id={:?}), original request likely timed out",
-                    id,
+                    "Tried sending response into a closed channel (id={id:?}), original request likely timed out",
                 ),
             };
         } else {
             error!(
-                "Discarding Language Server response without a request (id={:?})",
-                id
+                "Discarding Language Server response without a request (id={id:?})"
             );
         }
 

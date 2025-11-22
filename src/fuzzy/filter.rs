@@ -42,7 +42,7 @@ pub fn filter(
         let mut word_low = String::new();
         // server return start.character maybe great than client position.character, some as input "<" in html/tsx
         let word_len = if position.character < start_character {
-            error!("unexpect start_character {:?}", pretext);
+            error!("unexpect start_character {pretext:?}");
             0
         } else {
             position.character - start_character
@@ -66,12 +66,12 @@ pub fn filter(
         } else {
             let mut word_pos: usize = 0;
             while word_pos < word_len as usize {
-                let ch = word.chars().nth(word_pos as usize);
+                let ch = word.chars().nth(word_pos);
                 if ch.is_none() {
-                    error!("position {:?}", position);
+                    error!("position {position:?}");
                     error!("item {:?}", item.item);
-                    error!("word = {:?}", word);
-                    error!("unexpect word_pos {:?} word_len {:?}", word_pos, word_len);
+                    error!("word = {word:?}");
+                    error!("unexpect word_pos {word_pos:?} word_len {word_len:?}");
                 }
                 let code = u32::from(ch.unwrap());
                 if code == 32 || code == 9 {
@@ -97,7 +97,7 @@ pub fn filter(
                     FuzzyScoreOptions::default(),
                 );
                 if let Some(score) = score {
-                    if compare_ignore_case(&filter_text, &item.item.label) == 0 {
+                    if compare_ignore_case(filter_text, &item.item.label) == 0 {
                         arr.push(MatchCompletionItem {
                             score,
                             origin_item: item.clone(),
@@ -137,8 +137,8 @@ pub fn filter(
     }
     arr.sort_by(|a, b| {
         let (FuzzyScore(a0, a1, _), FuzzyScore(b0, b1, _)) = (&a.score, &b.score);
-        match a0.cmp(&b0).reverse() {
-            Ordering::Equal => match a1.cmp(&b1) {
+        match a0.cmp(b0).reverse() {
+            Ordering::Equal => match a1.cmp(b1) {
                 Ordering::Equal => {
                     let a_sort_text = a
                         .origin_item

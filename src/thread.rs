@@ -28,7 +28,7 @@ impl Builder {
         F: Send + 'static,
         T: Send + 'static,
     {
-        let inner_handle = self.inner.spawn(move || f())?;
+        let inner_handle = self.inner.spawn(f)?;
 
         Ok(JoinHandle {
             inner: Some(inner_handle),

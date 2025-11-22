@@ -111,7 +111,7 @@ fn is_pattern_in_word(
     fill_min_word_pos_arr: bool,
 ) -> bool {
     while pattern_pos < pattern_len && word_pos < word_len {
-        if pattern_low.chars().nth(pattern_pos as usize) == word_low.chars().nth(word_pos as usize)
+        if pattern_low.chars().nth(pattern_pos) == word_low.chars().nth(word_pos)
         {
             if fill_min_word_pos_arr {
                 unsafe {
@@ -159,8 +159,8 @@ fn is_whitespace_at_pos(value: &str, index: usize) -> bool {
 // Function to check if a character at a specific position in 'word' is uppercase
 fn is_upper_case_at_pos(pos: usize, word: &str, word_low: &str) -> bool {
     if let (Some(ch), Some(ch_low)) = (
-        word.chars().nth(pos as usize),
-        word_low.chars().nth(pos as usize),
+        word.chars().nth(pos),
+        word_low.chars().nth(pos),
     ) {
         ch != ch_low && ch.to_ascii_uppercase() == ch
     } else {
@@ -232,12 +232,10 @@ fn _do_score(
         if word_pos > word_start {
             score -= if is_gap_location { 3 } else { 5 };
         }
+    } else if new_match_start {
+        score += if is_gap_location { 2 } else { 0 };
     } else {
-        if new_match_start {
-            score += if is_gap_location { 2 } else { 0 };
-        } else {
-            score += if is_gap_location { 0 } else { 1 };
-        }
+        score += if is_gap_location { 0 } else { 1 };
     }
 
     if word_pos + 1 == word_len {
@@ -455,10 +453,7 @@ pub fn matches_fuzzy(pattern: &str, word: &str) -> Option<Vec<IMatch>> {
             boost_full_match: true,
         },
     );
-    match score {
-        Some(score) => Some(create_matches(Some(score))),
-        None => None,
-    }
+    score.map(|score| create_matches(Some(score)))
 }
 
 // Assuming fuzzy_score function is defined elsewhere
@@ -514,7 +509,7 @@ mod test {
         let pattern_pos = opts.map_or(0, |o| o.pattern_pos.unwrap_or(0));
         let word_pos = opts.map_or(0, |o| o.word_pos.unwrap_or(0));
         let first_match_can_be_weak =
-            opts.map_or(false, |o| o.first_match_can_be_weak.unwrap_or(false));
+            opts.is_some_and(|o| o.first_match_can_be_weak.unwrap_or(false));
 
         let filter_opts = FuzzyScoreOptions {
             first_match_can_be_weak,

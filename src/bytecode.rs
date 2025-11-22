@@ -30,7 +30,7 @@ impl FromStr for LispObject {
         } else if s.starts_with(":") {
             Ok(Self::Keyword(s[1..].to_string()))
         } else {
-            bail!("Supported LispObject: {}", s)
+            bail!("Supported LispObject: {s}")
         }
     }
 }
@@ -39,7 +39,7 @@ impl LispObject {
     fn to_repl(&self) -> String {
         match self {
             LispObject::Symbol(s) => s.clone(),
-            LispObject::Keyword(s) => format!(":{}", s),
+            LispObject::Keyword(s) => format!(":{s}"),
             LispObject::Str(s) => {
                 let mut result = String::new();
                 result.reserve(s.len() * 2 + 2);
@@ -141,26 +141,26 @@ enum Op {
 
 impl Op {
     fn get_stack_delta(&self) -> i32 {
-        match self {
-            &Self::PushConstant(_) => 1,
-            &Self::Call(n) => -(n as i32 + 1) + 1,
-            &Self::StackRef(_) => 1,
-            &Self::List(n) => -(n as i32) + 1,
-            &Self::Discard => -1,
-            &Self::ASet => -3 + 1,
-            &Self::Add1 => 0,
-            &Self::Cons => -2 + 1,
-            &Self::Return => -1,
+        match *self {
+            Self::PushConstant(_) => 1,
+            Self::Call(n) => -(n as i32 + 1) + 1,
+            Self::StackRef(_) => 1,
+            Self::List(n) => -(n as i32) + 1,
+            Self::Discard => -1,
+            Self::ASet => -3 + 1,
+            Self::Add1 => 0,
+            Self::Cons => -2 + 1,
+            Self::Return => -1,
         }
     }
 
     fn to_code(&self) -> Result<smallvec::SmallVec<[u8; 3]>> {
-        match self {
-            &Self::PushConstant(v) if v < 64 => Ok(smallvec![(192 + v) as u8]),
-            &Self::PushConstant(v) if v < CV_NORMAL_SLOT_COUNT => {
+        match *self {
+            Self::PushConstant(v) if v < 64 => Ok(smallvec![(192 + v) as u8]),
+            Self::PushConstant(v) if v < CV_NORMAL_SLOT_COUNT => {
                 Ok(smallvec![129, (v & 0xff) as u8, (v >> 8) as u8])
             }
-            &Self::PushConstant(v)
+            Self::PushConstant(v)
                 if v < (CV_NORMAL_SLOT_COUNT
                     + CV_TWO_LEVEL_VECTOR_SIZE * CV_TWO_LEVEL_VECTOR_SIZE) =>
             {
@@ -187,20 +187,20 @@ impl Op {
 
                 Ok(result)
             }
-            &Self::PushConstant(v) => bail!("Too many constants! {}", v),
-            &Self::Call(v) if v <= 5 => Ok(smallvec![(32 + v) as u8]),
-            &Self::Call(v) if v < (1 << 8) => Ok(smallvec![(32 + 6) as u8, v as u8]),
-            &Self::Call(v) => Ok(smallvec![(32 + 7) as u8, (v & 0xff) as u8, (v >> 8) as u8]),
-            &Self::StackRef(v) if (1..=4).contains(&v) => Ok(smallvec![v as u8]),
-            &Self::StackRef(_) => unimplemented!(),
-            &Self::List(v) if v == 0 => unreachable!(),
-            &Self::List(v) if (1..=4).contains(&v) => Ok(smallvec![66 + v]),
-            &Self::List(v) => Ok(smallvec![175, v]),
-            &Self::Discard => Ok(smallvec![136]),
-            &Self::ASet => Ok(smallvec![73]),
-            &Self::Add1 => Ok(smallvec![84]),
-            &Self::Cons => Ok(smallvec![66]),
-            &Self::Return => Ok(smallvec![135]),
+            Self::PushConstant(v) => bail!("Too many constants! {v}"),
+            Self::Call(v) if v <= 5 => Ok(smallvec![(32 + v) as u8]),
+            Self::Call(v) if v < (1 << 8) => Ok(smallvec![(32 + 6) as u8, v as u8]),
+            Self::Call(v) => Ok(smallvec![(32 + 7) as u8, (v & 0xff) as u8, (v >> 8) as u8]),
+            Self::StackRef(v) if (1..=4).contains(&v) => Ok(smallvec![v as u8]),
+            Self::StackRef(_) => unimplemented!(),
+            Self::List(v) if v == 0 => unreachable!(),
+            Self::List(v) if (1..=4).contains(&v) => Ok(smallvec![66 + v]),
+            Self::List(v) => Ok(smallvec![175, v]),
+            Self::Discard => Ok(smallvec![136]),
+            Self::ASet => Ok(smallvec![73]),
+            Self::Add1 => Ok(smallvec![84]),
+            Self::Cons => Ok(smallvec![66]),
+            Self::Return => Ok(smallvec![135]),
         }
     }
 }
@@ -291,7 +291,7 @@ impl BytecodeCompiler {
     ) {
         let list_len = if alist { map.len() } else { map.len() * 2 };
         // see below
-        if list_len < (1 << 16) && list_len >= (1 << 8) {
+        if ((1 << 8)..(1 << 16)).contains(&list_len) {
             self.compile_constant_op(LispObject::Symbol("list".into()));
         }
 
@@ -350,24 +350,24 @@ impl BytecodeCompiler {
             &json::Value::Bool(true) => {
                 self.compile_constant_op(LispObject::T);
             }
-            &json::Value::Number(ref num) => {
+            json::Value::Number(num) => {
                 if num.is_f64() {
                     self.compile_constant_op(LispObject::Float(num.to_string()));
                 } else {
                     self.compile_constant_op(LispObject::Int(num.as_i64().unwrap()));
                 }
             }
-            &json::Value::String(ref s) => {
+            json::Value::String(s) => {
                 self.compile_constant_op(LispObject::Str(s.clone()));
             }
-            &json::Value::Array(ref arr) => {
-                self.compile_value_array(&arr);
+            json::Value::Array(arr) => {
+                self.compile_value_array(arr);
             }
-            &json::Value::Object(ref map) => {
+            json::Value::Object(map) => {
                 match self.options.object_type {
-                    ObjectType::Plist => self.compile_value_map_plist_or_alist(&map, false),
-                    ObjectType::Alist => self.compile_value_map_plist_or_alist(&map, true),
-                    ObjectType::Hashtable => self.compile_value_map_hashtable(&map),
+                    ObjectType::Plist => self.compile_value_map_plist_or_alist(map, false),
+                    ObjectType::Alist => self.compile_value_map_plist_or_alist(map, true),
+                    ObjectType::Hashtable => self.compile_value_map_hashtable(map),
                 };
             }
         }

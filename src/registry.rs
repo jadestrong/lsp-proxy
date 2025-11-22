@@ -160,8 +160,7 @@ impl Registry {
 
                 // 创建新客户端
                 debug!(
-                    "Creating new client '{}': support_workspace={}, file={:?}",
-                    name, support_workspace, doc_path
+                    "Creating new client '{name}': support_workspace={support_workspace}, file={doc_path:?}"
                 );
                 match self.start_client(name.clone(), language_config, doc_path) {
                     Ok(client) => {
@@ -320,7 +319,7 @@ fn start_client(
             .await;
 
         if let Err(e) = value {
-            error!("failed to initialize language server: {}", e);
+            error!("failed to initialize language server: {e}");
             return;
         }
         // debug!("server {:?} capabilities {:?}", _client.name(), value.ok());

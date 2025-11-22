@@ -38,7 +38,7 @@ impl Editor {
     /// Else create it, and launch langauge server for this document
     pub fn get(&mut self, uri: &Url) -> &mut Document {
         let doc_id = self
-            .document_by_uri(&uri)
+            .document_by_uri(uri)
             .map(|doc| doc.id)
             .unwrap_or_else(|| self.new_document(uri).id);
 
@@ -73,7 +73,7 @@ impl Editor {
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
         if cfg!(target_os = "windows") {
             self.documents()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(&uri))
+                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
         } else {
             self.documents().find(|doc| doc.uri() == uri)
         }
@@ -82,7 +82,7 @@ impl Editor {
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
         if cfg!(target_os = "windows") {
             self.documents_mut()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(&uri))
+                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
         } else {
             self.documents_mut().find(|doc| doc.uri() == uri)
         }
@@ -131,7 +131,7 @@ impl Editor {
             doc.language_servers.iter().filter(|(name, doc_ls)| {
                 language_servers
                     .get(*name)
-                    .map_or(true, |ls| ls.id() != doc_ls.id())
+                    .is_none_or(|ls| ls.id() != doc_ls.id())
             });
 
         for (_, language_server) in doc_language_servers_not_in_registry {

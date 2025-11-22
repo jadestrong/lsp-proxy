@@ -32,7 +32,6 @@ pub fn initialize_config_file(specified_file: Option<PathBuf>) {
     if let Some(file) = specified_file {
         if file.exists() && file.is_file() {
             CONFIG_FILE.set(file).unwrap();
-            return;
         }
     }
 }
@@ -103,13 +102,12 @@ pub fn default_syntax_loader() -> syntax::Configuration {
         .try_into::<syntax::Configuration>()
     {
         Ok(config) => {
-            debug!("serialized config {:?}", config);
+            debug!("serialized config {config:?}");
             config
         }
         Err(err) => {
             panic!(
-                "Cound not serialize your custom languages.toml: {}",
-                err.to_string()
+                "Cound not serialize your custom languages.toml: {err}"
             )
         }
     };

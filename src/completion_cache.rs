@@ -74,7 +74,7 @@ impl CompletionCache {
                     debug!("ignore cache2");
                     return None;
                 }
-                debug!("new_pretext {} ~~~ {}", new_pretext, pretext);
+                debug!("new_pretext {new_pretext} ~~~ {pretext}");
                 if uri == new_uri
                     && new_pretext.starts_with(pretext)
                     && new_bounds_start == bounds_start

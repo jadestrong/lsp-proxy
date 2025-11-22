@@ -150,23 +150,21 @@ impl Application {
                 let reply = match MethodCall::parse(&method, params) {
                     Err(lsp::Error::Unhandled) => {
                         error!(
-                            "Language Server: Method {} not found in request {}",
-                            method, id
+                            "Language Server: Method {method} not found in request {id}"
                         );
                         Err(jsonrpc::Error {
                             code: jsonrpc::ErrorCode::MethodNotFound,
-                            message: format!("Method not found: {}", method),
+                            message: format!("Method not found: {method}"),
                             data: None,
                         })
                     }
                     Err(err) => {
                         error!(
-                            "Language Server: Received malformed method call {} in request {}: {}",
-                            method, id, err
+                            "Language Server: Received malformed method call {method} in request {id}: {err}"
                         );
                         Err(jsonrpc::Error {
                             code: jsonrpc::ErrorCode::ParseError,
-                            message: format!("Malformed method call: {}", method),
+                            message: format!("Malformed method call: {method}"),
                             data: None,
                         })
                     }
@@ -180,7 +178,7 @@ impl Application {
                             self.send_request::<lsp_types::request::ApplyWorkspaceEdit>(
                                 params,
                                 |_, res| {
-                                    debug!("res {:?}", res);
+                                    debug!("res {res:?}");
                                 },
                             );
                             Ok(json!(lsp_types::ApplyWorkspaceEditResponse {
@@ -322,7 +320,7 @@ impl Application {
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::ShowMessageRequest(params)) => {
-                        log::warn!("unhandled window/showMessageRequest: {:?}", params);
+                        log::warn!("unhandled window/showMessageRequest: {params:?}");
                         let log_message = LogMessageParams {
                             typ: params.typ,
                             message: params.message,
@@ -339,15 +337,13 @@ impl Application {
                     Ok(notification) => notification,
                     Err(crate::registry::Error::Unhandled) => {
                         info!(
-                            "Ignoring unhandled notification from Language Server {:?}",
-                            method
+                            "Ignoring unhandled notification from Language Server {method:?}"
                         );
                         return;
                     }
                     Err(err) => {
                         error!(
-                            "Ignoring unknown notification from Language Server: {}",
-                            err
+                            "Ignoring unknown notification from Language Server: {err}"
                         );
                         return;
                     }
@@ -364,7 +360,7 @@ impl Application {
                                 .did_change_configuration(config.clone())
                                 .unwrap();
                         }
-                        let docs = self
+                        self
                             .editor
                             .documents()
                             .filter(|doc| {
@@ -405,7 +401,7 @@ impl Application {
                         let old_diagnostics = doc.get_diagnostics_by_provider(&provider);
                         if old_diagnostics.is_none()
                             || !is_diagnostic_vectors_equal(
-                                &old_diagnostics.as_ref().unwrap(),
+                                old_diagnostics.as_ref().unwrap(),
                                 &params.diagnostics,
                             )
                         {
@@ -538,7 +534,7 @@ impl Application {
                             self.send_notification::<lsp_types::notification::ShowMessage>(
                                 lsp_types::ShowMessageParams {
                                     typ: lsp_types::MessageType::ERROR,
-                                    message: format!("[Vue] No tsserver to forward {:?}", params),
+                                    message: format!("[Vue] No tsserver to forward {params:?}"),
                                 },
                             );
                         }
@@ -546,7 +542,7 @@ impl Application {
                 }
             }
             Call::Invalid { id } => {
-                log::error!("Invalid {:?}", id);
+                log::error!("Invalid {id:?}");
                 panic!("Invalid Call");
             }
         }
@@ -581,7 +577,7 @@ impl Application {
                             syntax::LanguageServerFeature::PullDiagnostics,
                         );
                         let sender = self.sender.clone();
-                        let doc_id = doc.id().clone();
+                        let doc_id = doc.id();
                         let previous_result_id = doc.previous_diagnostic_id.clone();
 
                         tokio::spawn(async move {
@@ -626,7 +622,7 @@ impl Application {
                                         sender.clone(),
                                         provider,
                                         result,
-                                        doc_id.clone(),
+                                        doc_id,
                                     )
                                     .await;
                                 }
@@ -796,7 +792,7 @@ impl Application {
     }
 
     fn handle_workspace_restart(&mut self, req: &msg::Request) {
-        match self.get_working_document(&req) {
+        match self.get_working_document(req) {
             Ok(doc) => {
                 let config = doc.language_config().unwrap().clone();
                 let doc_path = doc.path();

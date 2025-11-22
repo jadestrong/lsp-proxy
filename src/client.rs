@@ -9,7 +9,6 @@ use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
-    path::PathBuf,
     process::Stdio,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -34,14 +33,14 @@ use crate::{
     msg::RequestId,
     registry,
     syntax::{LanguageServerFeature, LanguageServerFeatures},
-    utils::{defer, find_lsp_workspace, get_activate_time, path},
+    utils::{defer, find_lsp_workspace, get_activate_time},
 };
 
 fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
     lsp::WorkspaceFolder {
         name: uri
             .path_segments()
-            .and_then(|segments| segments.last())
+            .and_then(|mut segments| segments.next_back())
             .map(|basename| basename.to_string())
             .unwrap_or_default(),
         uri,
@@ -209,10 +208,10 @@ impl Client {
             Transport::start(reader, writer, stderr, id, name.clone());
 
         if let Some(features) = features {
-            if features.config_files.len() > 0
+            if !features.config_files.is_empty()
                 && !features.config_files.iter().any(|config_file| {
                     // "Check if the root + config file exists."
-                    let config_file_path = PathBuf::from(root_path.clone()).join(config_file);
+                    let config_file_path = root_path.clone().join(config_file);
                     config_file_path.exists()
                 })
             {
@@ -242,7 +241,7 @@ impl Client {
             workspace_folders: Mutex::new(workspace_folders),
             initialize_notify: initialize_notify.clone(),
             req_timeout,
-            features: features.map(|v| v.clone()),
+            features: features.cloned(),
             activate_time: Arc::new(Mutex::new(get_activate_time())),
         };
 
@@ -277,7 +276,7 @@ impl Client {
     fn next_request_id(&self) -> RequestId {
         let id = self.request_counter.fetch_add(1, Ordering::Relaxed);
         // avoid duplicate with emacs request
-        RequestId::from(format!("req{:?}", id))
+        RequestId::from(format!("req{id:?}"))
     }
 
     fn value_into_params(value: Value) -> jsonrpc::Params {
@@ -546,7 +545,7 @@ impl Client {
 
     pub(crate) async fn initialize(&self, enable_snippets: bool) -> Result<lsp::InitializeResult> {
         if let Some(config) = &self.config {
-            debug!("Using custom LSP config: {}", config);
+            debug!("Using custom LSP config: {config}");
         }
 
         #[allow(deprecated)]
@@ -740,7 +739,7 @@ impl Client {
     /// Forcefully shuts down the language server ignoring any errors.
     pub async fn force_shutdown(&self) -> Result<()> {
         if let Err(e) = self.shutdown().await {
-            log::warn!("language server failed to terminate gracefully - {}", e);
+            log::warn!("language server failed to terminate gracefully - {e}");
         }
         self.exit()
     }
@@ -825,7 +824,7 @@ impl Client {
             Some(lsp_types::TextDocumentSyncCapability::Options(options)) => options
                 .save
                 .as_ref()
-                .map_or(false, |save_options| match save_options {
+                .is_some_and(|save_options| match save_options {
                     lsp_types::TextDocumentSyncSaveOptions::Supported(supported) => *supported,
                     lsp_types::TextDocumentSyncSaveOptions::SaveOptions(_) => true,
                 }),

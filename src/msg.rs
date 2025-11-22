@@ -378,7 +378,7 @@ fn read_msg_text(inp: &mut dyn BufRead) -> io::Result<Option<String>> {
 }
 
 fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
-    write!(out, "Content-Length: {}\r\n\r\n", msg.as_bytes().len())?;
+    write!(out, "Content-Length: {}\r\n\r\n", msg.len())?;
     out.write_all(msg.as_bytes())?;
     out.flush()?;
     Ok(())

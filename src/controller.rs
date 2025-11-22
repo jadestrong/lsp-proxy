@@ -52,16 +52,14 @@ impl Controller {
                                 if REQUEST_WHITELIST.contains(&req.method.as_str()) {
                                     self.register_request(&req, now);
                                     self.sender_for_server.send(req.into()).unwrap();
+                                } else if !self.processing_requests.contains_key(&req.method) {
+                                    debug!("No pending request of type {}, register and process {:?}", req.method, req.id);
+                                    self.register_request(&req, now);
+                                    self.processing_requests.insert(req.method.clone(), req.clone());
+                                    self.sender_for_server.send(req.into()).unwrap();
                                 } else {
-                                    if !self.processing_requests.contains_key(&req.method) {
-                                        debug!("No pending request of type {}, register and process {:?}", req.method, req.id);
-                                        self.register_request(&req, now);
-                                        self.processing_requests.insert(req.method.clone(), req.clone());
-                                        self.sender_for_server.send(req.into()).unwrap();
-                                    } else {
-                                        debug!("Has pending request of type {}, register {:?}", req.method, req.id);
-                                        self.register_request(&req, now);
-                                    }
+                                    debug!("Has pending request of type {}, register {:?}", req.method, req.id);
+                                    self.register_request(&req, now);
                                 }
                             },
                             Message::Response(resp) => {
@@ -92,7 +90,7 @@ impl Controller {
                             }
                         },
                         Err(err) => {
-                            error!("server error {:?}", err);
+                            error!("server error {err:?}");
                             std::panic::panic_any(msg)
                         },
                     }
@@ -203,9 +201,7 @@ impl Controller {
                     );
                 } else {
                     debug!(
-                        "request {} was canceled, processing next request of type {}",
-                        id,
-                        method
+                        "request {id} was canceled, processing next request of type {method}"
                     );
                 }
                 
@@ -229,7 +225,7 @@ impl Controller {
             self.sender_for_server.send(req.clone().into()).unwrap();
             self.processing_requests.insert(method.to_string(), req);
         } else {
-            debug!("no more pending requests of type {}", method);
+            debug!("no more pending requests of type {method}");
         }
     }
 }

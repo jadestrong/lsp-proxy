@@ -67,7 +67,7 @@ impl<I> Incoming<I> {
     }
 
     pub fn entries(&self) -> Vec<(&RequestId, &I)> {
-        self.pending.iter().map(|(k, v)| (k, v)).collect()
+        self.pending.iter().collect()
     }
 
     pub fn is_empty(&self) -> bool {

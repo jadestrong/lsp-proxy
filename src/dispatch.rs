@@ -74,7 +74,7 @@ impl RequestDispatcher {
 
     pub(crate) fn finish(&mut self) {
         if let Some(req) = self.req.take() {
-            error!("unknown request: {:?}", req);
+            error!("unknown request: {req:?}");
             let response = Response::new_err(
                 req.id,
                 jsonrpc::ErrorCode::MethodNotFound,
@@ -122,7 +122,7 @@ impl NotificationDispatcher<'_> {
     pub(crate) fn finish(&mut self) {
         if let Some(not) = &self.not {
             if !not.method.starts_with("$/") {
-                error!("unhandled notification: {:?}", not);
+                error!("unhandled notification: {not:?}");
             }
         }
     }

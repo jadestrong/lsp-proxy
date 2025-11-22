@@ -174,7 +174,7 @@ pub fn init_tracing(log_level: u64) -> anyhow::Result<()> {
     let log_file_path = log_file();
     let log_dir = log_file_path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("Invalid log file path: {:?}", log_file_path))?;
+        .ok_or_else(|| anyhow::anyhow!("Invalid log file path: {log_file_path:?}"))?;
     let log_filename = log_file_path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -186,7 +186,7 @@ pub fn init_tracing(log_level: u64) -> anyhow::Result<()> {
         .filename_prefix(log_filename)
         .filename_suffix("log")
         .build(log_dir)
-        .map_err(|e| anyhow::anyhow!("Failed to create file appender: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to create file appender: {e}"))?;
 
     // Create non-blocking writer for better performance
     let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
@@ -204,7 +204,7 @@ pub fn init_tracing(log_level: u64) -> anyhow::Result<()> {
         .with_writer(file_writer)
         .with_env_filter(env_filter)
         .try_init()
-        .map_err(|e| anyhow::anyhow!("Failed to initialize tracing subscriber: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to initialize tracing subscriber: {e}"))?;
 
     // Store the guard to prevent the non_blocking writer from being dropped
     std::mem::forget(_guard);
