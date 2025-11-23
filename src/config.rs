@@ -71,23 +71,14 @@ pub fn user_lang_config() -> Result<toml::Value, toml::de::Error> {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .fold(default_lang_config(), |a, b| {
-                // combines for example
-                // b:
-                //   [[language]]
-                //   name = "toml"
-                //   language-server = { command = "taplo", args = ["lsp", "stdio"] }
-                //
-                // a:
-                //   [[language]]
-                //   language-server = { command = "/usr/bin/taplo" }
-                //
-                // into:
-                //   [[language]]
-                //   name = "toml"
-                //   language-server = { command = "/usr/bin/taplo" }
-                //
-                // thus it overrides the third depth-level of b with values of a if they exist, but otherwise merges their values
-                merge_toml_values(a, b, 3)
+                // Merge user config (a) into default config (b)
+                // Depth 5 allows merging:
+                // 1. [[language]] arrays
+                // 2. [language-server.xxx] tables
+                // 3. config/args/environment tables
+                // 4. nested config options (e.g., config.typescript.preferences)
+                // 5. deep nested options
+                merge_toml_values(a, b, 5)
             });
         Ok(config)
     } else {
