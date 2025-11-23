@@ -254,9 +254,14 @@ where
 {
     let mut serializer = serializer.serialize_seq(Some(map.len()))?;
     for features in map {
-        let features = if features.only.is_empty() && features.excluded.is_empty() {
-            LanguageServerFeatureConfiguration::Simple(features.name.to_owned())
-        } else {
+        // Check if we need to use the full Features variant
+        let has_non_default_fields = !features.only.is_empty()
+            || !features.excluded.is_empty()
+            || features.support_workspace
+            || !features.library_directories.is_empty()
+            || !features.config_files.is_empty();
+        
+        let features = if has_non_default_fields {
             LanguageServerFeatureConfiguration::Features {
                 only_features: features.only.clone(),
                 except_features: features.excluded.clone(),
@@ -265,6 +270,8 @@ where
                 library_directories: features.library_directories.clone(),
                 config_files: features.config_files.clone(),
             }
+        } else {
+            LanguageServerFeatureConfiguration::Simple(features.name.to_owned())
         };
         serializer.serialize_element(&features)?;
     }
