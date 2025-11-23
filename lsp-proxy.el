@@ -292,7 +292,13 @@ Skip reopening notifications for buffers not currently visible."
   (when lsp-proxy--highlights
     (mapc #'delete-overlay lsp-proxy--highlights))
   ;; clear current buffer's inlay hints
-  (remove-overlays nil nil 'lsp-proxy--inlay-hint t))
+  (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
+  (setq-local lsp-proxy--support-inlay-hints nil)
+  (setq-local lsp-proxy--support-document-highlight nil)
+  (setq-local lsp-proxy--support-document-symbols nil)
+  (setq-local lsp-proxy--support-signature-help nil)
+  (setq-local lsp-proxy--support-pull-diagnostic nil)
+  (setq-local lsp-proxy--support-hover nil))
 
 (defun lsp-proxy--mode-exit ()
   "Clean up lsp proxy mode when exiting."
