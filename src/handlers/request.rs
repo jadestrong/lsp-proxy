@@ -209,7 +209,8 @@ pub(crate) async fn handle_goto_references(
         Some(LanguageServerFeature::GotoReference),
         None,
     )
-    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+    .await
+    .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 lazy_static! {
@@ -369,8 +370,7 @@ pub(crate) async fn handle_completion(
                             },
                             language_server_name: language_server_name.clone(),
                             start: context.start_point,
-                            end: context.start_point
-                                + (*label_len as i32 - *prefix_len as i32),
+                            end: context.start_point + (*label_len as i32 - *prefix_len as i32),
                         }
                     })
                     .collect();
@@ -540,14 +540,17 @@ pub(crate) async fn handle_code_action_resolve(
             None,
             Some(context.language_server_id),
         )
-        .await.map(|(action, _)| Response::new_ok(
+        .await
+        .map(|(action, _)| {
+            Response::new_ok(
                 req.id,
                 CodeActionOrCommandItem {
                     lsp_item: action.into(),
                     language_server_id: context.language_server_id,
                     language_server_name: format!("{:?}", context.language_server_id),
                 },
-            ))
+            )
+        })
     } else {
         Err(anyhow::Error::msg(format!(
             "No CodeAction Resolve Context {:?}",
@@ -597,7 +600,8 @@ pub(crate) async fn handle_execute_command(
                     None,
                     Some(context.language_server_id),
                 )
-                .await.map(|_| Response::new_ok(req.id, ""));
+                .await
+                .map(|_| Response::new_ok(req.id, ""));
             }
         }
         call_single_language_server::<lsp_types::request::ExecuteCommand>(
@@ -607,7 +611,8 @@ pub(crate) async fn handle_execute_command(
             None,
             Some(context.language_server_id),
         )
-        .await.map(|_| Response::new_ok(req.id, ""))
+        .await
+        .map(|_| Response::new_ok(req.id, ""))
     } else {
         Err(anyhow::Error::msg(format!(
             "No context params of {:?}",
@@ -652,13 +657,13 @@ pub(crate) async fn handle_get_workspace_info(
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
     use crate::lsp_ext::{LanguageServerInfo, WorkspaceInfo};
-    
+
     let file_path = req.params.uri.as_ref().map(|u| u.to_string());
-    
+
     if file_path.is_none() || language_servers.is_empty() {
         return Ok(Response::new_ok(req.id.clone(), None::<WorkspaceInfo>));
     }
-    
+
     let workspace_root = language_servers[0].root_path.to_string_lossy().to_string();
     let language_server_infos: Vec<LanguageServerInfo> = language_servers
         .iter()
@@ -668,13 +673,13 @@ pub(crate) async fn handle_get_workspace_info(
             support_workspace: ls.support_workspace(),
         })
         .collect();
-    
+
     let info = WorkspaceInfo {
         file_path: file_path.unwrap(),
         workspace_root,
         language_servers: language_server_infos,
     };
-    
+
     Ok(Response::new_ok(req.id.clone(), Some(info)))
 }
 
@@ -739,10 +744,7 @@ pub(crate) async fn handle_signature_help(
     )
     .await;
 
-    let results: Vec<lsp_types::SignatureHelp> = resps
-        .into_iter()
-        .flatten()
-        .collect();
+    let results: Vec<lsp_types::SignatureHelp> = resps.into_iter().flatten().collect();
     Ok(Response::new_ok(req.id, results.first()))
 }
 
@@ -892,10 +894,7 @@ pub(crate) async fn handle_code_action(
             future.await
         }
         Err(e) => {
-            let resp = create_error_response(
-                &req.id,
-                format!("parse code action error {e}"),
-            );
+            let resp = create_error_response(&req.id, format!("parse code action error {e}"));
             response_sender.send(resp.into()).unwrap();
         }
     }
@@ -907,7 +906,8 @@ pub(crate) async fn handle_view_file_text(
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
     call_first_language_server::<lsp_ext::ViewFileText>(&req, params, &language_servers)
-        .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+        .await
+        .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_inlay_hints(
@@ -922,7 +922,8 @@ pub(crate) async fn handle_inlay_hints(
         Some(LanguageServerFeature::InlayHints),
         None,
     )
-    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+    .await
+    .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_document_highlight(
@@ -937,7 +938,8 @@ pub(crate) async fn handle_document_highlight(
         Some(LanguageServerFeature::DocumentHighlight),
         None,
     )
-    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+    .await
+    .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_rename(
@@ -952,7 +954,8 @@ pub(crate) async fn handle_rename(
         Some(LanguageServerFeature::RenameSymbol),
         None,
     )
-    .await.map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+    .await
+    .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
 pub(crate) async fn handle_document_symbols(
@@ -992,9 +995,7 @@ pub(crate) async fn pull_diagnostics_for_document(
     };
 
     match future.await {
-        Ok(result) => {
-            serde_json::from_value(result).ok()
-        }
+        Ok(result) => serde_json::from_value(result).ok(),
         Err(err) => {
             log::error!("Pull diagnostic request failed: {err}");
             None
