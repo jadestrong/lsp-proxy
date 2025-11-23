@@ -494,8 +494,16 @@ pub(crate) async fn handle_completion_resolve(
                 }
             }
 
-            if let Some(text_edit) = params_text_edit {
-                resp.text_edit = Some(text_edit.to_owned());
+            // The textEdit of tsserver is different between textDocument/completion and completionItem/resolve.
+            // The resolve response will have insertTextFormat and snippet information added.
+            // So we cannot reuse completion's textEdit property directly.
+            if params_text_edit.is_some()
+                && language_server_name != "vtsls"
+                && language_server_name != "typescript-language-server"
+            {
+                // Since we have cached completion results, the input position will not update immediately. The rust-analyzer server will always return the latest position for a resolve request.
+                // Therefore, it is preferable to use the cached completionItem's textEdit property. Other servers like tsserver won't update the position, so it's fine.
+                resp.text_edit = params_text_edit;
             } else if let Some(text_edit) = &resp.text_edit {
                 if let lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit) =
                     text_edit

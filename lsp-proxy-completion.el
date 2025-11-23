@@ -226,7 +226,8 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
            (marker (copy-marker (point) t)))
       (unless proxy-item
         (message "no lsp-proxy--item in post-completion %s" proxy-item))
-      (if (equal language-server-name "typescript-language-server")
+      ;; typescript-language-server and vtsls does not provide the proper insertText without resolving.
+      (if (or (equal language-server-name "typescript-language-server") (equal language-server-name "vtsls"))
           (if resolved-item
               (lsp-proxy--company-post-completion-item resolved-item candidate marker)
             (let ((resolved (lsp-proxy--sync-resolve proxy-item)))
