@@ -397,10 +397,23 @@ Skip reopening notifications for buffers not currently visible."
                   (insert (format "- %s: %s\n"
                                   (plist-get diag :severity)
                                   (plist-get diag :message))))
-              (insert "No diagnostics found\n"))
-            (insert "\n=== End of Report ===\n")
-            ;; (view-mode 1)
-            ))))
+              (insert "No diagnostics found\n")))))
+
+      ;; Languages configuration
+      (when (lsp-proxy--connection-alivep)
+        (lsp-proxy--async-request
+         'emacs/getLanguagesConfig
+         (lsp-proxy--request-or-notify-params nil)
+         :success-fn
+         (lambda (config-json)
+           (with-current-buffer debug-buffer
+             (insert "\n=== Merged Languages Configuration ===\n")
+             (insert config-json)
+             (insert "\n\n=== End of Report ===\n")))))
+
+      (unless (lsp-proxy--connection-alivep)
+        (with-current-buffer debug-buffer
+          (insert "\n=== End of Report ===\n"))))
     (display-buffer debug-buffer)))
 
 ;;; Workspace restart

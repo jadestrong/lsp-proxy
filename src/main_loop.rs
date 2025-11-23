@@ -738,6 +738,7 @@ impl Application {
             .on::<lsp_types::request::Rename, _, _>(handlers::request::handle_rename)
             .on::<lsp_ext::GetCommands, _, _>(handlers::request::handle_get_commands)
             .on::<lsp_ext::GetWorkspaceInfo, _, _>(handlers::request::handle_get_workspace_info)
+            .on::<lsp_ext::GetLanguagesConfig, _, _>(handlers::request::handle_get_languages_config)
             .on::<lsp_ext::ViewFileText, _, _>(handlers::request::handle_view_file_text)
             .on::<lsp_types::request::InlayHintRequest, _, _>(handlers::request::handle_inlay_hints)
             .on::<lsp_types::request::DocumentHighlightRequest, _, _>(

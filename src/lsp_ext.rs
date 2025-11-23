@@ -145,6 +145,16 @@ impl Request for GetWorkspaceInfo {
     const METHOD: &'static str = "emacs/getWorkspaceInfo";
 }
 
+// emacs/getLanguagesConfig
+#[derive(Debug)]
+pub enum GetLanguagesConfig {}
+
+impl Request for GetLanguagesConfig {
+    type Params = ();
+    type Result = String;  // JSON string of merged languages config
+    const METHOD: &'static str = "emacs/getLanguagesConfig";
+}
+
 // $/progress
 #[derive(Debug)]
 pub enum CustomProgress {}

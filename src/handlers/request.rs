@@ -691,6 +691,51 @@ pub(crate) async fn handle_get_workspace_info(
     Ok(Response::new_ok(req.id.clone(), Some(info)))
 }
 
+pub(crate) async fn handle_get_languages_config(
+    req: msg::Request,
+    _params: (),
+    _language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    use crate::config;
+    use serde_json::json;
+    
+    // Get the merged configuration
+    let config = config::default_syntax_loader();
+    
+    // Manually build JSON to include config and experimental fields
+    let mut language_servers = serde_json::Map::new();
+    for (name, ls_config) in &config.language_server {
+        let mut ls_json = serde_json::Map::new();
+        ls_json.insert("command".to_string(), json!(ls_config.command));
+        ls_json.insert("args".to_string(), json!(ls_config.args));
+        ls_json.insert("environment".to_string(), json!(ls_config.environment));
+        ls_json.insert("timeout".to_string(), json!(ls_config.timeout));
+        
+        // Include config if present
+        if let Some(ref config_value) = ls_config.config {
+            ls_json.insert("config".to_string(), config_value.clone());
+        }
+        
+        // Include experimental if present
+        if let Some(ref experimental_value) = ls_config.experimental {
+            ls_json.insert("experimental".to_string(), experimental_value.clone());
+        }
+        
+        language_servers.insert(name.clone(), json!(ls_json));
+    }
+    
+    let full_config = json!({
+        "language": config.language,
+        "language-server": language_servers
+    });
+    
+    // Serialize to JSON string
+    let json_string = serde_json::to_string_pretty(&full_config)
+        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {}\"}}", e));
+    
+    Ok(Response::new_ok(req.id.clone(), json_string))
+}
+
 pub(crate) async fn handle_hover(
     req: msg::Request,
     params: lsp_types::HoverParams,
