@@ -694,7 +694,7 @@ pub(crate) async fn handle_get_workspace_info(
 pub(crate) async fn handle_get_languages_config(
     req: msg::Request,
     _params: (),
-    _language_servers: Vec<Arc<Client>>,
+    language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
     use crate::config;
     use serde_json::json;
@@ -702,31 +702,74 @@ pub(crate) async fn handle_get_languages_config(
     // Get the merged configuration
     let config = config::default_syntax_loader();
     
-    // Manually build JSON to include config and experimental fields
-    let mut language_servers = serde_json::Map::new();
-    for (name, ls_config) in &config.language_server {
-        let mut ls_json = serde_json::Map::new();
-        ls_json.insert("command".to_string(), json!(ls_config.command));
-        ls_json.insert("args".to_string(), json!(ls_config.args));
-        ls_json.insert("environment".to_string(), json!(ls_config.environment));
-        ls_json.insert("timeout".to_string(), json!(ls_config.timeout));
-        
-        // Include config if present
-        if let Some(ref config_value) = ls_config.config {
-            ls_json.insert("config".to_string(), config_value.clone());
+    // Get active client names
+    let active_client_names: Vec<String> = language_servers
+        .iter()
+        .map(|ls| ls.name().to_string())
+        .collect();
+    
+    // Find current buffer's language config
+    let file_path = req.params.uri.as_ref().map(|u| u.to_string());
+    let language_config = if let Some(file_path) = file_path {
+        // Try to match by file extension or path
+        let path = std::path::Path::new(&file_path);
+        config.language.iter().find(|lang| {
+            lang.file_types.iter().any(|ft| {
+                match ft {
+                    crate::syntax::FileType::Extension(ext) => {
+                        path.extension().and_then(|e| e.to_str()) == Some(ext)
+                            || path.file_name().and_then(|f| f.to_str()) == Some(ext)
+                    }
+                    crate::syntax::FileType::Glob(glob) => {
+                        glob.compile_matcher().is_match(&file_path)
+                    }
+                }
+            })
+        })
+    } else {
+        None
+    };
+    
+    // Get all configured server names for this language
+    let configured_server_names: Vec<String> = language_config
+        .as_ref()
+        .map(|lang| {
+            lang.language_servers
+                .iter()
+                .map(|ls| ls.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    
+    // Build language server configs for all configured servers
+    let mut language_servers_json = serde_json::Map::new();
+    for name in &configured_server_names {
+        if let Some(ls_config) = config.language_server.get(name) {
+            let mut ls_json = serde_json::Map::new();
+            ls_json.insert("command".to_string(), json!(ls_config.command));
+            ls_json.insert("args".to_string(), json!(ls_config.args));
+            ls_json.insert("environment".to_string(), json!(ls_config.environment));
+            ls_json.insert("timeout".to_string(), json!(ls_config.timeout));
+            
+            // Include config if present
+            if let Some(ref config_value) = ls_config.config {
+                ls_json.insert("config".to_string(), config_value.clone());
+            }
+            
+            // Include experimental if present
+            if let Some(ref experimental_value) = ls_config.experimental {
+                ls_json.insert("experimental".to_string(), experimental_value.clone());
+            }
+            
+            language_servers_json.insert(name.clone(), json!(ls_json));
         }
-        
-        // Include experimental if present
-        if let Some(ref experimental_value) = ls_config.experimental {
-            ls_json.insert("experimental".to_string(), experimental_value.clone());
-        }
-        
-        language_servers.insert(name.clone(), json!(ls_json));
     }
     
     let full_config = json!({
-        "language": config.language,
-        "language-server": language_servers
+        "active-clients": active_client_names,
+        "configured-servers": configured_server_names,
+        "language": language_config,
+        "language-server": language_servers_json
     });
     
     // Serialize to JSON string
