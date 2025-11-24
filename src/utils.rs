@@ -348,7 +348,12 @@ pub fn merge_toml_values(left: toml::Value, right: toml::Value, merge_depth: usi
             for (rname, rvalue) in right_map {
                 match left_map.remove(&rname) {
                     Some(lvalue) => {
-                        let merged_value = merge_toml_values(lvalue, rvalue, merge_depth.saturating_sub(1));
+                        // Special case: language-servers should be replaced, not merged
+                        let merged_value = if rname == "language-servers" {
+                            rvalue  // Replace instead of merge
+                        } else {
+                            merge_toml_values(lvalue, rvalue, merge_depth.saturating_sub(1))
+                        };
                         left_map.insert(rname, merged_value);
                     }
                     None => {
@@ -738,3 +743,38 @@ mod test {
         assert_eq!(items[0].get("value").unwrap().as_integer(), Some(99));
     }
 }
+
+    #[test]
+    fn test_language_servers_should_replace() {
+        // Test that language-servers array is replaced, not merged by name
+        let left = toml::from_str(r#"
+        [[language]]
+        name = "typescript"
+        file-types = ["ts"]
+        language-servers = [
+            { name = "vtsls", except-features = ["format"] },
+            { name = "eslint" },
+            { name = "old-server" }
+        ]
+    "#).unwrap();
+    
+        let right = toml::from_str(r#"
+        [[language]]
+        name = "typescript"
+        language-servers = [
+            { name = "vtsls", except-features = ["format"] },
+            { name = "eslint" }
+        ]
+    "#).unwrap();
+    
+        let merged = merge_toml_values(left, right, 5);
+        let languages = merged.get("language").unwrap().as_array().unwrap();
+        let ts = languages.iter().find(|l| l.get("name").unwrap().as_str() == Some("typescript")).unwrap();
+        let servers = ts.get("language-servers").unwrap().as_array().unwrap();
+    
+        // Should be replaced, not merged - only 2 servers, no old-server
+        assert_eq!(servers.len(), 2);
+        assert!(servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("vtsls")));
+        assert!(servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("eslint")));
+        assert!(!servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("old-server")));
+    }
