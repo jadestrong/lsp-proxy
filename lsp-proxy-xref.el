@@ -179,6 +179,7 @@ falls back to a quick byte-size based heuristic (via
      ((file-readable-p filepath)
       (with-temp-buffer
         (insert-file-contents-literally filepath)
+        (decode-coding-region (point-min) (point-max) 'utf-8)
         (funcall collect)))
      (t (lsp-proxy--warn "Failed to process xref entry for file %s" filepath)
         nil))))
