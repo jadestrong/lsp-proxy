@@ -19,6 +19,9 @@ pub fn set_max_completion_items(max_items: usize) {
     MAX_COMPLETION_ITEMS.set(max_items).ok();
 }
 
+// Diagnostic configuration constants
+pub const DEFAULT_MAX_DIAGNOSTICS_PUSH: usize = 50;
+
 pub fn set_max_diagnostics_push(max_diagnostics: usize) {
     MAX_DIAGNOSTICS_PUSH.set(max_diagnostics).ok();
 }

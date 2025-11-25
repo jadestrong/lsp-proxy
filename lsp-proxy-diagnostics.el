@@ -131,7 +131,7 @@ Reduces redundant computations and batch processes diagnostic conversions."
   ;; Check if diagnostics might be limited and warn user
   (when (and lsp-proxy-diagnostics-show-limit-warning
              (>= (length diagnostics) lsp-proxy-diagnostics-max-push-count))
-    (lsp-proxy--warn "Diagnostics count (%d) may have been limited."
+    (lsp-proxy--warn "Diagnostics count (%d) may have been limited. Use `M-x lsp-proxy-diagnostics-request-all' for full list."
                      (length diagnostics)))
 
   (cond
@@ -341,14 +341,33 @@ eglot functions."
 
 ;;; Pull diagnostics support
 
-(defun lsp-proxy-diagnostics--request-pull-diagnostics ()
-  "Request pull diagnostics if supported."
+(defun lsp-proxy-diagnostics--request-pull-diagnostics (&optional full)
+  "Request pull diagnostics if supported.
+When FULL is non-nil, request all diagnostics without limit."
   (when (and (boundp 'lsp-proxy--support-pull-diagnostic) lsp-proxy--support-pull-diagnostic)
     (lsp-proxy--async-request
      'textDocument/diagnostic
      (lsp-proxy--request-or-notify-params
-      (list :textDocument (eglot--TextDocumentIdentifier)))
+      (list :textDocument (eglot--TextDocumentIdentifier))
+      `(:context (:limitDiagnostics ,(if full :json-false t))))
      :timeout-fn #'ignore)))
+
+;;;###autoload
+(defun lsp-proxy-diagnostics-request-all ()
+  "Request full diagnostics for current buffer.
+This function fetches all diagnostics without the push limit,
+useful when the automatic push was limited due to too many diagnostics."
+  (interactive)
+  (unless (and lsp-proxy-mode buffer-file-name)
+    (user-error "LSP Proxy is not active or buffer has no file"))
+
+  (when lsp-proxy-diagnostics-show-limit-warning
+    (message "Requesting full diagnostics for %s..." (file-name-nondirectory buffer-file-name)))
+
+  (lsp-proxy-diagnostics--request-pull-diagnostics t)
+
+  (when lsp-proxy-diagnostics-show-limit-warning
+    (message "Full diagnostics requested. Check for updates in a moment.")))
 
 ;;; Project diagnostics buffer
 

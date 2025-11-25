@@ -158,6 +158,12 @@ pub struct CommonContext {
     pub language_server_id: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DiagnosticContext {
+    #[serde(rename = "limitDiagnostics")]
+    pub limit_diagnostics: bool,
+}
+
 // #[derive(Debug, Serialize, Deserialize, Clone)]
 // pub struct SignatureHelpContext {
 //     #[serde(rename = "signature-trigger-character")]
@@ -172,6 +178,7 @@ pub enum Context {
     CommonContext(CommonContext),
     WorkspaceContext(WorkspaceContext),
     InlineCompletionContext(InlineCompletionContext),
+    DiagnosticContext(DiagnosticContext),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
