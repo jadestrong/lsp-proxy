@@ -1,7 +1,9 @@
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
-    cmp::Ordering, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}
+    cmp::Ordering,
+    path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use stringslice::StringSlice;
 
@@ -216,7 +218,9 @@ pub fn find_lsp_workspace(doc_path: Option<&Path>, root_markers: &[String]) -> P
             ancestor.starts_with(&git_workspace) || *ancestor == git_workspace
         })
         .find(|ancestor| {
-            root_markers.iter().any(|marker| ancestor.join(marker).exists())
+            root_markers
+                .iter()
+                .any(|marker| ancestor.join(marker).exists())
         })
         .map(|p| p.to_path_buf())
         .unwrap_or(git_workspace)
@@ -305,9 +309,9 @@ pub fn get_activate_time() -> u128 {
 /// Merge two TOML documents, merging values from `right` onto `left`
 ///
 /// When an array exists in both `left` and `right`, `right`'s array is
-/// used (arrays are always replaced, not merged). When a table exists in 
-/// both `left` and `right`, the merged table consists of all keys in 
-/// `left`'s table unioned with all keys in `right` with the values of 
+/// used (arrays are always replaced, not merged). When a table exists in
+/// both `left` and `right`, the merged table consists of all keys in
+/// `left`'s table unioned with all keys in `right` with the values of
 /// `right` being merged recursively onto values of `left`.
 ///
 /// Top-level arrays with `name` fields (like `[[language]]`) are merged
@@ -350,7 +354,7 @@ pub fn merge_toml_values(left: toml::Value, right: toml::Value, merge_depth: usi
                     Some(lvalue) => {
                         // Special case: language-servers should be replaced, not merged
                         let merged_value = if rname == "language-servers" {
-                            rvalue  // Replace instead of merge
+                            rvalue // Replace instead of merge
                         } else {
                             merge_toml_values(lvalue, rvalue, merge_depth.saturating_sub(1))
                         };
@@ -499,7 +503,7 @@ pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
             Some(last) if last == &name => {
                 // For entries with the same name, add them to the current group.
                 current_group.push((name.clone(), entry));
-            },
+            }
             _ => {
                 // For a new name, save the current group and start a new group
                 if !current_group.is_empty() {
@@ -508,7 +512,7 @@ pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
                 }
                 current_group.push((name.clone(), entry));
                 last_name = Some(name);
-            },
+            }
         }
     }
 
@@ -517,12 +521,10 @@ pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
     }
 
     for group in groups.iter_mut() {
-        group.sort_by(|a, b| {
-            match (&a.1, &b.1) {
-                (ImenuEntry::Position(_), ImenuEntry::Group(_)) => Ordering::Less,
-                (ImenuEntry::Group(_), ImenuEntry::Position(_)) => Ordering::Greater,
-                _ => Ordering::Equal,
-            }
+        group.sort_by(|a, b| match (&a.1, &b.1) {
+            (ImenuEntry::Position(_), ImenuEntry::Group(_)) => Ordering::Less,
+            (ImenuEntry::Group(_), ImenuEntry::Position(_)) => Ordering::Greater,
+            _ => Ordering::Equal,
         });
 
         // Recursively sort the contents within the Group
@@ -537,6 +539,40 @@ pub fn sort_imenu_entries_grouped(entries: &mut Vec<(String, ImenuEntry)>) {
     *entries = groups.into_iter().flatten().collect();
 }
 
+const DIAGNOSTIC_SEVERITY_PRIORITY: [lsp_types::DiagnosticSeverity; 4] = [
+    lsp_types::DiagnosticSeverity::ERROR,
+    lsp_types::DiagnosticSeverity::WARNING,
+    lsp_types::DiagnosticSeverity::INFORMATION,
+    lsp_types::DiagnosticSeverity::HINT,
+];
+
+pub fn limit_diagnostics_for_push(
+    diagnostics: &[lsp_types::Diagnostic],
+    max_count: usize,
+) -> Vec<lsp_types::Diagnostic> {
+    if diagnostics.len() <= max_count {
+        return diagnostics.to_vec();
+    }
+
+    let mut sorted_diagnostics = diagnostics.to_vec();
+    sorted_diagnostics.sort_by(|a, b| {
+        let severity_a = a.severity.unwrap_or(lsp_types::DiagnosticSeverity::HINT);
+        let severity_b = b.severity.unwrap_or(lsp_types::DiagnosticSeverity::HINT);
+
+        let priority_a = DIAGNOSTIC_SEVERITY_PRIORITY
+            .iter()
+            .position(|&s| s == severity_a)
+            .unwrap_or(3);
+        let priority_b = DIAGNOSTIC_SEVERITY_PRIORITY
+            .iter()
+            .position(|&s| s == severity_b)
+            .unwrap_or(3);
+
+        priority_a.cmp(&priority_b)
+    });
+
+    sorted_diagnostics.into_iter().take(max_count).collect()
+}
 
 #[cfg(test)]
 mod test {
@@ -545,39 +581,57 @@ mod test {
 
     #[test]
     fn test_merge_simple_tables() {
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [server]
         command = "default-cmd"
         timeout = 30
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [server]
         command = "custom-cmd"
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
         let server = merged.get("server").unwrap();
-    
+
         assert_eq!(server.get("command").unwrap().as_str(), Some("custom-cmd"));
         assert_eq!(server.get("timeout").unwrap().as_integer(), Some(30));
     }
 
     #[test]
     fn test_merge_arrays_without_name_replaces() {
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [server]
         args = ["--stdio"]
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [server]
         args = ["--log-level", "verbose"]
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
-        let args = merged.get("server").unwrap().get("args").unwrap().as_array().unwrap();
-    
+        let args = merged
+            .get("server")
+            .unwrap()
+            .get("args")
+            .unwrap()
+            .as_array()
+            .unwrap();
+
         assert_eq!(args.len(), 2);
         assert_eq!(args[0].as_str(), Some("--log-level"));
         assert_eq!(args[1].as_str(), Some("verbose"));
@@ -585,7 +639,8 @@ mod test {
 
     #[test]
     fn test_merge_arrays_with_name_merges() {
-        let left: Value = toml::from_str(r#"
+        let left: Value = toml::from_str(
+            r#"
         [[language]]
         name = "rust"
         file-types = ["rs"]
@@ -593,116 +648,189 @@ mod test {
         [[language]]
         name = "toml"
         file-types = ["toml"]
-    "#).unwrap();
-    
-        let right: Value = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right: Value = toml::from_str(
+            r#"
         [[language]]
         name = "rust"
         roots = ["Cargo.toml"]
         file-types = ["rs"]
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
         let languages = merged.get("language").unwrap().as_array().unwrap();
-    
+
         // Should have 2 languages: rust (merged) and toml (kept from left)
         assert_eq!(languages.len(), 2);
-    
-        let rust = languages.iter().find(|l| l.get("name").unwrap().as_str() == Some("rust")).unwrap();
+
+        let rust = languages
+            .iter()
+            .find(|l| l.get("name").unwrap().as_str() == Some("rust"))
+            .unwrap();
         assert!(rust.get("file-types").is_some(), "file-types should exist");
         assert!(rust.get("roots").is_some(), "roots should exist");
-        assert_eq!(rust.get("file-types").unwrap().as_array().unwrap()[0].as_str(), Some("rs"));
-        assert_eq!(rust.get("roots").unwrap().as_array().unwrap()[0].as_str(), Some("Cargo.toml"));
-    
-        let toml_lang = languages.iter().find(|l| l.get("name").unwrap().as_str() == Some("toml")).unwrap();
-        assert_eq!(toml_lang.get("file-types").unwrap().as_array().unwrap()[0].as_str(), Some("toml"));
+        assert_eq!(
+            rust.get("file-types").unwrap().as_array().unwrap()[0].as_str(),
+            Some("rs")
+        );
+        assert_eq!(
+            rust.get("roots").unwrap().as_array().unwrap()[0].as_str(),
+            Some("Cargo.toml")
+        );
+
+        let toml_lang = languages
+            .iter()
+            .find(|l| l.get("name").unwrap().as_str() == Some("toml"))
+            .unwrap();
+        assert_eq!(
+            toml_lang.get("file-types").unwrap().as_array().unwrap()[0].as_str(),
+            Some("toml")
+        );
     }
 
     #[test]
     fn test_merge_deep_nested_config() {
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [language-server.vtsls.config.typescript.preferences]
         importModuleSpecifier = "relative"
         quoteStyle = "double"
         
         [language-server.vtsls.config.typescript.inlayHints]
         enabled = true
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [language-server.vtsls.config.typescript.preferences]
         importModuleSpecifier = "non-relative"
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
         let prefs = merged
-            .get("language-server").unwrap()
-            .get("vtsls").unwrap()
-            .get("config").unwrap()
-            .get("typescript").unwrap()
-            .get("preferences").unwrap();
-    
-        assert_eq!(prefs.get("importModuleSpecifier").unwrap().as_str(), Some("non-relative"));
+            .get("language-server")
+            .unwrap()
+            .get("vtsls")
+            .unwrap()
+            .get("config")
+            .unwrap()
+            .get("typescript")
+            .unwrap()
+            .get("preferences")
+            .unwrap();
+
+        assert_eq!(
+            prefs.get("importModuleSpecifier").unwrap().as_str(),
+            Some("non-relative")
+        );
         assert_eq!(prefs.get("quoteStyle").unwrap().as_str(), Some("double"));
-    
+
         let hints = merged
-            .get("language-server").unwrap()
-            .get("vtsls").unwrap()
-            .get("config").unwrap()
-            .get("typescript").unwrap()
-            .get("inlayHints").unwrap();
+            .get("language-server")
+            .unwrap()
+            .get("vtsls")
+            .unwrap()
+            .get("config")
+            .unwrap()
+            .get("typescript")
+            .unwrap()
+            .get("inlayHints")
+            .unwrap();
         assert_eq!(hints.get("enabled").unwrap().as_bool(), Some(true));
     }
 
     #[test]
     fn test_merge_adds_new_keys() {
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [server]
         command = "cmd"
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [server]
         timeout = 60
         
         [client]
         name = "test"
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
-    
-        assert_eq!(merged.get("server").unwrap().get("command").unwrap().as_str(), Some("cmd"));
-        assert_eq!(merged.get("server").unwrap().get("timeout").unwrap().as_integer(), Some(60));
-        assert_eq!(merged.get("client").unwrap().get("name").unwrap().as_str(), Some("test"));
+
+        assert_eq!(
+            merged
+                .get("server")
+                .unwrap()
+                .get("command")
+                .unwrap()
+                .as_str(),
+            Some("cmd")
+        );
+        assert_eq!(
+            merged
+                .get("server")
+                .unwrap()
+                .get("timeout")
+                .unwrap()
+                .as_integer(),
+            Some(60)
+        );
+        assert_eq!(
+            merged.get("client").unwrap().get("name").unwrap().as_str(),
+            Some("test")
+        );
     }
 
     #[test]
     fn test_merge_primitives_replace() {
         let left = Value::String("old".to_string());
         let right = Value::String("new".to_string());
-    
+
         let merged = merge_toml_values(left, right, 5);
         assert_eq!(merged.as_str(), Some("new"));
     }
 
     #[test]
     fn test_merge_environment_variables() {
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [language-server.rust-analyzer.environment]
         RUST_BACKTRACE = "1"
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [language-server.rust-analyzer.environment]
         RUST_LOG = "debug"
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
         let env = merged
-            .get("language-server").unwrap()
-            .get("rust-analyzer").unwrap()
-            .get("environment").unwrap();
-    
+            .get("language-server")
+            .unwrap()
+            .get("rust-analyzer")
+            .unwrap()
+            .get("environment")
+            .unwrap();
+
         assert_eq!(env.get("RUST_BACKTRACE").unwrap().as_str(), Some("1"));
         assert_eq!(env.get("RUST_LOG").unwrap().as_str(), Some("debug"));
     }
@@ -711,32 +839,45 @@ mod test {
     fn test_deep_nested_array_with_name_should_replace() {
         // Test that deep nested arrays with 'name' fields are replaced, not merged
         // This is the key behavior controlled by merge_depth
-        let left = toml::from_str(r#"
+        let left = toml::from_str(
+            r#"
         [server.config.nested.deep.array]
         items = [
             { name = "a", value = 1 },
             { name = "b", value = 2 },
             { name = "c", value = 3 }
         ]
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+        )
+        .unwrap();
+
+        let right = toml::from_str(
+            r#"
         [server.config.nested.deep.array]
         items = [
             { name = "a", value = 99 }
         ]
-    "#).unwrap();
-    
+    "#,
+        )
+        .unwrap();
+
         let merged = merge_toml_values(left, right, 5);
         let items = merged
-            .get("server").unwrap()
-            .get("config").unwrap()
-            .get("nested").unwrap()
-            .get("deep").unwrap()
-            .get("array").unwrap()
-            .get("items").unwrap()
-            .as_array().unwrap();
-    
+            .get("server")
+            .unwrap()
+            .get("config")
+            .unwrap()
+            .get("nested")
+            .unwrap()
+            .get("deep")
+            .unwrap()
+            .get("array")
+            .unwrap()
+            .get("items")
+            .unwrap()
+            .as_array()
+            .unwrap();
+
         // Should be replaced, not merged - only 'a' should exist
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].get("name").unwrap().as_str(), Some("a"));
@@ -744,10 +885,11 @@ mod test {
     }
 }
 
-    #[test]
-    fn test_language_servers_should_replace() {
-        // Test that language-servers array is replaced, not merged by name
-        let left = toml::from_str(r#"
+#[test]
+fn test_language_servers_should_replace() {
+    // Test that language-servers array is replaced, not merged by name
+    let left = toml::from_str(
+        r#"
         [[language]]
         name = "typescript"
         file-types = ["ts"]
@@ -756,25 +898,39 @@ mod test {
             { name = "eslint" },
             { name = "old-server" }
         ]
-    "#).unwrap();
-    
-        let right = toml::from_str(r#"
+    "#,
+    )
+    .unwrap();
+
+    let right = toml::from_str(
+        r#"
         [[language]]
         name = "typescript"
         language-servers = [
             { name = "vtsls", except-features = ["format"] },
             { name = "eslint" }
         ]
-    "#).unwrap();
-    
-        let merged = merge_toml_values(left, right, 5);
-        let languages = merged.get("language").unwrap().as_array().unwrap();
-        let ts = languages.iter().find(|l| l.get("name").unwrap().as_str() == Some("typescript")).unwrap();
-        let servers = ts.get("language-servers").unwrap().as_array().unwrap();
-    
-        // Should be replaced, not merged - only 2 servers, no old-server
-        assert_eq!(servers.len(), 2);
-        assert!(servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("vtsls")));
-        assert!(servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("eslint")));
-        assert!(!servers.iter().any(|s| s.get("name").unwrap().as_str() == Some("old-server")));
-    }
+    "#,
+    )
+    .unwrap();
+
+    let merged = merge_toml_values(left, right, 5);
+    let languages = merged.get("language").unwrap().as_array().unwrap();
+    let ts = languages
+        .iter()
+        .find(|l| l.get("name").unwrap().as_str() == Some("typescript"))
+        .unwrap();
+    let servers = ts.get("language-servers").unwrap().as_array().unwrap();
+
+    // Should be replaced, not merged - only 2 servers, no old-server
+    assert_eq!(servers.len(), 2);
+    assert!(servers
+        .iter()
+        .any(|s| s.get("name").unwrap().as_str() == Some("vtsls")));
+    assert!(servers
+        .iter()
+        .any(|s| s.get("name").unwrap().as_str() == Some("eslint")));
+    assert!(!servers
+        .iter()
+        .any(|s| s.get("name").unwrap().as_str() == Some("old-server")));
+}

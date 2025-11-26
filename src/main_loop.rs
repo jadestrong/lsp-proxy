@@ -1,7 +1,7 @@
 use crate::{
     application::Application,
     client::{Client, RegisteredCapability},
-    config,
+    config::{self, DEFAULT_MAX_DIAGNOSTICS_PUSH},
     connection::Connection,
     controller::Controller,
     dispatch::{NotificationDispatcher, RequestDispatcher},
@@ -23,60 +23,19 @@ use crate::{
     registry::NotificationFromServer,
     syntax::{self},
     thread,
-    utils::{find_workspace_folder_for_uri, from_json, is_diagnostic_vectors_equal},
+    utils::{
+        find_workspace_folder_for_uri, from_json, is_diagnostic_vectors_equal,
+        limit_diagnostics_for_push,
+    },
 };
 use anyhow::{Error, Result};
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use lsp_types::{
-    notification::Notification, request::Request, DiagnosticSeverity, LogMessageParams,
-};
+use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-
-// Diagnostic configuration constants
-const DEFAULT_MAX_DIAGNOSTICS_PUSH: usize = 50;
-const DIAGNOSTIC_SEVERITY_PRIORITY: [DiagnosticSeverity; 4] = [
-    DiagnosticSeverity::ERROR,
-    DiagnosticSeverity::WARNING,
-    DiagnosticSeverity::INFORMATION,
-    DiagnosticSeverity::HINT,
-];
-
-/// Limit and prioritize diagnostics for push notifications
-fn limit_diagnostics_for_push(
-    diagnostics: &[lsp_types::Diagnostic],
-    max_count: usize,
-) -> Vec<lsp_types::Diagnostic> {
-    if diagnostics.len() <= max_count {
-        return diagnostics.to_vec();
-    }
-
-    // Sort diagnostics by severity priority
-    let mut sorted_diagnostics = diagnostics.to_vec();
-    sorted_diagnostics.sort_by(|a, b| {
-        let severity_a = a.severity.unwrap_or(DiagnosticSeverity::HINT);
-        let severity_b = b.severity.unwrap_or(DiagnosticSeverity::HINT);
-
-        // Find priority index in DIAGNOSTIC_SEVERITY_PRIORITY array
-        let priority_a = DIAGNOSTIC_SEVERITY_PRIORITY
-            .iter()
-            .position(|&s| s == severity_a)
-            .unwrap_or(3);
-        let priority_b = DIAGNOSTIC_SEVERITY_PRIORITY
-            .iter()
-            .position(|&s| s == severity_b)
-            .unwrap_or(3);
-
-        // Lower index = higher priority
-        priority_a.cmp(&priority_b)
-    });
-
-    // Take the most important diagnostics
-    sorted_diagnostics.into_iter().take(max_count).collect()
-}
 
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
     let (sender_for_application, mut recevier_by_application) = unbounded_channel();
@@ -149,9 +108,7 @@ impl Application {
             }) => {
                 let reply = match MethodCall::parse(&method, params) {
                     Err(lsp::Error::Unhandled) => {
-                        error!(
-                            "Language Server: Method {method} not found in request {id}"
-                        );
+                        error!("Language Server: Method {method} not found in request {id}");
                         Err(jsonrpc::Error {
                             code: jsonrpc::ErrorCode::MethodNotFound,
                             message: format!("Method not found: {method}"),
@@ -336,15 +293,11 @@ impl Application {
                 let notification = match NotificationFromServer::parse(&method, params) {
                     Ok(notification) => notification,
                     Err(crate::registry::Error::Unhandled) => {
-                        info!(
-                            "Ignoring unhandled notification from Language Server {method:?}"
-                        );
+                        info!("Ignoring unhandled notification from Language Server {method:?}");
                         return;
                     }
                     Err(err) => {
-                        error!(
-                            "Ignoring unknown notification from Language Server: {err}"
-                        );
+                        error!("Ignoring unknown notification from Language Server: {err}");
                         return;
                     }
                 };
@@ -360,8 +313,7 @@ impl Application {
                                 .did_change_configuration(config.clone())
                                 .unwrap();
                         }
-                        self
-                            .editor
+                        self.editor
                             .documents()
                             .filter(|doc| {
                                 doc.language_servers()
@@ -580,7 +532,49 @@ impl Application {
                         let doc_id = doc.id();
                         let previous_result_id = doc.previous_diagnostic_id.clone();
 
+                        let limit_diagnostics = req
+                            .params
+                            .context
+                            .as_ref()
+                            .and_then(|ctx| match ctx {
+                                msg::Context::DiagnosticContext(diag_ctx) => {
+                                    Some(diag_ctx.limit_diagnostics)
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or(true);
+
                         tokio::spawn(async move {
+                            // If limit_diagnostics is false, push all existing diagnostics from the document directly
+                            if !limit_diagnostics {
+                                crate::job::dispatch(move |editor| {
+                                    if let Some(doc) = editor.document_mut(doc_id) {
+                                        // Get all diagnostics from the document
+                                        let all_diagnostics: Vec<lsp_types::Diagnostic> = doc
+                                            .diagnostics()
+                                            .as_ref()
+                                            .map(|diags| {
+                                                diags.iter().map(|d| d.item.clone()).collect()
+                                            })
+                                            .unwrap_or_default();
+
+                                        // Send PublishDiagnostics notification
+                                        let notification = crate::msg::Notification::new(
+                                            lsp_types::notification::PublishDiagnostics::METHOD.to_string(),
+                                            lsp_types::PublishDiagnosticsParams {
+                                                version: Some(doc.version),
+                                                uri: doc.uri.clone(),
+                                                diagnostics: all_diagnostics,
+                                            },
+                                        );
+
+                                        let _ = sender.send(notification.into());
+                                    }
+                                })
+                                .await;
+                                return;
+                            }
+
                             for language_server in language_servers {
                                 let params = from_json(
                                     lsp_types::request::DocumentDiagnosticRequest::METHOD,
@@ -623,6 +617,7 @@ impl Application {
                                         provider,
                                         result,
                                         doc_id,
+                                        limit_diagnostics,
                                     )
                                     .await;
                                 }

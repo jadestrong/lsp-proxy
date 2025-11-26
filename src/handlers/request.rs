@@ -17,7 +17,7 @@ use crate::{
         action_category, action_fixes_diagnostics, action_preferred, CodeActionOrCommandItem,
     },
     completion_cache::CompletionCache,
-    config::MAX_COMPLETION_ITEMS,
+    config::{self, DEFAULT_MAX_DIAGNOSTICS_PUSH, MAX_COMPLETION_ITEMS},
     document::{DiagnosticItem, DiagnosticProvider, DocumentId},
     fuzzy, job,
     lsp::jsonrpc,
@@ -25,8 +25,8 @@ use crate::{
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::{
-        is_diagnostic_vectors_equal, lsp_symbols_to_imenu, sort_imenu_entries_grouped,
-        truncate_completion_item,
+        is_diagnostic_vectors_equal, limit_diagnostics_for_push, lsp_symbols_to_imenu,
+        sort_imenu_entries_grouped, truncate_completion_item,
     },
 };
 
@@ -698,38 +698,34 @@ pub(crate) async fn handle_get_languages_config(
 ) -> Result<Response> {
     use crate::config;
     use serde_json::json;
-    
+
     // Get the merged configuration
     let config = config::default_syntax_loader();
-    
+
     // Get active client names
     let active_client_names: Vec<String> = language_servers
         .iter()
         .map(|ls| ls.name().to_string())
         .collect();
-    
+
     // Find current buffer's language config
     let file_path = req.params.uri.as_ref().map(|u| u.to_string());
     let language_config = if let Some(file_path) = file_path {
         // Try to match by file extension or path
         let path = std::path::Path::new(&file_path);
         config.language.iter().find(|lang| {
-            lang.file_types.iter().any(|ft| {
-                match ft {
-                    crate::syntax::FileType::Extension(ext) => {
-                        path.extension().and_then(|e| e.to_str()) == Some(ext)
-                            || path.file_name().and_then(|f| f.to_str()) == Some(ext)
-                    }
-                    crate::syntax::FileType::Glob(glob) => {
-                        glob.compile_matcher().is_match(&file_path)
-                    }
+            lang.file_types.iter().any(|ft| match ft {
+                crate::syntax::FileType::Extension(ext) => {
+                    path.extension().and_then(|e| e.to_str()) == Some(ext)
+                        || path.file_name().and_then(|f| f.to_str()) == Some(ext)
                 }
+                crate::syntax::FileType::Glob(glob) => glob.compile_matcher().is_match(&file_path),
             })
         })
     } else {
         None
     };
-    
+
     // Get all configured server names for this language
     let configured_server_names: Vec<String> = language_config
         .as_ref()
@@ -740,7 +736,7 @@ pub(crate) async fn handle_get_languages_config(
                 .collect()
         })
         .unwrap_or_default();
-    
+
     // Build language server configs for all configured servers
     let mut language_servers_json = serde_json::Map::new();
     for name in &configured_server_names {
@@ -750,32 +746,32 @@ pub(crate) async fn handle_get_languages_config(
             ls_json.insert("args".to_string(), json!(ls_config.args));
             ls_json.insert("environment".to_string(), json!(ls_config.environment));
             ls_json.insert("timeout".to_string(), json!(ls_config.timeout));
-            
+
             // Include config if present
             if let Some(ref config_value) = ls_config.config {
                 ls_json.insert("config".to_string(), config_value.clone());
             }
-            
+
             // Include experimental if present
             if let Some(ref experimental_value) = ls_config.experimental {
                 ls_json.insert("experimental".to_string(), experimental_value.clone());
             }
-            
+
             language_servers_json.insert(name.clone(), json!(ls_json));
         }
     }
-    
+
     let full_config = json!({
         "active-clients": active_client_names,
         "configured-servers": configured_server_names,
         "language": language_config,
         "language-server": language_servers_json
     });
-    
+
     // Serialize to JSON string
     let json_string = serde_json::to_string_pretty(&full_config)
         .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {}\"}}", e));
-    
+
     Ok(Response::new_ok(req.id.clone(), json_string))
 }
 
@@ -1104,6 +1100,7 @@ pub(crate) async fn handle_pull_diagnostic_response(
     provider: DiagnosticProvider,
     result: lsp_types::DocumentDiagnosticReportResult,
     document_id: DocumentId,
+    limit_diagnostics: bool,
 ) {
     job::dispatch(move |editor| {
         let related_documents = match result {
@@ -1143,13 +1140,24 @@ pub(crate) async fn handle_pull_diagnostic_response(
                                 })
                                 .collect();
                             doc.replace_diagnostics(diagnostics, &provider);
-                            let diagnostics: Vec<lsp_types::Diagnostic> = match doc
+                            let all_diagnostics: Vec<lsp_types::Diagnostic> = match doc
                                 .diagnostics()
                                 .as_ref()
                             {
                                 Some(diags) => diags.iter().map(|diag| diag.item.clone()).collect(),
                                 None => vec![],
                             };
+
+                            let diagnostics = if limit_diagnostics {
+                                let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
+                                    .get()
+                                    .copied()
+                                    .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
+                                limit_diagnostics_for_push(&all_diagnostics, max_diagnostics_push)
+                            } else {
+                                all_diagnostics
+                            };
+
                             let not = msg::Notification::new(
                                 lsp_types::notification::PublishDiagnostics::METHOD.to_string(),
                                 lsp_types::PublishDiagnosticsParams {
