@@ -545,6 +545,36 @@ impl Application {
                             .unwrap_or(true);
 
                         tokio::spawn(async move {
+                            // If limit_diagnostics is false, push all existing diagnostics from the document directly
+                            if !limit_diagnostics {
+                                crate::job::dispatch(move |editor| {
+                                    if let Some(doc) = editor.document_mut(doc_id) {
+                                        // Get all diagnostics from the document
+                                        let all_diagnostics: Vec<lsp_types::Diagnostic> = doc
+                                            .diagnostics()
+                                            .as_ref()
+                                            .map(|diags| {
+                                                diags.iter().map(|d| d.item.clone()).collect()
+                                            })
+                                            .unwrap_or_default();
+
+                                        // Send PublishDiagnostics notification
+                                        let notification = crate::msg::Notification::new(
+                                            lsp_types::notification::PublishDiagnostics::METHOD.to_string(),
+                                            lsp_types::PublishDiagnosticsParams {
+                                                version: Some(doc.version),
+                                                uri: doc.uri.clone(),
+                                                diagnostics: all_diagnostics,
+                                            },
+                                        );
+
+                                        let _ = sender.send(notification.into());
+                                    }
+                                })
+                                .await;
+                                return;
+                            }
+
                             for language_server in language_servers {
                                 let params = from_json(
                                     lsp_types::request::DocumentDiagnosticRequest::METHOD,

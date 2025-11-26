@@ -344,7 +344,7 @@ eglot functions."
 (defun lsp-proxy-diagnostics--request-pull-diagnostics (&optional full)
   "Request pull diagnostics if supported.
 When FULL is non-nil, request all diagnostics without limit."
-  (when (and (boundp 'lsp-proxy--support-pull-diagnostic) lsp-proxy--support-pull-diagnostic)
+  (when (or full (and (boundp 'lsp-proxy--support-pull-diagnostic) lsp-proxy--support-pull-diagnostic))
     (lsp-proxy--async-request
      'textDocument/diagnostic
      (lsp-proxy--request-or-notify-params
