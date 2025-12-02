@@ -149,7 +149,7 @@ that support `textDocument/hover' request.")
          (exe-name (if (eq system-type 'windows-nt)
                        "emacs-lsp-proxy.exe"
                      "emacs-lsp-proxy"))
-         (candidates (list (executable-find exe-name)
+         (candidates (list (executable-find "emacs-lsp-proxy")
                            (expand-file-name exe-name base-dir)
                            (expand-file-name (concat "target/release/" exe-name) base-dir))))
     (or (seq-find #'file-exists-p (delq nil candidates))
