@@ -298,9 +298,9 @@ that support `textDocument/hover' request.")
              (value (plist-get params :value))
              (kind (plist-get value :kind)))
         (pcase kind
-          ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--normalize-path root-path) token value))
-          ("report" (lsp-proxy--set-work-done-token (lsp-proxy--normalize-path root-path) token value))
-          ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--normalize-path root-path) token)))))))
+          ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
+          ("report" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
+          ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token)))))))
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
