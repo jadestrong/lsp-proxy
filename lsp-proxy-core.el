@@ -227,6 +227,7 @@ that support `textDocument/hover' request.")
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
+                                         :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item) "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count))
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
