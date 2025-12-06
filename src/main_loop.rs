@@ -326,11 +326,18 @@ impl Application {
                             });
                     }
                     NotificationFromServer::Exit => {
+                        let language_server = language_server!();
                         for doc in self.editor.documents_mut() {
                             doc.clear_all_diagnostics(server_id);
                         }
                         // Remove the language server from the registry
                         self.editor.language_servers.remove_by_id(server_id);
+                        self.send_notification::<lsp_types::notification::ShowMessage>(
+                            lsp_types::ShowMessageParams {
+                                typ: lsp_types::MessageType::ERROR,
+                                message: format!("Language server {} has exited", language_server.name()),
+                            },
+                        );
                     }
                     NotificationFromServer::PublishDianostics(params) => {
                         let language_server = language_server!();
