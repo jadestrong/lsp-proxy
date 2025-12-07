@@ -1,3 +1,5 @@
+use crate::syntax::SupportWorkspace;
+use log::{debug, error};
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -196,34 +198,112 @@ pub fn find_workspace_folder_for_uri(uri: &lsp_types::Url) -> Option<(String, St
     None
 }
 
-/// Find the closest root directory for a file.
-/// This function searches upward from the file path to find the most specific
-/// directory that contains any of the root markers, but doesn't go beyond the git workspace.
+/// Find LSP workspace directory based on support_workspace configuration.
 ///
-/// Returns the most specific (closest to file) root marker directory,
-/// or the git workspace root if no markers are found.
-pub fn find_lsp_workspace(doc_path: Option<&Path>, root_markers: &[String]) -> PathBuf {
+/// This function supports different workspace strategies:
+/// - `SupportWorkspace::WorkspaceRoots(markers)`:  search for the closest workspace root marker
+/// - `SupportWorkspace::Bool(_)`: search for the topmost root marker
+pub fn find_lsp_workspace(
+    doc_path: Option<&Path>,
+    root_markers: &[String],
+    support_workspace: &SupportWorkspace,
+) -> PathBuf {
     let Some(doc_path) = doc_path else {
         return current_working_dir();
     };
 
-    let (git_workspace, _) = find_workspace_for_file(doc_path);
+    let (git_workspace, workspace_is_cwd) = find_workspace_for_file(doc_path);
     let git_workspace = path::normalize(&git_workspace);
+
+    let lsp_workspace = match support_workspace {
+        // add a check that if support_roots is not empty, then use the closest marker
+        // otherwise, use the topmost marker
+        SupportWorkspace::WorkspaceRoots(workspace_root_markers) if !workspace_root_markers.is_empty() => {
+            // Monorepo project: try to find the closest workspace root marker first
+            find_lsp_workspace_closest(doc_path, workspace_root_markers, &git_workspace)
+                // Fall back to topmost strategy if no workspace markers found
+                .or_else(|| find_lsp_workspace_topmost(doc_path, root_markers, &git_workspace, workspace_is_cwd))
+        }
+        _ => {
+            // Traditional project: find the topmost root marker
+            find_lsp_workspace_topmost(doc_path, root_markers, &git_workspace, workspace_is_cwd)
+        }
+    };
+
+    lsp_workspace.unwrap_or(current_working_dir())
+}
+
+/// Find the closest root directory for a file.
+/// This function searches upward from the file path to find the most specific
+/// directory that contains any of the workspace root markers, but doesn't go beyond the git workspace.
+///
+/// Returns the most specific (closest to file) root marker directory if found,
+/// or None if no workspace markers are found.
+fn find_lsp_workspace_closest(
+    doc_path: &Path,
+    workspace_root_markers: &[String],
+    workspace: &Path,
+) -> Option<PathBuf> {
     let current_dir = doc_path.parent().unwrap_or(doc_path);
 
+    // Try to find workspace markers first
     current_dir
         .ancestors()
         .take_while(|ancestor| {
-            // 包含 git_workspace 本身，但不超过它
-            ancestor.starts_with(&git_workspace) || *ancestor == git_workspace
+            // include git_workspace itself, but not beyond it
+            ancestor.starts_with(&workspace) || *ancestor == workspace
         })
         .find(|ancestor| {
-            root_markers
+            workspace_root_markers
                 .iter()
                 .any(|marker| ancestor.join(marker).exists())
         })
         .map(|p| p.to_path_buf())
-        .unwrap_or(git_workspace)
+    // Return None if no workspace markers found (instead of falling back to workspace)
+}
+
+fn find_lsp_workspace_topmost(
+    file: &Path,
+    root_markers: &[String],
+    workspace: &Path,
+    workspace_is_cwd: bool,
+) -> Option<PathBuf> {
+    // convert file to an absolute path
+    let mut file = if file.is_absolute() {
+        file.to_path_buf()
+    } else {
+        error!("Not support relative path");
+        let current_dir = current_working_dir();
+        current_dir.join(file)
+    };
+    file = path::normalize(&file);
+
+    // This only possible when the passed-in file is an absolute path that is not
+    // under the workspace path. In this case, we should return None.
+    if !file.starts_with(workspace) {
+        return None;
+    }
+
+    let mut top_marker = None;
+    for ancestor in file.ancestors() {
+        if root_markers
+            .iter()
+            .any(|marker| ancestor.join(marker).exists())
+        {
+            top_marker = Some(ancestor);
+        }
+
+        if ancestor == workspace {
+            debug!("~~~ {:?}", workspace);
+            // if the workspace is the CWD, let the LSP decide what the workspace
+            // is
+            return top_marker
+                .or_else(|| (!workspace_is_cwd).then_some(workspace))
+                .map(Path::to_owned);
+        }
+    }
+    debug_assert!(false, "workspace must be an ancestor of <file>");
+    None
 }
 
 pub fn from_json<T: DeserializeOwned>(

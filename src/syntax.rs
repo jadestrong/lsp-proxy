@@ -118,6 +118,19 @@ impl<'de> Deserialize<'de> for FileType {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "kebab-case")]
+pub enum SupportWorkspace {
+    Bool(bool),
+    WorkspaceRoots(Vec<String>),
+}
+
+impl Default for SupportWorkspace {
+    fn default() -> Self {
+        SupportWorkspace::Bool(false)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum LanguageServerFeature {
@@ -185,7 +198,7 @@ enum LanguageServerFeatureConfiguration {
         except_features: HashSet<LanguageServerFeature>,
         name: String,
         #[serde(default)]
-        support_workspace: bool,
+        support_workspace: SupportWorkspace,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         library_directories: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -199,7 +212,7 @@ pub struct LanguageServerFeatures {
     pub name: String,
     pub only: HashSet<LanguageServerFeature>,
     pub excluded: HashSet<LanguageServerFeature>,
-    pub support_workspace: bool,
+    pub support_workspace: SupportWorkspace,
     pub library_directories: Vec<String>,
     pub config_files: Vec<String>,
 }
@@ -257,7 +270,7 @@ where
         // Check if we need to use the full Features variant
         let has_non_default_fields = !features.only.is_empty()
             || !features.excluded.is_empty()
-            || features.support_workspace
+            || !matches!(features.support_workspace, SupportWorkspace::Bool(false))
             || !features.library_directories.is_empty()
             || !features.config_files.is_empty();
         
@@ -266,7 +279,7 @@ where
                 only_features: features.only.clone(),
                 except_features: features.excluded.clone(),
                 name: features.name.to_owned(),
-                support_workspace: features.support_workspace,
+                support_workspace: features.support_workspace.clone(),
                 library_directories: features.library_directories.clone(),
                 config_files: features.config_files.clone(),
             }

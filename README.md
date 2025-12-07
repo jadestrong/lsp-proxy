@@ -193,9 +193,80 @@ language-servers = [
 | `name` | Language server name (required) |
 | `except-features` | Disable specific features (blacklist) |
 | `only-features` | Enable only specific features (whitelist) |
-| `support-workspace` | Share server instance across workspaces |
+| `support-workspace` | Workspace detection strategy (see below) |
 | `library-directories` | External library paths for navigation |
 | `config-files` | Activate only if config file exists |
+
+### Workspace Detection Strategies
+
+The `support-workspace` option controls how LSP-Proxy detects workspace roots and manages server instances:
+
+#### Traditional Projects (Default)
+```toml
+# Default behavior - no support-workspace specified
+{ name = "rust-analyzer" }
+# Equivalent to: support-workspace = false
+```
+- **Detection**: Finds the outermost root marker (e.g., `Cargo.toml`) within git repository
+- **Server Management**: One server instance per unique workspace root
+- **Best for**: Traditional projects, rust-analyzer, gopls, etc.
+
+#### Cross-Workspace Sharing
+```toml
+{ name = "eslint", support-workspace = true }
+```
+- **Detection**: Finds the closest root marker (e.g., `package.json`)
+- **Server Management**: Can reuse server across different workspace roots
+- **Best for**: Tools that work across multiple projects like eslint, prettier
+
+#### Monorepo Module Detection
+```toml
+{ name = "vtsls", support-workspace = ["package.json"] }
+```
+- **Detection**: First tries to find closest specified markers (`package.json`), falls back to outermost root markers if not found
+- **Server Management**: One server per unique workspace root
+- **Best for**: Monorepos where each module needs its own server instance
+
+#### Example Configurations
+
+**Rust Project**:
+```toml
+[[language]]
+name = "rust"
+roots = ["Cargo.toml", "Cargo.lock"]
+language-servers = [
+  { name = "rust-analyzer" }  # Uses outermost strategy - entire Cargo workspace
+]
+```
+
+**JavaScript Monorepo**:
+```toml
+[[language]]
+name = "javascript"
+roots = ["package.json"]
+language-servers = [
+  { name = "vtsls", support-workspace = ["package.json"] },  # Each package.json gets own server
+  { name = "eslint", support-workspace = true }              # Shared across packages
+]
+```
+
+**Project Structure Example**:
+```
+monorepo/                    # git repository root
+├── .git/
+├── package.json            # workspace root marker
+├── packages/
+│   ├── frontend/
+│   │   ├── package.json    # module root marker
+│   │   └── src/index.ts    # editing this file
+│   └── backend/
+│       ├── package.json    # another module
+│       └── src/index.ts
+```
+
+With the configuration above:
+- **vtsls**: workspace = `monorepo/packages/frontend/` (closest `package.json`)
+- **eslint**: can share server instance across both frontend and backend packages
 
 **Supported features:**
 

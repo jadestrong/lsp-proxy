@@ -387,7 +387,7 @@ Skip reopening notifications for buffers not currently visible."
                        (insert (format "  - %s\n" (plist-get ls :name)))
                        (insert (format "    Root: %s\n" (plist-get ls :rootPath)))
                        (insert (format "    Support Workspace: %s\n"
-                                       (if (eq (plist-get ls :supportWorkspace) :json-false) "No" "Yes"))))))
+                                       (if (eq (plist-get ls :supportWorkspace) :json-false) "No" (plist-get ls :supportWorkspace)))))))
                (insert "No workspace information available\n"))))))
 
       ;; Print diagnostics for current buffer if available

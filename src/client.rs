@@ -32,7 +32,7 @@ use crate::{
     },
     msg::RequestId,
     registry,
-    syntax::{LanguageServerFeature, LanguageServerFeatures},
+    syntax::{LanguageServerFeature, LanguageServerFeatures, SupportWorkspace},
     utils::{defer, find_lsp_workspace, get_activate_time},
 };
 
@@ -83,8 +83,13 @@ impl Client {
         root_markers: &[String],
         doc_path: Option<&std::path::PathBuf>,
         may_support_workspace: bool,
+        support_workspace: &SupportWorkspace,
     ) -> bool {
-        let file_root = find_lsp_workspace(doc_path.map(|p| p.as_path()), root_markers);
+        let file_root = find_lsp_workspace(
+            doc_path.map(|p| p.as_path()),
+            root_markers,
+            support_workspace
+        );
         let root_uri = lsp::Url::from_file_path(&file_root).ok();
 
         // Check whether the file belongs to this client
@@ -173,13 +178,21 @@ impl Client {
         features: Option<&LanguageServerFeatures>,
     ) -> registry::Result<(Self, UnboundedReceiver<(usize, Call)>, Arc<Notify>)> {
         // find the closest root directory as the LSP workspace
-        let root_path = find_lsp_workspace(doc_path.map(|p| p.as_path()), root_markers);
+        let default_workspace = SupportWorkspace::default();
+        let support_workspace = features
+            .map(|f| &f.support_workspace)
+            .unwrap_or(&default_workspace);
+        let root_path = find_lsp_workspace(
+            doc_path.map(|p| p.as_path()),
+            root_markers,
+            support_workspace
+        );
         let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
         log::debug!(
             "Starting LSP client '{}': support_workspace={:?}, file={:?}, root={:?}",
             name,
-            features.map(|f| f.support_workspace),
+            features.map(|f| &f.support_workspace),
             doc_path,
             root_path
         );
@@ -256,11 +269,11 @@ impl Client {
         self.id
     }
 
-    pub fn support_workspace(&self) -> bool {
+    pub fn support_workspace(&self) -> SupportWorkspace {
         self.features
             .as_ref()
-            .map(|f| f.support_workspace)
-            .unwrap_or(false)
+            .map(|f| f.support_workspace.clone())
+            .unwrap_or_default()
     }
 
     pub fn config(&self) -> Option<&Value> {

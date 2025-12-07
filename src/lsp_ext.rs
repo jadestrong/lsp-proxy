@@ -1,4 +1,4 @@
-use crate::msg::RequestId;
+use crate::{msg::RequestId, syntax};
 use lsp_types::{
     notification::Notification, request::Request, DidCloseTextDocumentParams, ProgressParams,
 };
@@ -136,7 +136,7 @@ pub struct WorkspaceInfo {
 pub struct LanguageServerInfo {
     pub name: String,
     pub root_path: String,
-    pub support_workspace: bool,
+    pub support_workspace: syntax::SupportWorkspace,
 }
 
 impl Request for GetWorkspaceInfo {
@@ -151,7 +151,7 @@ pub enum GetLanguagesConfig {}
 
 impl Request for GetLanguagesConfig {
     type Params = ();
-    type Result = String;  // JSON string of merged languages config
+    type Result = String; // JSON string of merged languages config
     const METHOD: &'static str = "emacs/getLanguagesConfig";
 }
 

@@ -122,23 +122,30 @@ impl Registry {
                       ..
                   }| {
                 if let Some(clients) = self.inner.get(name) {
-                    // 计算当前文件所属的项目根（子包优先）
-                    let file_root = find_lsp_workspace(doc_path.map(|p| p.as_path()), &language_config.roots);
+                    // find the root path of the current file based on the support_workspace strategy
+                    let file_root = find_lsp_workspace(
+                        doc_path.map(|p| p.as_path()),
+                        &language_config.roots,
+                        support_workspace
+                    );
                     
-                    // 根据 support_workspace 决定客户端复用策略
-                    let reusable_client = if *support_workspace {
-                        // 支持多工作区：可以跨项目复用，通过 try_add_doc 判断是否可添加
-                        clients.iter().find(|client| {
-                            client.try_add_doc(&language_config.roots, doc_path, true)
-                        })
-                    } else {
-                        // 不支持多工作区：只能复用相同项目根的客户端
-                        clients.iter().find(|client| client.root_path == file_root)
+                    // try to find existing clients based on support_workspace
+                    let reusable_client = match support_workspace {
+                        // support multiple workspaces
+                        crate::syntax::SupportWorkspace::Bool(true) => {
+                            clients.iter().find(|client| {
+                                client.try_add_doc(&language_config.roots, doc_path, true, support_workspace)
+                            })
+                        }
+                        _ => {
+                            // support_workspace ≠ true: include Bool(false) and WorkspaceRoots(_)
+                            clients.iter().find(|client| client.root_path == file_root)
+                        }
                     };
 
                     if let Some(client) = reusable_client {
                         debug!(
-                            "Reusing client '{}': support_workspace={}, file={:?}, root={:?}",
+                            "Reusing client '{}': support_workspace={:?}, file={:?}, root={:?}",
                             name, support_workspace, doc_path, client.root_path
                         );
                         return (name.to_owned(), Ok(client.clone()));
@@ -160,9 +167,14 @@ impl Registry {
 
                 // 创建新客户端
                 debug!(
-                    "Creating new client '{name}': support_workspace={support_workspace}, file={doc_path:?}"
+                    "Creating new client '{name}': support_workspace={support_workspace:?}, file={doc_path:?}"
                 );
-                match self.start_client(name.clone(), language_config, doc_path) {
+                match self.start_client(name.clone(), language_config, doc_path, Some(&LanguageServerFeatures {
+                    name: name.clone(),
+                    support_workspace: support_workspace.clone(),
+                    library_directories: library_directories.clone(),
+                    ..Default::default()
+                })) {
                     Ok(client) => {
                         self.inner
                             .entry(name.to_owned())
@@ -197,6 +209,7 @@ impl Registry {
         name: String,
         ls_config: &LanguageConfiguration,
         doc_path: Option<&std::path::PathBuf>,
+        features: Option<&LanguageServerFeatures>,
     ) -> Result<Arc<Client>> {
         // 加载 LanguageServerConfiguration
         let config = self
@@ -207,13 +220,7 @@ impl Registry {
         let id = self.counter;
         self.counter += 1;
 
-        // 查找对应的语言服务器特性配置
-        let ls_features = ls_config
-            .language_servers
-            .iter()
-            .find(|features| features.name == name);
-
-        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path, ls_features)?;
+        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path, features)?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -231,10 +238,10 @@ impl Registry {
         let new_clients = language_config
             .language_servers
             .iter()
-            .filter_map(|LanguageServerFeatures { name, .. }| {
+            .filter_map(|features @ LanguageServerFeatures { name, .. }| {
                 if self.inner.contains_key(name) {
                     let client =
-                        match self.start_client(name.clone(), language_config, doc_path.as_ref()) {
+                        match self.start_client(name.clone(), language_config, doc_path.as_ref(), Some(features)) {
                             Ok(client) => client,
                             error => return Some(error),
                         };
