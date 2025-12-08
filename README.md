@@ -64,7 +64,7 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
 - Recommend
 ``` elisp
 (package! lsp-proxy :recipe (:host github :repo "jadestrong/lsp-proxy"
-                :files ("*.el"))
+                :files ("*.el")))
 ```
 
 ``` elisp
