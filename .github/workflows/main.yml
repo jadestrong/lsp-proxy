@@ -7,7 +7,7 @@ on:
 
 permissions:
   id-token: write  # Required for OIDC
-  contents: read
+  contents: write  # Required for creating releases and committing version updates
 
 jobs:
   # Step 1: Update versions (but don't commit yet)
