@@ -112,15 +112,14 @@ impl Registry {
         language_config: &'a LanguageConfiguration,
         doc_path: Option<&'a std::path::PathBuf>,
     ) -> impl Iterator<Item = (LanguageServerName, Result<Arc<Client>>)> + 'a {
-        // NOTE 从 language_config 中查找是否有满足的 lsp server ，是否可以将所有支持的 language lsp adapter 都注册到 editor 实例上
-        // 直接从 LspRegistry 中查找？
         language_config.language_servers.iter().map(
-            move |LanguageServerFeatures {
+            move |feature| {
+                let LanguageServerFeatures {
                       name,
                       support_workspace,
                       library_directories,
                       ..
-                  }| {
+                } = feature;
                 if let Some(clients) = self.inner.get(name) {
                     // find the root path of the current file based on the support_workspace strategy
                     let file_root = find_lsp_workspace(
@@ -169,12 +168,7 @@ impl Registry {
                 debug!(
                     "Creating new client '{name}': support_workspace={support_workspace:?}, file={doc_path:?}"
                 );
-                match self.start_client(name.clone(), language_config, doc_path, Some(&LanguageServerFeatures {
-                    name: name.clone(),
-                    support_workspace: support_workspace.clone(),
-                    library_directories: library_directories.clone(),
-                    ..Default::default()
-                })) {
+                match self.start_client(name.clone(), language_config, doc_path, Some(feature)) {
                     Ok(client) => {
                         self.inner
                             .entry(name.to_owned())
