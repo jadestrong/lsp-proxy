@@ -5,6 +5,10 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
 jobs:
   # Step 1: Update versions (but don't commit yet)
   prepare-versions:
