@@ -5,6 +5,9 @@
   "license": "ISC",
   "description": "The macOS 64-bit binary for emacs-lsp-proxy.",
   "preferUnplugged": true,
+  "repository": {
+    "url": "https://github.com/jadestrong/lsp-proxy"
+  },
   "engines": {
     "node": ">=18"
   },

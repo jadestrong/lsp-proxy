@@ -10,6 +10,9 @@
   "publicConfig": {
     "access": "public"
   },
+  "repository": {
+    "url": "https://github.com/jadestrong/lsp-proxy"
+  },
   "keywords": [
     "emacs",
     "lsp",
