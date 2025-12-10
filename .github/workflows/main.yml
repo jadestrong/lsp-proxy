@@ -294,8 +294,6 @@ jobs:
           done
 
       - name: Publish npm packages
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -e
           echo "🚀 Publishing npm packages..."
@@ -308,7 +306,7 @@ jobs:
               platform_name=$(basename "$platform_dir")
               echo "🔄 Publishing @emacs-lsp-proxy/$platform_name..."
               cd "$platform_dir"
-              npm publish --access public
+              npm publish
               cd ..
               echo "✅ Published @emacs-lsp-proxy/$platform_name"
             fi
@@ -317,7 +315,7 @@ jobs:
           # Publish main package
           echo "📦 Publishing main package..."
           cd ../emacs-lsp-proxy
-          npm publish --access public
+          npm publish
           echo "✅ Published emacs-lsp-proxy"
           
           echo "🎉 All npm packages published successfully!"
