@@ -116,6 +116,23 @@ that support `textDocument/hover' request.")
 
 ;;; External variables from eglot
 (defvar eglot--versioned-identifier)
+(defvar eglot--docver)
+
+(defsubst lsp-proxy--doc-version ()
+  "Get document version, compatible with old and new eglot."
+  (if (boundp 'eglot--docver) eglot--docver eglot--versioned-identifier))
+
+(defsubst lsp-proxy--set-doc-version (val)
+  "Set document version to VAL, compatible with old and new eglot."
+  (if (boundp 'eglot--docver)
+      (setq eglot--docver val)
+    (setq eglot--versioned-identifier val)))
+
+(defsubst lsp-proxy--incf-doc-version ()
+  "Increment document version, compatible with old and new eglot."
+  (if (boundp 'eglot--docver)
+      (cl-incf eglot--docver)
+    (cl-incf eglot--versioned-identifier)))
 
 ;;; External functions (to be defined by other modules)
 (declare-function lsp-proxy-diagnostics--request-pull-diagnostics "lsp-proxy-diagnostics")
@@ -328,7 +345,7 @@ that support `textDocument/hover' request.")
 (defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
-  (cl-incf eglot--versioned-identifier)
+  (lsp-proxy--incf-doc-version)
   (pcase (and (listp lsp-proxy--recent-changes)
               (car lsp-proxy--recent-changes))
     (`(,lsp-beg ,lsp-end
@@ -381,8 +398,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 (defun lsp-proxy--on-doc-open ()
   "On doc open."
   (setq lsp-proxy--recent-changes nil
-        eglot--versioned-identifier 0
         eglot--TextDocumentIdentifier-cache nil)
+  (lsp-proxy--set-doc-version 0)
   (when (and buffer-file-name (not lsp-proxy--skip-auto-open))
     (condition-case nil
         (progn
@@ -401,7 +418,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                                            (list
                                                             :text initial-content
                                                             :languageId ""
-                                                            :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 eglot--versioned-identifier)
+                                                            :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 (lsp-proxy--doc-version))
                                                             :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
             ;; send large file content
             (when is-large-file
