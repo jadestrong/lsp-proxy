@@ -145,8 +145,11 @@ Or nil if none."
   "Return ITEM's kind."
   (let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
          (completion-item (plist-get proxy-item :item))
-         (kind (and completion-item (plist-get completion-item :kind))))
-    (alist-get kind eglot--kind-names)))
+         (kind (alist-get (and completion-item (plist-get completion-item :kind)) eglot--kind-names)))
+    (pcase kind
+      ("EnumMember" 'enum-member)
+      ("TypeParameter" 'type-parameter)
+      (_ (intern (downcase kind))))))
 
 (defun lsp-proxy--annotate (item)
   "Annotate ITEM detail."
