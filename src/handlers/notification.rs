@@ -10,12 +10,13 @@ use lsp_types::{
 pub(crate) fn handle_did_open_text_document(
     app: &mut Application,
     params: lsp_types::DidOpenTextDocumentParams,
+    language: Option<&str>,
 ) -> Result<()> {
     let doc = app.editor.document_by_uri(&params.text_document.uri);
     let doc_id = match doc {
         Some(doc) => doc.id,
         None => {
-            let doc = app.editor.new_document(&params.text_document.uri);
+            let doc = app.editor.new_document(&params.text_document.uri, language);
             doc.id()
         }
     };

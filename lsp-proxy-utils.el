@@ -235,7 +235,10 @@ LSP server result."
   "Wrap request or notify params base PARAMS and add extra ARGS."
   (require 'eglot)
   (let ((rest (apply 'append args)))
-    (append (append (eglot--TextDocumentIdentifier) `(:params ,params)) rest)))
+    (append (append (eglot--TextDocumentIdentifier)
+                    `(:params ,params)
+                    `(:language ,lsp-proxy--language))
+            rest)))
 
 
 ;;; Hash table project management utilities

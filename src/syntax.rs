@@ -401,7 +401,7 @@ impl Loader {
         })
     }
 
-    pub fn language_config_for_file_name(&self, path: &Path) -> Option<Arc<LanguageConfiguration>> {
+    pub fn language_config_for_file_name(&self, path: &Path, language: Option<&str>) -> Option<Arc<LanguageConfiguration>> {
         // Find all the language configurations that match this file name
         // or a suffix of the file name.
         let configuration_id = self
@@ -413,7 +413,12 @@ impl Loader {
                     .and_then(|extension| self.language_config_ids_by_extension.get(extension))
             });
 
-        configuration_id.and_then(|&id| self.language_configs.get(id).cloned())
+        configuration_id
+            .and_then(|&id| self.language_configs.get(id).cloned())
+            .or_else(|| {
+                // Third fallback: use the provided language parameter
+                language.and_then(|lang| self.language_config_for_language_id(lang))
+            })
 
         // TODO: content_regex handling conflict resolution
     }

@@ -185,6 +185,7 @@ pub enum Context {
 pub struct Params {
     pub uri: Option<String>,
     pub context: Option<Context>,
+    pub language: Option<String>,
     #[serde(default = "serde_json::Value::default")]
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
@@ -307,6 +308,7 @@ impl Request {
             params: Params {
                 uri: None,
                 context: None,
+                language: None,
                 params: serde_json::to_value(params).unwrap(),
             },
         }
@@ -320,6 +322,7 @@ impl Notification {
             params: Params {
                 uri: None,
                 context: None,
+                language: None,
                 params: serde_json::to_value(params).unwrap(),
             },
         }
