@@ -72,19 +72,12 @@ falls back to a quick byte-size based heuristic (via
 
 (cl-defmethod xref-backend-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-proxy-find-definition)))
+    (lsp-proxy--sync-request-for-xref 'textDocument/definition)))
 
 (cl-defmethod xref-backend-references ((_backend (eql xref-lsp-proxy)) _identifier)
   (save-excursion
-    (lsp-proxy-find-references)))
-
-(cl-defmethod xref-backend-implementations ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-implementations)))
-
-(cl-defmethod xref-backend-type-definitions ((_backend (eql xref-lsp-proxy)) _identifier)
-  (save-excursion
-    (lsp-proxy-find-type-definition)))
+    (lsp-proxy--sync-request-for-xref 'textDocument/references 
+                                      '(:context (:includeDeclaration t)))))
 
 ;;; Lazy xref location class
 
@@ -320,10 +313,13 @@ by the server (assuming `file-locations' was in that order)."
 
 ;;; Location processing
 
-(defun lsp-proxy--process-locations (locations)
-  "Process LOCATIONS and show xrefs, using optimized batch processing."
+(defun lsp-proxy--process-locations (locations &optional return-results)
+  "Process LOCATIONS using optimized batch processing.
+If RETURN-RESULTS is non-nil, return the xref items instead of showing them."
   (if (seq-empty-p locations)
-      (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) ""))
+      (if return-results
+          nil
+        (lsp-proxy--error "Not found for: %s" (or (thing-at-point 'symbol t) "")))
     (let ((locations-vec (if (vectorp locations) locations (vector locations))))
       ;; Group locations by file and strategy
       (let ((file-strategy-map (make-hash-table :test 'equal))
@@ -374,9 +370,25 @@ by the server (assuming `file-locations' was in that order)."
               (setq all-results (append (lsp-proxy--batch-process-locations-optimized corrected-optimized-files) all-results))))
 
           (when all-results
-            (lsp-proxy-show-xrefs (delq nil all-results) nil nil)))))))
+            (let ((final-results (delq nil all-results)))
+              (if return-results
+                  final-results
+                (when final-results
+                  (lsp-proxy-show-xrefs final-results nil nil))))))))))
 
 ;;; Navigation commands
+
+(defun lsp-proxy--sync-request-for-xref (method &optional extra-params)
+  "Send a synchronous request with METHOD and optional EXTRA-PARAMS, return xref items.
+This version returns xref objects suitable for xref backend methods.
+EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
+  (when-let* ((params (if extra-params
+                          (append (eglot--TextDocumentPositionParams) extra-params)
+                        (eglot--TextDocumentPositionParams)))
+              (response (lsp-proxy--request 
+                         method 
+                         (lsp-proxy--request-or-notify-params params))))
+    (lsp-proxy--process-locations response t)))
 
 (defun lsp-proxy-find-definition ()
   "Find definition."
