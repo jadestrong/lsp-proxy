@@ -53,11 +53,18 @@ Returns a list as described in docstring of `imenu--index-alist'."
 
 (defun lsp-proxy--imenu-lsp-goto (_name pos)
   "Jump to imenu entry NAME at POS."
-  (let ((line (car pos))
-        (character (cdr pos)))
-    (goto-char (point-min))
-    (forward-line line)
-    (forward-char character)))
+  (if (markerp pos)
+      (progn
+        (if (or (< pos (point-min))
+                (> pos (point-max)))
+            ;; Widen if outside narrowing.
+            (widen))
+        (goto-char pos))
+    (let ((line (car pos))
+          (character (cdr pos)))
+      (goto-char (point-min))
+      (forward-line line)
+      (forward-char character))))
 
 ;;; Setup and teardown
 
