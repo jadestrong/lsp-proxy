@@ -566,7 +566,7 @@ impl Client {
             process_id: Some(std::process::id()),
             root_path: self.root_path.to_str().map(|path| path.to_owned()),
             root_uri: self.root_uri.clone(),
-            initialization_options: self.config.clone(),
+            initialization_options: Some(self.config.clone().unwrap_or(json!({}))),
             capabilities: lsp::ClientCapabilities {
                 workspace: Some(lsp::WorkspaceClientCapabilities {
                     configuration: Some(true),

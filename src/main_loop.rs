@@ -308,11 +308,12 @@ impl Application {
                         // NOTE Trigger a workspace/didChangeConfiguration notification after initialization.
                         // This might not be required by the spec but Neovim does this as well, so it's
                         // probably a good idea for compatibility.
-                        if let Some(config) = language_server.config() {
-                            language_server
-                                .did_change_configuration(config.clone())
-                                .unwrap();
-                        }
+                        let config = match language_server.config() {
+                            Some(value) => value.clone(),
+                            None => json!({}),
+                        };
+
+                        language_server.did_change_configuration(config).unwrap();
                         self.editor
                             .documents()
                             .filter(|doc| {
