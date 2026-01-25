@@ -10,16 +10,18 @@ use lsp_types::{
 pub(crate) fn handle_did_open_text_document(
     app: &mut Application,
     params: lsp_types::DidOpenTextDocumentParams,
-    language: Option<&str>,
+    _language: Option<&str>,
 ) -> Result<()> {
     let doc = app.editor.document_by_uri(&params.text_document.uri);
     let doc_id = match doc {
         Some(doc) => doc.id,
         None => {
-            let doc = app.editor.new_document(&params.text_document.uri, language);
+            // The language_id param is guessed by major-mode, only used as a fallback to get a language server when the file extension missed or no match server.
+            let doc = app.editor.new_document(&params.text_document.uri, Some(&params.text_document.language_id));
             doc.id()
         }
     };
+
     let uri = params.text_document.uri.to_owned();
     let text = params.text_document.text.to_owned();
     app.editor.launch_langauge_servers(doc_id);
