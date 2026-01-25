@@ -149,4 +149,21 @@ impl Editor {
     pub fn language_server_by_id(&self, language_server_id: usize) -> Option<Arc<Client>> {
         self.language_servers.get_by_id(language_server_id)
     }
+
+    /// Remove document from editor by URI
+    /// Returns true if the document was found and removed
+    pub fn remove_document(&mut self, uri: &Url) -> bool {
+        if let Some(doc) = self.document_by_uri(uri) {
+            let doc_id = doc.id;
+            self.documents.remove(&doc_id).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Remove document from editor by DocumentId  
+    /// Returns the removed document if it existed
+    pub fn remove_document_by_id(&mut self, doc_id: DocumentId) -> Option<Document> {
+        self.documents.remove(&doc_id)
+    }
 }

@@ -1,7 +1,7 @@
 use crate::{application::Application, lsp_ext, utils::get_activate_time};
 use anyhow::Result;
 use itertools::Itertools;
-use log::error;
+use log::{error, debug};
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidSaveTextDocumentParams,
     MessageType, WillSaveTextDocumentParams,
@@ -16,6 +16,7 @@ pub(crate) fn handle_did_open_text_document(
     let doc_id = match doc {
         Some(doc) => doc.id,
         None => {
+            debug!("new a document with language {:?}", &params.text_document.language_id);
             // The language_id param is guessed by major-mode, only used as a fallback to get a language server when the file extension missed or no match server.
             let doc = app.editor.new_document(&params.text_document.uri, Some(&params.text_document.language_id));
             doc.id()
@@ -117,17 +118,35 @@ pub(crate) fn handle_did_close_text_document(
     params: DidCloseTextDocumentParams,
 ) -> Result<()> {
     let editor = &mut app.editor;
-    {
-        let doc = editor.document_by_uri_mut(&params.text_document.uri);
-        if let Some(doc) = doc {
+    let uri = &params.text_document.uri;
+    
+    // Get document ID before removal for cleanup
+    let doc_id = editor.document_by_uri(uri).map(|doc| doc.id);
+    
+    if let Some(doc_id) = doc_id {
+        // Get a reference to the document to close language servers
+        {
+            let doc = editor.document_mut(doc_id).unwrap();
+            
+            // Close language servers
             for language_server in doc.language_servers() {
                 language_server
                     .text_document_did_close(params.clone())
                     .unwrap();
             }
+
             doc.reset();
         }
+        
+        // Remove document from editor
+        let removed = editor.remove_document(uri);
+        if removed {
+            log::info!("Document {} removed from editor", uri);
+        } else {
+            log::warn!("Failed to remove document {} from editor", uri);
+        }
     }
+    
     Ok(())
 }
 
