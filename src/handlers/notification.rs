@@ -1,7 +1,10 @@
-use crate::{application::Application, lsp_ext, utils::get_activate_time};
+use crate::{
+    application::Application, document::VirtualDocumentInfo, lsp_ext, msg::Context,
+    utils::get_activate_time,
+};
 use anyhow::Result;
 use itertools::Itertools;
-use log::{error, debug};
+use log::{debug, error};
 use lsp_types::{
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidSaveTextDocumentParams,
     MessageType, WillSaveTextDocumentParams,
@@ -10,51 +13,130 @@ use lsp_types::{
 pub(crate) fn handle_did_open_text_document(
     app: &mut Application,
     params: lsp_types::DidOpenTextDocumentParams,
-    _language: Option<&str>,
+    context: Option<Context>,
 ) -> Result<()> {
-    let doc = app.editor.document_by_uri(&params.text_document.uri);
-    let doc_id = match doc {
-        Some(doc) => doc.id,
-        None => {
-            debug!("new a document with language {:?}", &params.text_document.language_id);
-            // The language_id param is guessed by major-mode, only used as a fallback to get a language server when the file extension missed or no match server.
-            let doc = app.editor.new_document(&params.text_document.uri, Some(&params.text_document.language_id));
-            doc.id()
-        }
-    };
+    debug!("did_open {:?}", params);
 
-    let uri = params.text_document.uri.to_owned();
-    let text = params.text_document.text.to_owned();
-    app.editor.launch_langauge_servers(doc_id);
-    let doc = app.editor.document_by_uri(&uri);
-    if let Some(doc) = doc {
-        // send didOpen notification directly, notifies will pending until server initialized.
-        let language_id = doc.language_id().to_owned().unwrap_or_default();
-        doc.language_servers.values().for_each(|ls| {
-            ls.text_document_did_open(
-                uri.clone(),
-                doc.version(),
-                text.clone(),
-                language_id.to_string(),
-            )
-            .unwrap();
-        });
-        if doc.language_servers.values().any(|ls| ls.is_initialized()) {
-            app.send_notification::<lsp_ext::CustomServerCapabilities>(
-                doc.get_server_capabilities(),
+    // 首先检查文档是否存在，如果不存在则创建
+    let doc_exists = app
+        .editor
+        .document_by_uri(&params.text_document.uri)
+        .is_some();
+    if !doc_exists {
+        debug!(
+            "create a document with language {:?}",
+            &params.text_document.language_id
+        );
+        // The language_id param is guessed by major-mode, only used as a fallback to get a language server when the file extension missed or no match server.
+        app.editor.new_document(
+            &params.text_document.uri,
+            Some(&params.text_document.language_id),
+        );
+    }
+
+    // 获取 URI 以便后续查找文档 ID
+    let uri = params.text_document.uri.clone();
+
+    // 检查是否是 org 文件并处理虚拟文档
+    if let Some(doc) = app.editor.document_by_uri(&uri) {
+        if doc.is_org_file() {
+            if let Some(Context::OrgBabelContext(context)) = &context {
+                let doc_id = doc.id();
+                let version = doc.version();
+                let should_update = match &doc.virtual_doc {
+                    Some(existing_virtual_doc) => {
+                        existing_virtual_doc.org_line_bias != context.org_line_bias
+                            || existing_virtual_doc.language != context.language
+                    }
+                    None => true,
+                };
+
+                if should_update {
+                    // 保存必要的信息以避免借用冲突
+                    let org_line_bias = context.org_line_bias;
+                    let language = context.language.clone();
+                    let syn_loader = app.editor.syn_loader.clone();
+
+                    // 创建新的 virtualDocumentInfo 对象
+                    let virtual_doc =
+                        VirtualDocumentInfo::new(org_line_bias, language.clone(), Some(syn_loader));
+                    let language_id = virtual_doc.language_id().to_owned();
+                    // 现在可以安全地获取可变引用
+                    if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
+                        // 清空现有的语言服务器连接
+                        doc.language_servers_of_virtual_doc.clear();
+                        doc.virtual_doc = Some(virtual_doc);
+                    }
+                    let client = app
+                        .editor
+                        .launch_language_servers_for_virtual_document(doc_id, &language);
+
+                    if let Some(ls) = client {
+                        ls.text_document_did_open(
+                            uri,
+                            version,
+                            params.text_document.text.to_owned(),
+                            language_id.clone(),
+                        )
+                        .unwrap();
+                        debug!("Success launch {:?} server for current block.", ls.name());
+                    }
+                    // let clients = doc.language_servers_of_virtual_doc.values();
+
+                    // if let Some(virtual_doc) = doc.virtual_doc {
+                    // 启动虚拟文档的语言服务器
+                    // 启动完成后，进行 didOpen TODO
+                    // virtual_doc 的 language_id
+                    // doc.language_servers_of_virtual_doc.values().for_each(|ls| {
+                    //     ls.text_document_did_open(
+                    //         uri.clone(),
+                    //         doc.version(),
+                    //         params.text_document.text.to_owned(),
+                    //         language_id.clone(),
+                    //     )
+                    //     .unwrap();
+                    // });
+                    // }
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    let doc_id = app.editor.document_by_uri(&uri).map(|doc| doc.id());
+    if let Some(doc_id) = doc_id {
+        let text = params.text_document.text.to_owned();
+        app.editor.launch_language_servers(doc_id);
+        let doc = app.editor.document_by_uri(&uri);
+        if let Some(doc) = doc {
+            // send didOpen notification directly, notifies will pending until server initialized.
+            let language_id = doc.language_id().to_owned().unwrap_or_default();
+            doc.language_servers.values().for_each(|ls| {
+                ls.text_document_did_open(
+                    uri.clone(),
+                    doc.version(),
+                    text.clone(),
+                    language_id.to_string(),
+                )
+                .unwrap();
+            });
+            if doc.language_servers.values().any(|ls| ls.is_initialized()) {
+                app.send_notification::<lsp_ext::CustomServerCapabilities>(
+                    doc.get_server_capabilities(),
+                );
+            }
+            let configed_servers = doc.language_servers.keys().join("、");
+            app.send_notification::<lsp_types::notification::ShowMessage>(
+                lsp_types::ShowMessageParams {
+                    typ: MessageType::INFO,
+                    message: if configed_servers.is_empty() {
+                        "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
+                    } else {
+                        format!("Connected to {configed_servers}.")
+                    }
+                },
             );
         }
-        let configed_servers = doc.language_servers.keys().join("、");
-        app.send_notification::<lsp_types::notification::ShowMessage>(
-                    lsp_types::ShowMessageParams {
-                        typ: MessageType::INFO,
-                        message: if configed_servers.is_empty() {
-                            "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
-                        } else {
-                            format!("Connected to {configed_servers}.")
-                        }
-                    },
-                )
     } else {
         error!("No doc to send trigger characters");
     }
@@ -65,7 +147,10 @@ pub(crate) fn handle_did_open_text_document(
 pub(crate) fn handle_did_change_text_document(
     app: &mut Application,
     params: DidChangeTextDocumentParams,
+    context: Option<Context>,
 ) -> Result<()> {
+    // 如果是 org file 且在 babel block 中，则需要基于 org-line-bias 来校正
+    // server 也需要取 virtual_doc 的 server
     let doc = app.editor.document_by_uri_mut(&params.text_document.uri);
     if let Some(doc) = doc {
         doc.version = params.text_document.version;
@@ -73,6 +158,46 @@ pub(crate) fn handle_did_change_text_document(
             ls.notify::<lsp_types::notification::DidChangeTextDocument>(params.clone())
                 .unwrap()
         });
+
+        debug!("context: {:?}", context);
+        if let Some(Context::OrgBabelContext(context)) = context {
+            debug!("is_org_file? {:?}", doc.is_org_file());
+            // 如果是 org file 要单独给自己的 server 发送一份
+            if doc.is_org_file() && context.is_virtual_doc {
+                let ls = doc.language_servers_of_virtual_doc.get(&context.language);
+                debug!("get a ls {:?}", ls.is_some());
+                if let Some(ls) = ls {
+                    debug!("the ls is {:?}", ls.name());
+                    ls.notify::<lsp_types::notification::DidChangeTextDocument>(
+                        lsp_types::DidChangeTextDocumentParams {
+                            text_document: params.text_document.clone(),
+                            content_changes: params
+                                .content_changes
+                                .iter()
+                                .map(|change| {
+                                    let range = change.range.unwrap();
+                                    lsp_types::TextDocumentContentChangeEvent {
+                                        text: change.text.clone(),
+                                        range_length: change.range_length,
+                                        range: Some(lsp_types::Range {
+                                            start: lsp_types::Position {
+                                                line: range.start.line - context.org_line_bias,
+                                                character: range.start.character,
+                                            },
+                                            end: lsp_types::Position {
+                                                line: range.end.line - context.org_line_bias,
+                                                character: range.end.character,
+                                            },
+                                        }),
+                                    }
+                                })
+                                .collect_vec(),
+                        },
+                    )
+                    .unwrap();
+                }
+            }
+        }
     } else {
         error!("no corresponding doc found for did change request");
     }
@@ -119,15 +244,15 @@ pub(crate) fn handle_did_close_text_document(
 ) -> Result<()> {
     let editor = &mut app.editor;
     let uri = &params.text_document.uri;
-    
+
     // Get document ID before removal for cleanup
     let doc_id = editor.document_by_uri(uri).map(|doc| doc.id);
-    
+
     if let Some(doc_id) = doc_id {
         // Get a reference to the document to close language servers
         {
             let doc = editor.document_mut(doc_id).unwrap();
-            
+
             // Close language servers
             for language_server in doc.language_servers() {
                 language_server
@@ -137,7 +262,7 @@ pub(crate) fn handle_did_close_text_document(
 
             doc.reset();
         }
-        
+
         // Remove document from editor
         let removed = editor.remove_document(uri);
         if removed {
@@ -146,7 +271,7 @@ pub(crate) fn handle_did_close_text_document(
             log::warn!("Failed to remove document {} from editor", uri);
         }
     }
-    
+
     Ok(())
 }
 

@@ -189,15 +189,18 @@ that support `textDocument/hover' request.")
   (lambda (_))
   "Simply ignore the response.")
 
-(cl-defmacro lsp-proxy--notify (method &rest params)
-  "Send a notification (METHOD PARAMS) to the lsp proxy agent with ARGS."
+(cl-defmacro lsp-proxy--notify (method &rest params &key context &allow-other-keys)
+  "Send a notification (METHOD PARAMS) to the lsp proxy agent.
+Optional CONTEXT can be provided for org-mode and other special contexts."
   `(progn
      (lsp-proxy--ensure-connection)
      (if (or (eq ,method 'textDocument/didOpen)
              (eq ,method 'textDocument/willSave)
              (eq ,method 'textDocument/didSave)
              lsp-proxy--buffer-opened)
-         (let ((new-params (append (eglot--TextDocumentIdentifier) (list :params ,@params))))
+         (let ((new-params (lsp-proxy--request-or-notify-params 
+                           ,@params
+                           ,@(when context `((:context ,context))))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
        (lsp-proxy--on-doc-open))))
 
@@ -341,12 +344,14 @@ that support `textDocument/hover' request.")
             ,(eglot--pos-to-lsp-position end)
             (,beg . ,(copy-marker beg nil))
             (,end . ,(copy-marker end t)))
-          lsp-proxy--recent-changes)))
+          lsp-proxy--recent-changes))
+  (lsp-proxy-org-babel-send-src-block-to-lsp-server))
 
 (defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
   (lsp-proxy--incf-doc-version)
+  (lsp-proxy-org-babel-monitor-after-change beg end pre-change-length)
   (pcase (and (listp lsp-proxy--recent-changes)
               (car lsp-proxy--recent-changes))
     (`(,lsp-beg ,lsp-end
@@ -463,7 +468,15 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                  (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
                                           when (numberp len)
                                           vconcat `[,(list :range `(:start ,beg :end ,end)
-                                                           :rangeLength len :text text)]))))
+                                                           :rangeLength len :text text)])))
+                         :context (when (and lsp-proxy-enable-org-babel
+                                         (eq major-mode 'org-mode)
+                                         lsp-proxy-org-babel--info-cache) 
+                                    (list
+                                     :is-virtual-doc t
+                                     ;; FIXME not need every time
+                                     :org-line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+                                     :language (org-element-property :language lsp-proxy-org-babel--info-cache))))
       (lsp-proxy-diagnostics--request-pull-diagnostics)
       (setq lsp-proxy--recent-changes nil))))
 

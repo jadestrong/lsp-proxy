@@ -98,7 +98,7 @@ impl Editor {
         self.documents.get(&id).unwrap()
     }
 
-    pub fn launch_langauge_servers(&mut self, doc_id: DocumentId) {
+    pub fn launch_language_servers(&mut self, doc_id: DocumentId) {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
             return;
         };
@@ -143,6 +143,67 @@ impl Editor {
         }
 
         doc.language_servers = language_servers;
+    }
+
+    pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {
+        let Some(doc) = self.documents.get_mut(&doc_id) else {
+            return None;
+        };
+
+        // 获取虚拟文档的语言配置
+        let virtual_language_config = doc.virtual_doc.as_ref()
+            .and_then(|virtual_doc| virtual_doc.language_config.clone());
+
+        let all_language_servers = virtual_language_config
+            .as_ref()
+            .map_or_else(HashMap::default, |language_config| {
+                self.language_servers
+                    .get(language_config, doc.path().as_ref())
+                    .filter_map(|(lang, client)| match client {
+                        Ok(client) => Some((lang, client)),
+                        Err(err) => {
+                            error!(
+                                "Failed to initialize language servers for virtual document `{}` - `{}` {{ {} }}",
+                                language, lang, err
+                            );
+                            None
+                        }
+                    })
+                    .collect::<HashMap<_, _>>()
+            });
+
+        // 只启动第一个服务器
+        let first_server = all_language_servers.iter().next();
+        let language_servers = if let Some((_name, server)) = first_server {
+            let mut servers = HashMap::new();
+            servers.insert(language.to_owned(), server.clone());
+            servers
+        } else {
+            HashMap::default()
+        };
+
+        let started_server = first_server.map(|(_, server)| server.clone());
+
+        if language_servers.is_empty() && doc.language_servers_of_virtual_doc.is_empty() {
+            return None;
+        }
+
+        // 清理不再需要的语言服务器
+        let doc_language_servers_not_in_registry =
+            doc.language_servers_of_virtual_doc.iter().filter(|(_name, doc_ls)| {
+                language_servers
+                    .get(language)
+                    .is_none_or(|ls| ls.id() != doc_ls.id())
+            });
+
+        for (_, _language_server) in doc_language_servers_not_in_registry {
+            // 对于虚拟文档，我们不发送 didClose，因为物理文档可能仍然打开
+            // 这里可能需要特殊的虚拟文档关闭逻辑
+        }
+
+        doc.language_servers_of_virtual_doc = language_servers;
+        
+        started_server
     }
 
     #[inline]

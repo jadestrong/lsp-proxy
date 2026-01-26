@@ -127,6 +127,12 @@ pub struct CompletionContext {
     pub bounds_start: i32,
     #[serde(rename = "triggerKind")]
     pub trigger_kind: lsp_types::CompletionTriggerKind,
+    // Org 
+    #[serde(rename = "is-virtual-doc")]
+    pub is_virtual_doc: bool,
+    #[serde(rename = "org-line-bias")]
+    pub org_line_bias: u32,
+    pub language: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -164,6 +170,15 @@ pub struct DiagnosticContext {
     pub limit_diagnostics: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct OrgBabelContext {
+    #[serde(rename = "is-virtual-doc")]
+    pub is_virtual_doc: bool,
+    #[serde(rename = "org-line-bias")]
+    pub org_line_bias: u32,
+    pub language: String,
+}
+
 // #[derive(Debug, Serialize, Deserialize, Clone)]
 // pub struct SignatureHelpContext {
 //     #[serde(rename = "signature-trigger-character")]
@@ -179,6 +194,7 @@ pub enum Context {
     WorkspaceContext(WorkspaceContext),
     InlineCompletionContext(InlineCompletionContext),
     DiagnosticContext(DiagnosticContext),
+    OrgBabelContext(OrgBabelContext),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -331,12 +347,12 @@ impl Notification {
     pub fn extract<P: DeserializeOwned>(
         self,
         method: &str,
-    ) -> Result<P, ExtractError<Notification>> {
+    ) -> Result<(P, Option<Context>), ExtractError<Notification>> {
         if self.method != method {
             return Err(ExtractError::MethodMismatch(self));
         }
         match serde_json::from_value(self.params.params) {
-            Ok(params) => Ok(params),
+            Ok(params) => Ok((params, self.params.context)),
             Err(error) => Err(ExtractError::JsonError {
                 method: self.method,
                 error,

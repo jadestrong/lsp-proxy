@@ -336,7 +336,10 @@ impl Application {
                         self.send_notification::<lsp_types::notification::ShowMessage>(
                             lsp_types::ShowMessageParams {
                                 typ: lsp_types::MessageType::ERROR,
-                                message: format!("Language server {} has exited", language_server.name()),
+                                message: format!(
+                                    "Language server {} has exited",
+                                    language_server.name()
+                                ),
                             },
                         );
                     }
@@ -568,7 +571,8 @@ impl Application {
 
                                         // Send PublishDiagnostics notification
                                         let notification = crate::msg::Notification::new(
-                                            lsp_types::notification::PublishDiagnostics::METHOD.to_string(),
+                                            lsp_types::notification::PublishDiagnostics::METHOD
+                                                .to_string(),
                                             lsp_types::PublishDiagnosticsParams {
                                                 version: Some(doc.version),
                                                 uri: doc.uri.clone(),
@@ -679,12 +683,39 @@ impl Application {
 
                 match self.get_working_document(&req) {
                     Ok(doc) => {
+                        if doc.is_org_file() {
+                            // 提前提取context，避免后续借用冲突
+                            let context = req.params.context.clone();
+                            if let Some(msg::Context::CompletionContext(context)) = context {
+                                if context.is_virtual_doc {
+                                    let language_server =
+                                        doc.language_servers_of_virtual_doc.get(&context.language);
+                                    if let Some(ls) = language_server {
+                                        Self::on_request(
+                                            req,
+                                            self.sender.clone(),
+                                            vec![ls.clone()],
+                                        );
+                                    } else {
+                                        self.respond(create_error_response(
+                                            &req.id,
+                                            format!(
+                                                "No available language server for {:?}.",
+                                                req.method
+                                            ),
+                                        ));
+                                    }
+                                    return Ok(());
+                                }
+                            }
+                        }
                         let language_servers = doc.get_all_language_servers();
                         if language_servers.is_empty() {
                             self.respond(create_error_response(
                                 &req.id,
                                 format!("No available language server for {:?}.", req.method),
                             ));
+                            debug!("No available language server for {:?}.", req.method);
                             return Ok(());
                         }
                         Self::on_request(req, self.sender.clone(), language_servers);
@@ -761,10 +792,10 @@ impl Application {
             not: Some(not),
             app: self,
         }
-        .on_sync_mut_with_language::<notfis::DidOpenTextDocument>(
+        .on_sync_mut_with_context::<notfis::DidOpenTextDocument>(
             handlers::notification::handle_did_open_text_document,
         )?
-        .on_sync_mut::<notfis::DidChangeTextDocument>(
+        .on_sync_mut_with_context::<notfis::DidChangeTextDocument>(
             handlers::notification::handle_did_change_text_document,
         )?
         .on_sync_mut::<notfis::WillSaveTextDocument>(

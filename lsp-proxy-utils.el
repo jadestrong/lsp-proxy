@@ -233,8 +233,11 @@ LSP server result."
 
 (defun lsp-proxy--request-or-notify-params (params &rest args)
   "Wrap request or notify params base PARAMS and add extra ARGS."
-  (require 'eglot)
-  (let ((rest (apply 'append args)))
+  (let ((rest (if (and args (not (sequencep (car args))))
+                  ;; If first arg is not a sequence (like :context), treat as plist
+                  args
+                ;; Otherwise, flatten as before
+                (apply 'append args))))
     (append (append (eglot--TextDocumentIdentifier)
                     `(:params ,params)
                     `(:language ,lsp-proxy--language))

@@ -50,6 +50,7 @@
 (require 'lsp-proxy-imenu)
 (require 'lsp-proxy-inlay-hints)
 (require 'lsp-proxy-inline-completion)
+(require 'lsp-proxy-org)
 
 (defvar lsp-proxy-mode)
 
@@ -224,6 +225,7 @@ Skip reopening notifications for buffers not currently visible."
   "Post command hook."
   (lsp-proxy--cleanup-highlights-if-needed)
   (lsp-proxy--idle-reschedule (current-buffer))
+  (lsp-proxy-org-babel-check-lsp-server)
   (when this-command
     (lsp-proxy-inline-completion-handle-command)))
 

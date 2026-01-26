@@ -20,6 +20,12 @@
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-core)
 
+;; Org babel support declarations
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
+(defvar lsp-proxy-org-babel--block-bop)
+(declare-function org-element-property "ext:org")
+
 ;;; Variables
 
 (defcustom lsp-proxy-max-completion-item 20
@@ -100,6 +106,10 @@ Or nil if none."
          (candidates
           (lambda ()
             (let* ((prefix (buffer-substring-no-properties bounds-start (point)))
+                   (is-org-babel
+                    (and lsp-proxy-enable-org-babel
+                         (eq major-mode 'org-mode)
+                         lsp-proxy-org-babel--info-cache))
                    (resp (lsp-proxy--request
                           'textDocument/completion
                           (lsp-proxy--request-or-notify-params
@@ -110,7 +120,10 @@ Or nil if none."
                               :boundsStart ,bounds-start
                               :startPoint ,(point)
                               ;; Used to distinguish trigger type: 1 for manual invocation (no character), 2 for automatic trigger (character typed)
-                              :triggerKind ,(if (null lsp-proxy--last-inserted-char) 1 2))))
+                              :triggerKind ,(if (null lsp-proxy--last-inserted-char) 1 2)
+                              :is-virtual-doc ,(if is-org-babel t :json-false)
+                              :org-line-bias ,(if is-org-babel (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t)) 0)
+                              :language ,(if is-org-babel (org-element-property :language lsp-proxy-org-babel--info-cache) lsp-proxy--language))))
                           :cancel-on-input t))
                    (items (mapcar (lambda (candidate)
                                     (let* ((item (plist-get candidate :item))

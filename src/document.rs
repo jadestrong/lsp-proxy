@@ -46,6 +46,41 @@ pub struct DiagnosticItem {
 }
 
 #[derive(Debug)]
+pub struct VirtualDocumentInfo {
+    pub(crate) org_line_bias: u32,
+    pub(crate) language: String,
+    pub language_config: Option<Arc<LanguageConfiguration>>,
+}
+
+impl VirtualDocumentInfo {
+    pub fn new(
+        org_line_bias: u32,
+        language: String,
+        config_loader: Option<Arc<syntax::Loader>>,
+    ) -> Self {
+        let mut virtual_doc = VirtualDocumentInfo {
+            org_line_bias,
+            language: language.clone(),
+            language_config: None,
+        };
+
+        if let Some(loader) = config_loader {
+            virtual_doc.language_config = loader.language_config_for_language_id(&language);
+        }
+
+        virtual_doc
+    }
+
+    pub fn language_id(&self) -> &str {
+        self.language_config
+            .as_deref().unwrap()
+            .language_server_language_id
+            .as_deref()
+            .unwrap_or(&self.language)
+    }
+}
+
+#[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
     pub uri: Url,
@@ -56,10 +91,18 @@ pub struct Document {
     pub version: i32,
 
     pub previous_diagnostic_id: Option<String>,
+
+    // If the document is a Org file, contains virtual document information
+    pub virtual_doc: Option<VirtualDocumentInfo>,
+    pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, Arc<Client>>,
 }
 
 impl Document {
-    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>, language: Option<&str>) -> Self {
+    pub fn new(
+        uri: &Url,
+        config_loader: Option<Arc<syntax::Loader>>,
+        language: Option<&str>,
+    ) -> Self {
         let mut doc = Document {
             id: DocumentId::default(),
             uri: uri.clone(),
@@ -68,6 +111,8 @@ impl Document {
             version: 0,
             diagnostics: None,
             previous_diagnostic_id: None,
+            virtual_doc: None,
+            language_servers_of_virtual_doc: HashMap::new(),
         };
 
         if let Some(loader) = config_loader {
@@ -314,5 +359,17 @@ impl Document {
         self.diagnostics = None;
         self.previous_diagnostic_id = None;
         self.language_servers.clear();
+    }
+
+    /// Check if this document is an Org file
+    pub fn is_org_file(&self) -> bool {
+        if let Some(path) = self.path() {
+            if let Some(ext) = path.extension() {
+                if let Some(ext_str) = ext.to_str() {
+                    return ext_str == "org";
+                }
+            }
+        }
+        false
     }
 }

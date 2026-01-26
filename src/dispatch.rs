@@ -11,7 +11,7 @@ use crate::{
     error::ExtractError,
     handlers::request::create_error_response,
     lsp::jsonrpc,
-    msg::{Message, Notification, Request, Response},
+    msg::{Context, Message, Notification, Request, Response},
     utils::from_json,
 };
 
@@ -104,7 +104,7 @@ impl NotificationDispatcher<'_> {
             None => return Ok(self),
         };
 
-        let params = match not.extract::<N::Params>(N::METHOD) {
+        let (params, _context) = match not.extract::<N::Params>(N::METHOD) {
             Ok(it) => it,
             Err(ExtractError::JsonError { method, error }) => {
                 panic!("Invald request\nMethod: {method}\n error: {error}");
@@ -135,7 +135,7 @@ impl NotificationDispatcher<'_> {
         // Extract language before extracting the main params
         let language = not.params.language.clone();
 
-        let params = match not.extract::<N::Params>(N::METHOD) {
+        let (params, _context) = match not.extract::<N::Params>(N::METHOD) {
             Ok(it) => it,
             Err(ExtractError::JsonError { method, error }) => {
                 panic!("Invald request\nMethod: {method}\n error: {error}");
@@ -149,6 +149,36 @@ impl NotificationDispatcher<'_> {
         f(self.app, params, language.as_deref())?;
         Ok(self)
     }
+
+    pub(crate) fn on_sync_mut_with_context<N>(
+        &mut self,
+        f: fn(&mut Application, N::Params, Option<Context>) -> anyhow::Result<()>,
+    ) -> anyhow::Result<&mut Self>
+    where
+        N: lsp_types::notification::Notification,
+        N::Params: DeserializeOwned + Send,
+    {
+        let not = match self.not.take() {
+            Some(it) => it,
+            None => return Ok(self),
+        };
+
+        let (params, context) = match not.extract::<N::Params>(N::METHOD) {
+            Ok(it) => it,
+            Err(ExtractError::JsonError { method, error }) => {
+                panic!("Invald request\nMethod: {method}\n error: {error}");
+            }
+            Err(ExtractError::MethodMismatch(not)) => {
+                self.not = Some(not);
+                return Ok(self);
+            }
+        };
+
+        f(self.app, params, context)?;
+        Ok(self)
+    }
+
+
 
     pub(crate) fn finish(&mut self) {
         if let Some(not) = &self.not {
