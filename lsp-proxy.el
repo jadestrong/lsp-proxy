@@ -703,10 +703,12 @@ Request codeAction/resolve for more info if server supports."
        (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
        :success-fn (lambda (hover-help)
                      (eglot--when-buffer-window buf
-                       (let ((info (unless (string-empty-p hover-help)
-                                     (eglot--format-markup hover-help))))
-                         (funcall cb info
-                                  :echo (and info (string-match "\n" info))))))))
+                       (let* ((info (unless (string-empty-p hover-help)
+                                     (eglot--format-markup hover-help)))
+                             (pos (and  info (string-match "\n" info))))
+                         (while (and pos (get-text-property pos 'invisible info))
+                           (setq pos (string-match "\n" info (1+ pos))))
+                         (funcall cb info :echo pos))))))
     t))
 
 ;;; Symbol highlighting
