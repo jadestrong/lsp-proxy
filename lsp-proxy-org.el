@@ -60,7 +60,7 @@ Used to restore when leaving a code block.")
               (lang (and (if (listp face)
                              (memq 'org-block face)
                            (eq 'org-block face))
-                        (plist-get (cadr (org-element-context)) :language))))
+                         (plist-get (cadr (org-element-context)) :language))))
     lang))
 
 (defun lsp-proxy-org-babel-check-lsp-server ()
@@ -137,9 +137,9 @@ with the block content as a virtual document."
                                 :language (org-element-property :language lsp-proxy-org-babel--info-cache)
                                 :source-type "org-babel")))
       ;; 先发送 didClose 避免重复 didOpen，携带 virtual-doc 以关闭对应的虚拟文档语言服务器
-      (lsp-proxy--notify 'textDocument/didClose
-                         (list :textDocument (eglot--TextDocumentIdentifier))
-                         :virtual-doc virtual-doc-context)
+      ;; (lsp-proxy--notify 'textDocument/didClose
+      ;;                    (list :textDocument (eglot--TextDocumentIdentifier))
+      ;;                    :virtual-doc virtual-doc-context)
       ;; 使用当前 org 文件来做 didOpen 但是 content 是提取出的 org-src-block 内容
       ;; 但是在补全或其他操作中，需要做行偏移，因为在 org 中编辑时，是 org 的实际行号，但是 lsp server 只有 src block 的内容
       ;; 行号是对应不上的，所以需要偏移校正

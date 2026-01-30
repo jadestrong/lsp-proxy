@@ -45,34 +45,14 @@ pub(crate) fn handle_did_open_text_document(
                 let version = doc.version();
                 
                 // Check current virtual doc state
-                let (current_language, has_server_for_language) = match &doc.virtual_doc {
-                    Some(existing_virtual_doc) => {
-                        let has_server = doc.language_servers_of_virtual_doc.contains_key(&vdoc_ctx.language);
-                        (Some(existing_virtual_doc.language.clone()), has_server)
-                    }
-                    None => (None, false),
+                let has_server_for_language = match &doc.virtual_doc {
+                    Some(_) => doc.language_servers_of_virtual_doc.contains_key(&vdoc_ctx.language),
+                    None => false,
                 };
                 
                 let org_line_bias = vdoc_ctx.line_bias;
                 let language = vdoc_ctx.language.clone();
                 let syn_loader = app.editor.syn_loader.clone();
-
-                // If switching to a different block of the same language, send didClose first
-                if let Some(ref curr_lang) = current_language {
-                    if curr_lang == &language && has_server_for_language {
-                        // Same language, different block - send didClose for the old block
-                        if let Some(doc) = app.editor.documents.get(&doc_id) {
-                            if let Some(ls) = doc.language_servers_of_virtual_doc.get(&language) {
-                                ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
-                                    text_document: lsp_types::TextDocumentIdentifier {
-                                        uri: uri.clone(),
-                                    },
-                                }).unwrap();
-                                debug!("Sent didClose for previous block to {:?}", ls.name());
-                            }
-                        }
-                    }
-                }
 
                 // Update virtual doc info (always update line_bias)
                 let virtual_doc =
@@ -84,9 +64,17 @@ pub(crate) fn handle_did_open_text_document(
                 }
 
                 if has_server_for_language {
-                    // Reuse existing server - just send didOpen for the new block
+                    // Reuse existing server - send didClose first, then didOpen for the new block
                     if let Some(doc) = app.editor.documents.get(&doc_id) {
                         if let Some(ls) = doc.language_servers_of_virtual_doc.get(&language) {
+                            // Always send didClose before didOpen when reusing server
+                            ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
+                                text_document: lsp_types::TextDocumentIdentifier {
+                                    uri: uri.clone(),
+                                },
+                            }).unwrap();
+                            debug!("Sent didClose for previous block to {:?}", ls.name());
+                            
                             ls.text_document_did_open(
                                 uri.clone(),
                                 version,
