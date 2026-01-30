@@ -298,6 +298,9 @@ pub(crate) async fn handle_completion(
                     _ => None,
                 };
 
+                // Clone virtual_doc context for use in async closure
+                let vdoc_ctx = req.params.virtual_doc.clone();
+
                 let completion_request = language_server
                     .completion(
                         req.id.clone(),
@@ -321,17 +324,15 @@ pub(crate) async fn handle_completion(
                             }),
                             text_document_position: match &req.params.virtual_doc {
                                 None => params.text_document_position.clone(),
-                                Some(vdoc_ctx) => {
-                                    lsp_types::TextDocumentPositionParams {
-                                        text_document: params
-                                            .text_document_position
-                                            .text_document
-                                            .clone(),
-                                        position: vdoc_ctx.translate_position_to_virtual(
-                                            params.text_document_position.position
-                                        ),
-                                    }
-                                }
+                                Some(vdoc_ctx) => lsp_types::TextDocumentPositionParams {
+                                    text_document: params
+                                        .text_document_position
+                                        .text_document
+                                        .clone(),
+                                    position: vdoc_ctx.translate_position_to_virtual(
+                                        params.text_document_position.position,
+                                    ),
+                                },
                             },
                             ..params.clone()
                         },
@@ -372,6 +373,21 @@ pub(crate) async fn handle_completion(
                                         new_text: replace_text_edit.new_text.clone(),
                                     },
                                 ));
+                            }
+
+                            // Translate textEdit range from virtual doc coordinates back to org file coordinates
+                            if let Some(ref vdoc) = vdoc_ctx {
+                                // match &mut new_item.text_edit {
+                                //     Some(lsp_types::CompletionTextEdit::Edit(edit)) => {
+                                //         edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                //     }
+                                //     _ => {}
+                                // }
+                                if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
+                                    &mut new_item.text_edit
+                                {
+                                    edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                }
                             }
                         }
                         let label_len = &new_item.label.chars().count();
@@ -458,9 +474,6 @@ pub(crate) async fn handle_completion_resolve(
     params: lsp_types::CompletionItem,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    // Check if this is a virtual document request (org babel block)
-    let is_virtual_doc = req.params.virtual_doc.is_some();
-    
     if let Some(Context::ResolveContext(context)) = &req.params.context {
         let params_detail = params.detail.clone();
         let params_text_edit = params.text_edit.clone();
@@ -521,24 +534,36 @@ pub(crate) async fn handle_completion_resolve(
                 // Since we have cached completion results, the input position will not update immediately. The rust-analyzer server will always return the latest position for a resolve request.
                 // Therefore, it is preferable to use the cached completionItem's textEdit property. Other servers like tsserver won't update the position, so it's fine.
                 resp.text_edit = params_text_edit;
-            } else if let Some(text_edit) = &resp.text_edit {
-                if let lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit) =
-                    text_edit
-                {
-                    resp.text_edit =
-                        Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
-                            range: replace_text_edit.replace,
-                            new_text: replace_text_edit.new_text.clone(),
-                        }));
-                }
+            } else if let Some(lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit)) =
+                &resp.text_edit
+            {
+                // if let =
+                //     text_edit
+                // {
+                resp.text_edit = Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
+                    range: replace_text_edit.replace,
+                    new_text: replace_text_edit.new_text.clone(),
+                }));
+                // }
             }
-            
-            // For virtual documents (org babel blocks), disable additionalTextEdits
-            // because auto-import edits cannot be correctly applied within code blocks
-            if is_virtual_doc {
+
+            // For virtual documents (org babel blocks), translate textEdit range back to org file coordinates
+            if let Some(ref vdoc_ctx) = req.params.virtual_doc {
+                if let Some(ref mut text_edit) = resp.text_edit {
+                    match text_edit {
+                        lsp_types::CompletionTextEdit::Edit(edit) => {
+                            edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
+                        }
+                        lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
+                            edit.insert = vdoc_ctx.translate_range_from_virtual(edit.insert);
+                            edit.replace = vdoc_ctx.translate_range_from_virtual(edit.replace);
+                        }
+                    }
+                }
+                // Also disable additionalTextEdits for virtual documents
                 resp.additional_text_edits = None;
             }
-            
+
             Response::new_ok(
                 req.id.clone(),
                 CompletionItem {
@@ -816,22 +841,21 @@ pub(crate) async fn handle_hover(
             }
         }
     }
-    
+
     // Translate position for virtual documents (org babel blocks)
     let params = if let Some(ref vdoc_ctx) = req.params.virtual_doc {
         lsp_types::HoverParams {
             text_document_position_params: lsp_types::TextDocumentPositionParams {
                 text_document: params.text_document_position_params.text_document.clone(),
-                position: vdoc_ctx.translate_position_to_virtual(
-                    params.text_document_position_params.position,
-                ),
+                position: vdoc_ctx
+                    .translate_position_to_virtual(params.text_document_position_params.position),
             },
             work_done_progress_params: params.work_done_progress_params,
         }
     } else {
         params
     };
-    
+
     let resps = call_language_servers::<lsp_types::request::HoverRequest>(
         &req,
         params,
