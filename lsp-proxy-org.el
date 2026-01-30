@@ -18,6 +18,9 @@
 (declare-function org-element-type "ext:org")
 (declare-function org-element-property "ext:org")
 
+;; External variables from lsp-proxy-completion.el
+(defvar lsp-proxy--completion-trigger-characters)
+
 ;; org babel cache
 (defvar-local lsp-proxy-org-babel--info-cache nil)
 (defvar-local lsp-proxy-org-babel--block-bop nil)
@@ -25,6 +28,9 @@
 (defvar-local lsp-proxy-org-babel--update-file-before-change nil)
 (defvar-local lsp-proxy-org-babel--idle-timer nil
   "Idle timer for preemptively starting LSP server in org babel blocks.")
+(defvar-local lsp-proxy-org-babel--saved-trigger-characters nil
+  "Saved trigger characters from the org file's original LSP server.
+Used to restore when leaving a code block.")
 
 (defun lsp-proxy-org-babel-in-block-p (pos)
   "Check if POS is in org babel block."
@@ -34,10 +40,15 @@
        (<= pos lsp-proxy-org-babel--block-eop)))
 
 (defun lsp-proxy-org-babel-clean-cache ()
-  "Clean org babel cache."
+  "Clean org babel cache and restore original trigger characters."
   (when lsp-proxy-org-babel--idle-timer
     (cancel-timer lsp-proxy-org-babel--idle-timer)
     (setq-local lsp-proxy-org-babel--idle-timer nil))
+  ;; Restore original trigger characters when leaving code block
+  (when lsp-proxy-org-babel--saved-trigger-characters
+    (setq-local lsp-proxy--completion-trigger-characters
+                lsp-proxy-org-babel--saved-trigger-characters)
+    (setq-local lsp-proxy-org-babel--saved-trigger-characters nil))
   (setq-local lsp-proxy-org-babel--info-cache nil)
   (setq-local lsp-proxy-org-babel--block-bop nil)
   (setq-local lsp-proxy-org-babel--block-eop nil))
@@ -96,6 +107,10 @@ with the block content as a virtual document."
              lsp-proxy-org-babel--block-bop
              lsp-proxy-org-babel--update-file-before-change)
     (setq-local lsp-proxy-org-babel--update-file-before-change nil)
+    ;; Save original trigger characters before they get overwritten by virtual doc's capabilities
+    (unless lsp-proxy-org-babel--saved-trigger-characters
+      (setq-local lsp-proxy-org-babel--saved-trigger-characters
+                  lsp-proxy--completion-trigger-characters))
     (let ((virtual-doc-context (list
                                 :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
                                 :language (org-element-property :language lsp-proxy-org-babel--info-cache)

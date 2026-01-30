@@ -73,13 +73,22 @@ pub(crate) fn handle_did_open_text_document(
 
                     if let Some(ls) = client {
                         ls.text_document_did_open(
-                            uri,
+                            uri.clone(),
                             version,
                             params.text_document.text.to_owned(),
                             language_id.clone(),
                         )
                         .unwrap();
                         debug!("Success launch {:?} server for current block.", ls.name());
+
+                        // Send server capabilities for virtual document to enable trigger characters
+                        if ls.is_initialized() {
+                            if let Some(doc) = app.editor.document_by_uri(&uri) {
+                                app.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                    doc.get_virtual_doc_server_capabilities(),
+                                );
+                            }
+                        }
                     }
                 }
             }

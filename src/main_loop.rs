@@ -314,6 +314,8 @@ impl Application {
                         };
 
                         language_server.did_change_configuration(config).unwrap();
+                        
+                        // Send capabilities for regular documents
                         self.editor
                             .documents()
                             .filter(|doc| {
@@ -323,6 +325,20 @@ impl Application {
                             .for_each(|doc| {
                                 self.send_notification::<lsp_ext::CustomServerCapabilities>(
                                     doc.get_server_capabilities(),
+                                )
+                            });
+                        
+                        // Send capabilities for virtual documents (org babel blocks)
+                        self.editor
+                            .documents()
+                            .filter(|doc| {
+                                doc.language_servers_of_virtual_doc
+                                    .values()
+                                    .any(|ls| ls.id() == language_server.id())
+                            })
+                            .for_each(|doc| {
+                                self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                    doc.get_virtual_doc_server_capabilities(),
                                 )
                             });
                     }

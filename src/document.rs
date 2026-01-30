@@ -207,6 +207,72 @@ impl Document {
         server_capabilities
     }
 
+    /// Get server capabilities for virtual document (e.g., org babel code block).
+    /// This is similar to get_server_capabilities but uses language_servers_of_virtual_doc.
+    pub fn get_virtual_doc_server_capabilities(&self) -> CustomServerCapabilitiesParams {
+        let mut server_capabilities = CustomServerCapabilitiesParams {
+            uri: self.uri.to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+            support_pull_diagnostic: false,
+            support_inline_completion: false,
+            support_hover: false,
+            text_document_sync_kind: "incremental".to_string(),
+        };
+
+        let mut has_any_servers = false;
+        let mut all_support_incremental = true;
+
+        for ls in self.language_servers_of_virtual_doc.values() {
+            has_any_servers = true;
+
+            let sync_kind = ls.get_text_document_sync_kind();
+            if sync_kind == "full" {
+                all_support_incremental = false;
+            }
+
+            if let Some(lsp_types::CompletionOptions {
+                trigger_characters: Some(triggers),
+                ..
+            }) = &ls.capabilities().completion_provider
+            {
+                let mut triggers = triggers.clone();
+                server_capabilities.trigger_characters.append(&mut triggers);
+            }
+
+            // if ls.supports_feature(LanguageServerFeature::InlayHints) {
+            //     server_capabilities.support_inlay_hints = true;
+            // }
+            // if ls.supports_feature(LanguageServerFeature::DocumentHighlight) {
+            //     server_capabilities.support_document_highlight = true;
+            // }
+            // if ls.supports_feature(LanguageServerFeature::DocumentSymbols) {
+            //     server_capabilities.support_document_symbols = true;
+            // }
+            if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
+                server_capabilities.support_signature_help = true;
+            }
+            // if ls.supports_feature(LanguageServerFeature::PullDiagnostics) {
+            //     server_capabilities.support_pull_diagnostic = true;
+            // }
+            // if ls.supports_feature(LanguageServerFeature::InlineCompletion) {
+            //     server_capabilities.support_inline_completion = true;
+            // }
+            if ls.supports_feature(LanguageServerFeature::Hover) {
+                server_capabilities.support_hover = true;
+            }
+        }
+
+        if has_any_servers && !all_support_incremental {
+            server_capabilities.text_document_sync_kind = "full".to_string();
+        }
+
+        server_capabilities
+    }
+
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>, language: Option<&str>) {
         let language_config =
             config_loader.language_config_for_file_name(self.path().unwrap().as_ref(), language);
