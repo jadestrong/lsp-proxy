@@ -1,5 +1,5 @@
 use crate::{
-    application::Application, document::VirtualDocumentInfo, lsp_ext, msg::Context,
+    application::Application, document::VirtualDocumentInfo, lsp_ext, msg::VirtualDocContext,
     utils::get_activate_time,
 };
 use anyhow::Result;
@@ -13,7 +13,7 @@ use lsp_types::{
 pub(crate) fn handle_did_open_text_document(
     app: &mut Application,
     params: lsp_types::DidOpenTextDocumentParams,
-    context: Option<Context>,
+    virtual_doc_ctx: Option<VirtualDocContext>,
 ) -> Result<()> {
     debug!("did_open {:?}", params);
 
@@ -40,21 +40,21 @@ pub(crate) fn handle_did_open_text_document(
     // 检查是否是 org 文件并处理虚拟文档
     if let Some(doc) = app.editor.document_by_uri(&uri) {
         if doc.is_org_file() {
-            if let Some(Context::OrgBabelContext(context)) = &context {
+            if let Some(ref vdoc_ctx) = virtual_doc_ctx {
                 let doc_id = doc.id();
                 let version = doc.version();
                 let should_update = match &doc.virtual_doc {
                     Some(existing_virtual_doc) => {
-                        existing_virtual_doc.org_line_bias != context.org_line_bias
-                            || existing_virtual_doc.language != context.language
+                        existing_virtual_doc.org_line_bias != vdoc_ctx.line_bias
+                            || existing_virtual_doc.language != vdoc_ctx.language
                     }
                     None => true,
                 };
 
                 if should_update {
                     // 保存必要的信息以避免借用冲突
-                    let org_line_bias = context.org_line_bias;
-                    let language = context.language.clone();
+                    let org_line_bias = vdoc_ctx.line_bias;
+                    let language = vdoc_ctx.language.clone();
                     let syn_loader = app.editor.syn_loader.clone();
 
                     // 创建新的 virtualDocumentInfo 对象
@@ -81,22 +81,6 @@ pub(crate) fn handle_did_open_text_document(
                         .unwrap();
                         debug!("Success launch {:?} server for current block.", ls.name());
                     }
-                    // let clients = doc.language_servers_of_virtual_doc.values();
-
-                    // if let Some(virtual_doc) = doc.virtual_doc {
-                    // 启动虚拟文档的语言服务器
-                    // 启动完成后，进行 didOpen TODO
-                    // virtual_doc 的 language_id
-                    // doc.language_servers_of_virtual_doc.values().for_each(|ls| {
-                    //     ls.text_document_did_open(
-                    //         uri.clone(),
-                    //         doc.version(),
-                    //         params.text_document.text.to_owned(),
-                    //         language_id.clone(),
-                    //     )
-                    //     .unwrap();
-                    // });
-                    // }
                 }
             }
             return Ok(());
@@ -147,9 +131,9 @@ pub(crate) fn handle_did_open_text_document(
 pub(crate) fn handle_did_change_text_document(
     app: &mut Application,
     params: DidChangeTextDocumentParams,
-    context: Option<Context>,
+    virtual_doc_ctx: Option<VirtualDocContext>,
 ) -> Result<()> {
-    // 如果是 org file 且在 babel block 中，则需要基于 org-line-bias 来校正
+    // 如果是 org file 且在 babel block 中，则需要基于 line_bias 来校正
     // server 也需要取 virtual_doc 的 server
     let doc = app.editor.document_by_uri_mut(&params.text_document.uri);
     if let Some(doc) = doc {
@@ -159,12 +143,12 @@ pub(crate) fn handle_did_change_text_document(
                 .unwrap()
         });
 
-        debug!("context: {:?}", context);
-        if let Some(Context::OrgBabelContext(context)) = context {
+        debug!("virtual_doc_ctx: {:?}", virtual_doc_ctx);
+        if let Some(ref vdoc_ctx) = virtual_doc_ctx {
             debug!("is_org_file? {:?}", doc.is_org_file());
             // 如果是 org file 要单独给自己的 server 发送一份
-            if doc.is_org_file() && context.is_virtual_doc {
-                let ls = doc.language_servers_of_virtual_doc.get(&context.language);
+            if doc.is_org_file() {
+                let ls = doc.language_servers_of_virtual_doc.get(&vdoc_ctx.language);
                 debug!("get a ls {:?}", ls.is_some());
                 if let Some(ls) = ls {
                     debug!("the ls is {:?}", ls.name());
@@ -176,19 +160,12 @@ pub(crate) fn handle_did_change_text_document(
                                 .iter()
                                 .map(|change| {
                                     let range = change.range.unwrap();
+                                    // Use translation utilities from VirtualDocContext
+                                    let translated_range = vdoc_ctx.translate_range_to_virtual(range);
                                     lsp_types::TextDocumentContentChangeEvent {
                                         text: change.text.clone(),
                                         range_length: change.range_length,
-                                        range: Some(lsp_types::Range {
-                                            start: lsp_types::Position {
-                                                line: range.start.line - context.org_line_bias,
-                                                character: range.start.character,
-                                            },
-                                            end: lsp_types::Position {
-                                                line: range.end.line - context.org_line_bias,
-                                                character: range.end.character,
-                                            },
-                                        }),
+                                        range: Some(translated_range),
                                     }
                                 })
                                 .collect_vec(),

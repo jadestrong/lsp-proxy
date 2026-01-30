@@ -231,17 +231,28 @@ LSP server result."
 
 ;;; Request parameters
 
+(declare-function lsp-proxy--make-virtual-doc-context "lsp-proxy-core")
+
 (defun lsp-proxy--request-or-notify-params (params &rest args)
-  "Wrap request or notify params base PARAMS and add extra ARGS."
-  (let ((rest (if (and args (not (sequencep (car args))))
-                  ;; If first arg is not a sequence (like :context), treat as plist
-                  args
-                ;; Otherwise, flatten as before
-                (apply 'append args))))
-    (append (append (eglot--TextDocumentIdentifier)
-                    `(:params ,params)
-                    `(:language ,lsp-proxy--language))
-            rest)))
+  "Wrap request or notify params base PARAMS and add extra ARGS.
+Automatically adds virtual-doc context when in org babel block.
+
+The virtual-doc context is orthogonal to request-specific context
+and is used for position translation between the org file and the
+virtual document sent to the language server."
+  (let* ((rest (if (and args (not (sequencep (car args))))
+                   ;; If first arg is not a sequence (like :context), treat as plist
+                   args
+                 ;; Otherwise, flatten as before
+                 (apply 'append args)))
+         (base-params (append (eglot--TextDocumentIdentifier)
+                              `(:params ,params)
+                              `(:language ,lsp-proxy--language)
+                              rest))
+         (virtual-doc (lsp-proxy--make-virtual-doc-context)))
+    (if virtual-doc
+        (append base-params `(:virtual-doc ,virtual-doc))
+      base-params)))
 
 
 ;;; Hash table project management utilities

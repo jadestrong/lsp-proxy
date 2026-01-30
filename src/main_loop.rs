@@ -684,29 +684,26 @@ impl Application {
                 match self.get_working_document(&req) {
                     Ok(doc) => {
                         if doc.is_org_file() {
-                            // 提前提取context，避免后续借用冲突
-                            let context = req.params.context.clone();
-                            if let Some(msg::Context::CompletionContext(context)) = context {
-                                if context.is_virtual_doc {
-                                    let language_server =
-                                        doc.language_servers_of_virtual_doc.get(&context.language);
-                                    if let Some(ls) = language_server {
-                                        Self::on_request(
-                                            req,
-                                            self.sender.clone(),
-                                            vec![ls.clone()],
-                                        );
-                                    } else {
-                                        self.respond(create_error_response(
-                                            &req.id,
-                                            format!(
-                                                "No available language server for {:?}.",
-                                                req.method
-                                            ),
-                                        ));
-                                    }
-                                    return Ok(());
+                            // Check for virtual document context
+                            if let Some(ref vdoc_ctx) = req.params.virtual_doc {
+                                let language_server =
+                                    doc.language_servers_of_virtual_doc.get(&vdoc_ctx.language);
+                                if let Some(ls) = language_server {
+                                    Self::on_request(
+                                        req,
+                                        self.sender.clone(),
+                                        vec![ls.clone()],
+                                    );
+                                } else {
+                                    self.respond(create_error_response(
+                                        &req.id,
+                                        format!(
+                                            "No available language server for {:?}.",
+                                            req.method
+                                        ),
+                                    ));
                                 }
+                                return Ok(());
                             }
                         }
                         let language_servers = doc.get_all_language_servers();
@@ -792,10 +789,10 @@ impl Application {
             not: Some(not),
             app: self,
         }
-        .on_sync_mut_with_context::<notfis::DidOpenTextDocument>(
+        .on_sync_mut_with_virtual_doc::<notfis::DidOpenTextDocument>(
             handlers::notification::handle_did_open_text_document,
         )?
-        .on_sync_mut_with_context::<notfis::DidChangeTextDocument>(
+        .on_sync_mut_with_virtual_doc::<notfis::DidChangeTextDocument>(
             handlers::notification::handle_did_change_text_document,
         )?
         .on_sync_mut::<notfis::WillSaveTextDocument>(

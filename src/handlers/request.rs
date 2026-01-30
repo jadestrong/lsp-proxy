@@ -319,19 +319,18 @@ pub(crate) async fn handle_completion(
                                     lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER
                                 },
                             }),
-                            text_document_position: if !context.is_virtual_doc {
-                                params.text_document_position.clone()
-                            } else {
-                                lsp_types::TextDocumentPositionParams {
-                                    text_document: params
-                                        .text_document_position
-                                        .text_document
-                                        .clone(),
-                                    position: lsp_types::Position {
-                                        line: params.text_document_position.position.line
-                                            - context.org_line_bias,
-                                        character: params.text_document_position.position.character,
-                                    },
+                            text_document_position: match &req.params.virtual_doc {
+                                None => params.text_document_position.clone(),
+                                Some(vdoc_ctx) => {
+                                    lsp_types::TextDocumentPositionParams {
+                                        text_document: params
+                                            .text_document_position
+                                            .text_document
+                                            .clone(),
+                                        position: vdoc_ctx.translate_position_to_virtual(
+                                            params.text_document_position.position
+                                        ),
+                                    }
                                 }
                             },
                             ..params.clone()

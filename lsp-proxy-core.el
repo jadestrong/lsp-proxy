@@ -109,6 +109,11 @@ that support `textDocument/hover' request.")
 (defvar lsp-proxy--language)
 (defvar lsp-proxy-mode)
 
+;;; External variables from lsp-proxy-org.el
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
+(defvar lsp-proxy-org-babel--block-bop)
+
 ;;; External functions from eglot (for backward compatibility)
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
@@ -145,6 +150,24 @@ that support `textDocument/hover' request.")
 (declare-function lsp-proxy--cleanup "lsp-proxy")
 (declare-function lsp-proxy--progress-status "lsp-proxy")
 (declare-function lsp-proxy--async-load-large-file "lsp-proxy-large-file")
+
+;;; Virtual document context utilities
+
+(defun lsp-proxy--make-virtual-doc-context ()
+  "Create virtual-doc context if in org babel block.
+Returns a plist with :line-bias, :language, and :source-type keys
+when the current buffer is in an org-mode babel source block.
+Returns nil otherwise.
+
+This context is orthogonal to request-specific context (like completion
+triggers) and is used for position translation between the org file
+and the virtual document sent to the language server."
+  (when (and lsp-proxy-enable-org-babel
+             (eq major-mode 'org-mode)
+             lsp-proxy-org-babel--info-cache)
+    (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+          :language (org-element-property :language lsp-proxy-org-babel--info-cache)
+          :source-type "org-babel")))
 
 ;;; Connection utilities
 
@@ -469,14 +492,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                           when (numberp len)
                                           vconcat `[,(list :range `(:start ,beg :end ,end)
                                                            :rangeLength len :text text)])))
-                         :context (when (and lsp-proxy-enable-org-babel
-                                         (eq major-mode 'org-mode)
-                                         lsp-proxy-org-babel--info-cache) 
-                                    (list
-                                     :is-virtual-doc t
-                                     ;; FIXME not need every time
-                                     :org-line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-                                     :language (org-element-property :language lsp-proxy-org-babel--info-cache))))
+                         :virtual-doc (lsp-proxy--make-virtual-doc-context))
       (lsp-proxy-diagnostics--request-pull-diagnostics)
       (setq lsp-proxy--recent-changes nil))))
 

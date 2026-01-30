@@ -74,17 +74,12 @@
                                                    (list
                                                     :text (org-element-property :value lsp-proxy-org-babel--info-cache)
                                                     ;; guess FIXME
-                                                    :languageId (org-element-property :language lsp-proxy-org-babel--info-cache) ;； get language name in src block
+                                                    :languageId (org-element-property :language lsp-proxy-org-babel--info-cache) ;; get language name in src block
                                                     :version 0)))
-                       :context (list
-                                 :is-virtual-doc t
-                                 :org-line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-                                 :language (org-element-property :language lsp-proxy-org-babel--info-cache)
-                                 )
-                       )
-    ;; (lsp-proxy-call-file-api "update_file" (buffer-name)
-    ;;                           (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t)))
-    ))
+                       :virtual-doc (list
+                                     :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+                                     :language (org-element-property :language lsp-proxy-org-babel--info-cache)
+                                     :source-type "org-babel"))))
 
 
 (defun lsp-proxy-org-babel-monitor-after-change (begin end length)
