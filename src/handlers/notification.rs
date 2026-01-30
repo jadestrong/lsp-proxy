@@ -43,30 +43,73 @@ pub(crate) fn handle_did_open_text_document(
             if let Some(ref vdoc_ctx) = virtual_doc_ctx {
                 let doc_id = doc.id();
                 let version = doc.version();
-                let should_update = match &doc.virtual_doc {
+                
+                // Check current virtual doc state
+                let (current_language, has_server_for_language) = match &doc.virtual_doc {
                     Some(existing_virtual_doc) => {
-                        existing_virtual_doc.org_line_bias != vdoc_ctx.line_bias
-                            || existing_virtual_doc.language != vdoc_ctx.language
+                        let has_server = doc.language_servers_of_virtual_doc.contains_key(&vdoc_ctx.language);
+                        (Some(existing_virtual_doc.language.clone()), has_server)
                     }
-                    None => true,
+                    None => (None, false),
                 };
+                
+                let org_line_bias = vdoc_ctx.line_bias;
+                let language = vdoc_ctx.language.clone();
+                let syn_loader = app.editor.syn_loader.clone();
 
-                if should_update {
-                    // 保存必要的信息以避免借用冲突
-                    let org_line_bias = vdoc_ctx.line_bias;
-                    let language = vdoc_ctx.language.clone();
-                    let syn_loader = app.editor.syn_loader.clone();
-
-                    // 创建新的 virtualDocumentInfo 对象
-                    let virtual_doc =
-                        VirtualDocumentInfo::new(org_line_bias, language.clone(), Some(syn_loader));
-                    let language_id = virtual_doc.language_id().to_owned();
-                    // 现在可以安全地获取可变引用
-                    if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
-                        // 清空现有的语言服务器连接
-                        doc.language_servers_of_virtual_doc.clear();
-                        doc.virtual_doc = Some(virtual_doc);
+                // If switching to a different block of the same language, send didClose first
+                if let Some(ref curr_lang) = current_language {
+                    if curr_lang == &language && has_server_for_language {
+                        // Same language, different block - send didClose for the old block
+                        if let Some(doc) = app.editor.documents.get(&doc_id) {
+                            if let Some(ls) = doc.language_servers_of_virtual_doc.get(&language) {
+                                ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
+                                    text_document: lsp_types::TextDocumentIdentifier {
+                                        uri: uri.clone(),
+                                    },
+                                }).unwrap();
+                                debug!("Sent didClose for previous block to {:?}", ls.name());
+                            }
+                        }
                     }
+                }
+
+                // Update virtual doc info (always update line_bias)
+                let virtual_doc =
+                    VirtualDocumentInfo::new(org_line_bias, language.clone(), Some(syn_loader));
+                let language_id = virtual_doc.language_id().to_owned();
+                
+                if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
+                    doc.virtual_doc = Some(virtual_doc);
+                }
+
+                if has_server_for_language {
+                    // Reuse existing server - just send didOpen for the new block
+                    if let Some(doc) = app.editor.documents.get(&doc_id) {
+                        if let Some(ls) = doc.language_servers_of_virtual_doc.get(&language) {
+                            ls.text_document_did_open(
+                                uri.clone(),
+                                version,
+                                params.text_document.text.to_owned(),
+                                language_id.clone(),
+                            ).unwrap();
+                            debug!("Reusing {:?} server, sent didOpen for new block", ls.name());
+                            
+                            // Notify user about reusing existing server
+                            app.send_notification::<lsp_types::notification::ShowMessage>(
+                                lsp_types::ShowMessageParams {
+                                    typ: MessageType::INFO,
+                                    message: format!(
+                                        "Reusing {} for {} code block.",
+                                        ls.name(),
+                                        language
+                                    ),
+                                },
+                            );
+                        }
+                    }
+                } else {
+                    // Need to launch a new server for this language
                     let client = app
                         .editor
                         .launch_language_servers_for_virtual_document(doc_id, &language);
