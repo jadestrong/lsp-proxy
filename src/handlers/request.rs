@@ -806,6 +806,22 @@ pub(crate) async fn handle_hover(
             }
         }
     }
+    
+    // Translate position for virtual documents (org babel blocks)
+    let params = if let Some(ref vdoc_ctx) = req.params.virtual_doc {
+        lsp_types::HoverParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams {
+                text_document: params.text_document_position_params.text_document.clone(),
+                position: vdoc_ctx.translate_position_to_virtual(
+                    params.text_document_position_params.position,
+                ),
+            },
+            work_done_progress_params: params.work_done_progress_params,
+        }
+    } else {
+        params
+    };
+    
     let resps = call_language_servers::<lsp_types::request::HoverRequest>(
         &req,
         params,
