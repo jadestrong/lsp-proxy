@@ -150,6 +150,7 @@ that support `textDocument/hover' request.")
 (declare-function lsp-proxy--cleanup "lsp-proxy")
 (declare-function lsp-proxy--progress-status "lsp-proxy")
 (declare-function lsp-proxy--async-load-large-file "lsp-proxy-large-file")
+(declare-function lsp-proxy--should-skip-request-p "lsp-proxy-utils")
 
 ;;; Virtual document context utilities
 
@@ -228,32 +229,38 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
        (lsp-proxy--on-doc-open))))
 
 (cl-defmacro lsp-proxy--async-request (method params &rest args &key (success-fn #'lsp-proxy--ignore-response) (error-fn #'lsp-proxy--show-error) (timeout-fn #'lsp-proxy--show-timeout) &allow-other-keys)
-  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent."
+  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent.
+In org-mode with `lsp-proxy-enable-org-babel' enabled, requests are
+skipped when cursor is not inside a code block."
   `(progn
-     (lsp-proxy--ensure-connection)
-     (if (not (eq ,method 'textDocument/diagnostic))
-         (lsp-proxy--send-did-change))
-     (unless lsp-proxy--buffer-opened
-       (lsp-proxy--on-doc-open))
-     ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
-     (let ((buf (current-buffer)))
-       (jsonrpc-async-request lsp-proxy--connection
-                              ,method ,params
-                              :success-fn (lambda (result)
-                                            (with-current-buffer buf
-                                              (funcall ,success-fn result)))
-                              :error-fn (lambda (err)
-                                          (funcall ,error-fn err))
-                              :timeout-fn (lambda ()
-                                            (with-current-buffer buf
-                                              (funcall ,timeout-fn ,method)))
-                              ,@args))))
+     (unless (lsp-proxy--should-skip-request-p)
+       (lsp-proxy--ensure-connection)
+       (if (not (eq ,method 'textDocument/diagnostic))
+           (lsp-proxy--send-did-change))
+       (unless lsp-proxy--buffer-opened
+         (lsp-proxy--on-doc-open))
+       ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
+       (let ((buf (current-buffer)))
+         (jsonrpc-async-request lsp-proxy--connection
+                                ,method ,params
+                                :success-fn (lambda (result)
+                                              (with-current-buffer buf
+                                                (funcall ,success-fn result)))
+                                :error-fn (lambda (err)
+                                            (funcall ,error-fn err))
+                                :timeout-fn (lambda ()
+                                              (with-current-buffer buf
+                                                (funcall ,timeout-fn ,method)))
+                                ,@args)))))
 
 
 (cl-defmacro lsp-proxy--request (&rest args)
-  "Send a request to the lsp proxy agent with ARGS."
+  "Send a request to the lsp proxy agent with ARGS.
+In org-mode with `lsp-proxy-enable-org-babel' enabled, requests are
+skipped when cursor is not inside a code block."
   `(progn
-     (when lsp-proxy-mode
+     (when (and lsp-proxy-mode
+                (not (lsp-proxy--should-skip-request-p)))
        (lsp-proxy--ensure-connection)
        (lsp-proxy--send-did-change)
        (unless lsp-proxy--buffer-opened

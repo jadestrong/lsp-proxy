@@ -53,33 +53,60 @@ Used to restore when leaving a code block.")
   (setq-local lsp-proxy-org-babel--block-bop nil)
   (setq-local lsp-proxy-org-babel--block-eop nil))
 
+
+(defun lsp-proxy--inside-block-p ()
+  "Return non-nil if inside LANGS code block."
+  (when-let* ((face (get-text-property (point) 'face))
+              (lang (and (if (listp face)
+                             (memq 'org-block face)
+                           (eq 'org-block face))
+                         (plist-get (cadr (org-element-context)) :language))
+                    ))
+    (message "lang %s" lang)
+    lang))
+
 (defun lsp-proxy-org-babel-check-lsp-server ()
   "Check if current point is in org babel block.
-If in a new block, schedule an idle timer to preemptively start LSP server."
+If in a new block, schedule an idle timer to preemptively start LSP server.
+If leaving a block, clean up the cache."
   (when (and lsp-proxy-enable-org-babel (eq major-mode 'org-mode))
     (if (and lsp-proxy-org-babel--info-cache (lsp-proxy-org-babel-in-block-p (point)))
+        ;; Still in the same block, return cached info
         lsp-proxy-org-babel--info-cache
-      (setq-local lsp-proxy-org-babel--info-cache (org-element-context))
-      ;; TODO support latex block like `latex-environment' nad `latex-block'
-      (if (not (eq (org-element-type lsp-proxy-org-babel--info-cache) 'src-block))
+      ;; Either no cache or moved out of block, check current position
+      (setq lsp-proxy-org-babel--info-cache (org-element-context))
+      ;; (message "is equal %s ?" (eq (org-element-type lsp-proxy-org-babel--info-cache) 'src-block))
+      (if (not (lsp-proxy--inside-block-p))
           (setq-local lsp-proxy-org-babel--info-cache nil)
         (save-excursion
           (goto-char (org-element-property :post-affiliated lsp-proxy-org-babel--info-cache))
           (setq-local lsp-proxy-org-babel--block-bop (1+ (line-end-position))))
-        (setq-local lsp-proxy-org-babel--block-eop (+ lsp-proxy-org-babel--block-bop -1
-                                                      (length (org-element-property :value lsp-proxy-org-babel--info-cache))))
-        ;; sync it in `lsp-proxy-monitor-before-change'
+        (setq-local lsp-proxy-org-babel--block-eop
+                    (+ lsp-proxy-org-babel--block-bop -1
+                       (length (org-element-property :value lsp-proxy-org-babel--info-cache))))
         (setq-local lsp-proxy-org-babel--update-file-before-change t)
         ;; Schedule idle timer to preemptively start LSP server
-        (lsp-proxy-org-babel--schedule-lsp-start))))
-  ;; (and lsp-proxy-org-babel--info-cache
-  ;;      (lsp-proxy-org-babel-get-single-lang-server))
-  )
+        (lsp-proxy-org-babel--schedule-lsp-start)
+        )
+      ;; (let ((element (org-element-context)))
+      ;;   (if (eq (org-element-type element) 'src-block)
+      ;;       ;; Entered a new src-block
+      ;;       (progn
+      ;;         ;; Clean previous block state if any
+      ;;         (when lsp-proxy-org-babel--info-cache
+      ;;           (lsp-proxy-org-babel-clean-cache))
+      ;;         (setq-local lsp-proxy-org-babel--info-cache element)
+      ;;         )
+      ;;     ;; Not in a src-block, clean up if we were in one before
+      ;;     (when lsp-proxy-org-babel--info-cache
+      ;;       (lsp-proxy-org-babel-clean-cache))))
+      )))
 
 (defun lsp-proxy-org-babel--schedule-lsp-start ()
   "Schedule an idle timer to start LSP server for current org babel block.
 This allows the LSP server to start before the user begins editing,
 reducing latency for the first completion request."
+  (message "here?")
   (when lsp-proxy-org-babel--idle-timer
     (cancel-timer lsp-proxy-org-babel--idle-timer))
   (setq-local lsp-proxy-org-babel--idle-timer

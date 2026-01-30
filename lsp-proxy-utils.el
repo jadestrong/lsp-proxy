@@ -20,6 +20,8 @@
 (require 'yasnippet nil t)
 
 (defvar lsp-proxy-mode)
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
 
 (defcustom lsp-proxy-log-buffer-max message-log-max
   "Maximum number of lines to keep in the log buffer.
@@ -232,6 +234,14 @@ LSP server result."
 ;;; Request parameters
 
 (declare-function lsp-proxy--make-virtual-doc-context "lsp-proxy-core")
+
+(defun lsp-proxy--should-skip-request-p ()
+  "Return non-nil if LSP request should be skipped.
+In org-mode with `lsp-proxy-enable-org-babel' enabled, requests are
+only allowed when cursor is inside a code block."
+  (and lsp-proxy-enable-org-babel
+       (eq major-mode 'org-mode)
+       (not lsp-proxy-org-babel--info-cache)))
 
 (defun lsp-proxy--request-or-notify-params (params &rest args)
   "Wrap request or notify params base PARAMS and add extra ARGS.
