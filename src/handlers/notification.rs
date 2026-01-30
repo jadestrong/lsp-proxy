@@ -81,6 +81,18 @@ pub(crate) fn handle_did_open_text_document(
                         .unwrap();
                         debug!("Success launch {:?} server for current block.", ls.name());
 
+                        // Notify user about virtual document server startup
+                        app.send_notification::<lsp_types::notification::ShowMessage>(
+                            lsp_types::ShowMessageParams {
+                                typ: MessageType::INFO,
+                                message: format!(
+                                    "Connected to {} for {} code block.",
+                                    ls.name(),
+                                    language
+                                ),
+                            },
+                        );
+
                         // Send server capabilities for virtual document to enable trigger characters
                         if ls.is_initialized() {
                             if let Some(doc) = app.editor.document_by_uri(&uri) {

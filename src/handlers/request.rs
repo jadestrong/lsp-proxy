@@ -458,6 +458,9 @@ pub(crate) async fn handle_completion_resolve(
     params: lsp_types::CompletionItem,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
+    // Check if this is a virtual document request (org babel block)
+    let is_virtual_doc = req.params.virtual_doc.is_some();
+    
     if let Some(Context::ResolveContext(context)) = &req.params.context {
         let params_detail = params.detail.clone();
         let params_text_edit = params.text_edit.clone();
@@ -529,6 +532,13 @@ pub(crate) async fn handle_completion_resolve(
                         }));
                 }
             }
+            
+            // For virtual documents (org babel blocks), disable additionalTextEdits
+            // because auto-import edits cannot be correctly applied within code blocks
+            if is_virtual_doc {
+                resp.additional_text_edits = None;
+            }
+            
             Response::new_ok(
                 req.id.clone(),
                 CompletionItem {
