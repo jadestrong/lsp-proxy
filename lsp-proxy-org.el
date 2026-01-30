@@ -23,6 +23,8 @@
 (defvar-local lsp-proxy-org-babel--block-bop nil)
 (defvar-local lsp-proxy-org-babel--block-eop nil)
 (defvar-local lsp-proxy-org-babel--update-file-before-change nil)
+(defvar-local lsp-proxy-org-babel--idle-timer nil
+  "Idle timer for preemptively starting LSP server in org babel blocks.")
 
 (defun lsp-proxy-org-babel-in-block-p (pos)
   "Check if POS is in org babel block."
@@ -33,12 +35,16 @@
 
 (defun lsp-proxy-org-babel-clean-cache ()
   "Clean org babel cache."
+  (when lsp-proxy-org-babel--idle-timer
+    (cancel-timer lsp-proxy-org-babel--idle-timer)
+    (setq-local lsp-proxy-org-babel--idle-timer nil))
   (setq-local lsp-proxy-org-babel--info-cache nil)
   (setq-local lsp-proxy-org-babel--block-bop nil)
   (setq-local lsp-proxy-org-babel--block-eop nil))
 
 (defun lsp-proxy-org-babel-check-lsp-server ()
-  "Check if current point is in org babel block. "
+  "Check if current point is in org babel block.
+If in a new block, schedule an idle timer to preemptively start LSP server."
   (when (and lsp-proxy-enable-org-babel (eq major-mode 'org-mode))
     (if (and lsp-proxy-org-babel--info-cache (lsp-proxy-org-babel-in-block-p (point)))
         lsp-proxy-org-babel--info-cache
@@ -52,34 +58,62 @@
         (setq-local lsp-proxy-org-babel--block-eop (+ lsp-proxy-org-babel--block-bop -1
                                                       (length (org-element-property :value lsp-proxy-org-babel--info-cache))))
         ;; sync it in `lsp-proxy-monitor-before-change'
-        (setq-local lsp-proxy-org-babel--update-file-before-change t))))
+        (setq-local lsp-proxy-org-babel--update-file-before-change t)
+        ;; Schedule idle timer to preemptively start LSP server
+        (lsp-proxy-org-babel--schedule-lsp-start))))
   ;; (and lsp-proxy-org-babel--info-cache
   ;;      (lsp-proxy-org-babel-get-single-lang-server))
   )
 
+(defun lsp-proxy-org-babel--schedule-lsp-start ()
+  "Schedule an idle timer to start LSP server for current org babel block.
+This allows the LSP server to start before the user begins editing,
+reducing latency for the first completion request."
+  (when lsp-proxy-org-babel--idle-timer
+    (cancel-timer lsp-proxy-org-babel--idle-timer))
+  (setq-local lsp-proxy-org-babel--idle-timer
+              (run-with-idle-timer
+               0.2 nil
+               #'lsp-proxy-org-babel--idle-start-lsp
+               (current-buffer))))
+
+(defun lsp-proxy-org-babel--idle-start-lsp (buffer)
+  "Start LSP server for org babel block in BUFFER after idle.
+Called by idle timer to preemptively initialize the language server."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq-local lsp-proxy-org-babel--idle-timer nil)
+      (when (and lsp-proxy-enable-org-babel
+                 (eq major-mode 'org-mode)
+                 lsp-proxy-org-babel--update-file-before-change)
+        (lsp-proxy-org-babel-send-src-block-to-lsp-server)))))
+
 (defun lsp-proxy-org-babel-send-src-block-to-lsp-server ()
+  "Send current org babel src block to LSP server.
+First sends didClose to avoid duplicate didOpen, then sends didOpen
+with the block content as a virtual document."
   (when (and (eq major-mode 'org-mode)
              lsp-proxy-org-babel--block-bop
              lsp-proxy-org-babel--update-file-before-change)
     (setq-local lsp-proxy-org-babel--update-file-before-change nil)
-    ;; didOpen the block, first didClose
-    ;; 使用当前 org 文件来做 didOpen 但是 content 是提取出的 org-src-block 内容
-    ;; 但是在补全或其他操作中，需要做行偏移，因为在 org 中编辑时，是 org 的实际行号，但是 lsp server 只有 src block 的内容
-    ;; 行号是对应不上的，所以需要偏移校正
-    ;; 需要携带行号偏移量过去，在 didChange 时计算后再发送给 server
-    ;; (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-    ;; 另外，携带是否是 virtualDocument ？
-    (lsp-proxy--notify 'textDocument/didOpen
-                       (list :textDocument (append (eglot--TextDocumentIdentifier)
-                                                   (list
-                                                    :text (org-element-property :value lsp-proxy-org-babel--info-cache)
-                                                    ;; guess FIXME
-                                                    :languageId (org-element-property :language lsp-proxy-org-babel--info-cache) ;; get language name in src block
-                                                    :version 0)))
-                       :virtual-doc (list
-                                     :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-                                     :language (org-element-property :language lsp-proxy-org-babel--info-cache)
-                                     :source-type "org-babel"))))
+    (let ((virtual-doc-context (list
+                                :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+                                :language (org-element-property :language lsp-proxy-org-babel--info-cache)
+                                :source-type "org-babel")))
+      ;; 先发送 didClose 避免重复 didOpen，携带 virtual-doc 以关闭对应的虚拟文档语言服务器
+      (lsp-proxy--notify 'textDocument/didClose
+                         (list :textDocument (eglot--TextDocumentIdentifier))
+                         :virtual-doc virtual-doc-context)
+      ;; 使用当前 org 文件来做 didOpen 但是 content 是提取出的 org-src-block 内容
+      ;; 但是在补全或其他操作中，需要做行偏移，因为在 org 中编辑时，是 org 的实际行号，但是 lsp server 只有 src block 的内容
+      ;; 行号是对应不上的，所以需要偏移校正
+      (lsp-proxy--notify 'textDocument/didOpen
+                         (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                     (list
+                                                      :text (org-element-property :value lsp-proxy-org-babel--info-cache)
+                                                      :languageId (org-element-property :language lsp-proxy-org-babel--info-cache)
+                                                      :version 0)))
+                         :virtual-doc virtual-doc-context))))
 
 
 (defun lsp-proxy-org-babel-monitor-after-change (begin end length)
