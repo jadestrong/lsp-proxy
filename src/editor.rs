@@ -146,64 +146,45 @@ impl Editor {
     }
 
     pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {
-        let Some(doc) = self.documents.get_mut(&doc_id) else {
-            return None;
-        };
+        let doc = self.documents.get_mut(&doc_id)?;
 
         // 获取虚拟文档的语言配置
         let virtual_language_config = doc.virtual_doc.as_ref()
             .and_then(|virtual_doc| virtual_doc.language_config.clone());
 
-        let all_language_servers = virtual_language_config
+        // org block 只需要第一个 server，直接取第一个配置
+        let doc_path = doc.path();
+        let first_server = virtual_language_config
             .as_ref()
-            .map_or_else(HashMap::default, |language_config| {
-                self.language_servers
-                    .get(language_config, doc.path().as_ref())
-                    .filter_map(|(lang, client)| match client {
-                        Ok(client) => Some((lang, client)),
-                        Err(err) => {
-                            error!(
-                                "Failed to initialize language servers for virtual document `{}` - `{}` {{ {} }}",
-                                language, lang, err
-                            );
-                            None
-                        }
-                    })
-                    .collect::<HashMap<_, _>>()
+            .and_then(|language_config| {
+                // 只取第一个语言服务器配置
+                let first_ls_feature = language_config.language_servers.first()?;
+                
+                // 使用 iterator 的 next() 只获取第一个，避免启动多个 server
+                let mut iter = self.language_servers.get(language_config, doc_path.as_ref());
+                let (name, result) = iter.next()?;
+                
+                match result {
+                    Ok(client) => Some((name, client)),
+                    Err(err) => {
+                        error!(
+                            "Failed to initialize language server for virtual document `{}` - `{}` {{ {} }}",
+                            language, first_ls_feature.name, err
+                        );
+                        None
+                    }
+                }
             });
 
-        // 只启动第一个服务器
-        let first_server = all_language_servers.iter().next();
-        let language_servers = if let Some((_name, server)) = first_server {
-            let mut servers = HashMap::new();
-            servers.insert(language.to_owned(), server.clone());
-            servers
-        } else {
-            HashMap::default()
-        };
+        let (_, server) = first_server?;
 
-        let started_server = first_server.map(|(_, server)| server.clone());
-
-        if language_servers.is_empty() && doc.language_servers_of_virtual_doc.is_empty() {
-            return None;
+        // 存储到 language_servers_of_virtual_doc，使用 language 作为 key
+        // 需要重新获取 doc 的可变引用
+        if let Some(doc) = self.documents.get_mut(&doc_id) {
+            doc.language_servers_of_virtual_doc.insert(language.to_owned(), server.clone());
         }
-
-        // 清理不再需要的语言服务器
-        let doc_language_servers_not_in_registry =
-            doc.language_servers_of_virtual_doc.iter().filter(|(_name, doc_ls)| {
-                language_servers
-                    .get(language)
-                    .is_none_or(|ls| ls.id() != doc_ls.id())
-            });
-
-        for (_, _language_server) in doc_language_servers_not_in_registry {
-            // 对于虚拟文档，我们不发送 didClose，因为物理文档可能仍然打开
-            // 这里可能需要特殊的虚拟文档关闭逻辑
-        }
-
-        doc.language_servers_of_virtual_doc = language_servers;
         
-        started_server
+        Some(server)
     }
 
     #[inline]

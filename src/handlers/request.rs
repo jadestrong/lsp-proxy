@@ -794,7 +794,7 @@ pub(crate) async fn handle_get_languages_config(
 
     // Serialize to JSON string
     let json_string = serde_json::to_string_pretty(&full_config)
-        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {}\"}}", e));
+        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {e}\"}}"));
 
     Ok(Response::new_ok(req.id.clone(), json_string))
 }

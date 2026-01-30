@@ -251,7 +251,7 @@ fn find_lsp_workspace_closest(
         .ancestors()
         .take_while(|ancestor| {
             // include git_workspace itself, but not beyond it
-            ancestor.starts_with(&workspace) || *ancestor == workspace
+            ancestor.starts_with(workspace) || *ancestor == workspace
         })
         .find(|ancestor| {
             workspace_root_markers
@@ -294,7 +294,7 @@ fn find_lsp_workspace_topmost(
         }
 
         if ancestor == workspace {
-            debug!("~~~ {:?}", workspace);
+            debug!("~~~ {workspace:?}");
             // if the workspace is the CWD, let the LSP decide what the workspace
             // is
             return top_marker

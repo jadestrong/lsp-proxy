@@ -15,7 +15,7 @@ pub(crate) fn handle_did_open_text_document(
     params: lsp_types::DidOpenTextDocumentParams,
     virtual_doc_ctx: Option<VirtualDocContext>,
 ) -> Result<()> {
-    debug!("did_open {:?}", params);
+    debug!("did_open {params:?}");
 
     // 首先检查文档是否存在，如果不存在则创建
     let doc_exists = app
@@ -207,7 +207,7 @@ pub(crate) fn handle_did_change_text_document(
                 .unwrap()
         });
 
-        debug!("virtual_doc_ctx: {:?}", virtual_doc_ctx);
+        debug!("virtual_doc_ctx: {virtual_doc_ctx:?}");
         if let Some(ref vdoc_ctx) = virtual_doc_ctx {
             debug!("is_org_file? {:?}", doc.is_org_file());
             // 如果是 org file 要单独给自己的 server 发送一份
@@ -307,9 +307,9 @@ pub(crate) fn handle_did_close_text_document(
         // Remove document from editor
         let removed = editor.remove_document(uri);
         if removed {
-            log::info!("Document {} removed from editor", uri);
+            log::info!("Document {uri} removed from editor");
         } else {
-            log::warn!("Failed to remove document {} from editor", uri);
+            log::warn!("Failed to remove document {uri} from editor");
         }
     }
 
