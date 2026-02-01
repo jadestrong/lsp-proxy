@@ -17,7 +17,6 @@ pub(crate) fn handle_did_open_text_document(
 ) -> Result<()> {
     debug!("did_open {params:?}");
 
-    // 首先检查文档是否存在，如果不存在则创建
     let doc_exists = app
         .editor
         .document_by_uri(&params.text_document.uri)
@@ -34,10 +33,8 @@ pub(crate) fn handle_did_open_text_document(
         );
     }
 
-    // 获取 URI 以便后续查找文档 ID
     let uri = params.text_document.uri.clone();
 
-    // 检查是否是 org 文件并处理虚拟文档
     if let Some(doc) = app.editor.document_by_uri(&uri) {
         if doc.is_org_file() {
             if let Some(ref vdoc_ctx) = virtual_doc_ctx {
@@ -102,7 +99,6 @@ pub(crate) fn handle_did_open_text_document(
                                     ),
                                 },
                             );
-                            // No message notification when reusing server to reduce noise
                         }
                     }
                 } else {
@@ -144,8 +140,8 @@ pub(crate) fn handle_did_open_text_document(
                         }
                     }
                 }
+                return Ok(());
             }
-            return Ok(());
         }
     }
 
@@ -222,16 +218,19 @@ pub(crate) fn handle_did_change_text_document(
                             content_changes: params
                                 .content_changes
                                 .iter()
-                                .map(|change| {
-                                    let range = change.range.unwrap();
-                                    // Use translation utilities from VirtualDocContext
-                                    let translated_range =
-                                        vdoc_ctx.translate_range_to_virtual(range);
-                                    lsp_types::TextDocumentContentChangeEvent {
-                                        text: change.text.clone(),
-                                        range_length: change.range_length,
-                                        range: Some(translated_range),
-                                    }
+                                .filter_map(|change| {
+                                    // Full-sync updates (range=None) cannot be translated
+                                    // only forward incremental changes
+                                    change.range.map(|range| {
+                                        // Use translation utilities from VirtualDocContext
+                                        let translated_range =
+                                            vdoc_ctx.translate_range_to_virtual(range);
+                                        lsp_types::TextDocumentContentChangeEvent {
+                                            text: change.text.clone(),
+                                            range_length: change.range_length,
+                                            range: Some(translated_range),
+                                        }
+                                    })
                                 })
                                 .collect_vec(),
                         },
