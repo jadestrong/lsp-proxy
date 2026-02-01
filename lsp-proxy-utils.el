@@ -220,16 +220,37 @@ LSP server result."
     (yas-expand-snippet snippet start end expand-env)))
 
 ;;; Text indentation utilities
-
 (defun lsp-proxy--indent-lines (start end &optional insert-text-mode?)
-  "Indent from START to END based on INSERT-TEXT-MODE?."
+  "Indent from START to END based on INSERT-TEXT-MODE? value.
+- When INSERT-TEXT-MODE? is provided
+  - if it's `lsp/insert-text-mode-as-it', do no editor indentation.
+  - if it's `lsp/insert-text-mode-adjust-indentation', adjust leading
+    whitespaces to match the line where text is inserted.
+- When it's not provided, using `indent-line-function' for each line."
   (save-excursion
-    (goto-char start)
-    (forward-line)
-    (while (and (not insert-text-mode?) (< (point) end))
-      (unless (eolp)
-        (indent-according-to-mode))
-      (forward-line))))
+    (goto-char end)
+    (let* ((end-line (line-number-at-pos))
+           (offset (save-excursion
+                     (goto-char start)
+                     (current-indentation)))
+           (indent-line-function
+            (cond ((equal insert-text-mode? 1)
+                   #'ignore)
+                  ((or (equal insert-text-mode? 2)
+                       ;; Indenting snippets is extremely slow in `org-mode' buffers
+                       ;; since it has to calculate indentation based on SRC block
+                       ;; position.  Thus we use relative indentation as default.
+                       (derived-mode-p 'org-mode))
+                   (lambda () (save-excursion
+                                (beginning-of-line)
+                                (indent-to-column offset))))
+                  (t indent-line-function))))
+      (goto-char start)
+      (forward-line)
+      (while (and (not (eobp))
+                  (<= (line-number-at-pos) end-line))
+        (funcall indent-line-function)
+        (forward-line)))))
 
 ;;; Request parameters
 
