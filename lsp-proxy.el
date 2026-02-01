@@ -100,6 +100,9 @@
 (defvar-local lsp-proxy--highlights nil
   "Current document highlights for this buffer.")
 
+(defvar-local lsp-proxy--language nil
+  "Guess language based on major-mode.")
+
 ;;; Hash tables for project management
 
 (defvar lsp-proxy--project-hashmap (make-hash-table :test 'equal)
@@ -226,6 +229,9 @@ Skip reopening notifications for buffers not currently visible."
 
 (defun lsp-proxy--mode-off ()
   "Turn off lsp-proxy mode."
+  (when (and lsp-proxy-mode (lsp-proxy--buffer-visible-p))
+    (lsp-proxy--on-doc-close))
+  (setq-local lsp-proxy--language nil)
   (when lsp-proxy-mode
     (lsp-proxy-mode -1)))
 
@@ -244,6 +250,8 @@ Skip reopening notifications for buffers not currently visible."
 
 (defun lsp-proxy--mode-enter ()
   "Set up lsp proxy mode when entering."
+  ;; Guess language based on major-mode
+  (setq-local lsp-proxy--language (lsp-proxy-guess-language))
   ;; Add hooks
   (when buffer-file-name
     (dolist (hook lsp-proxy--internal-hooks)
@@ -778,6 +786,15 @@ most recently requested highlights.")
            nil)
          :deferred 'textDocument/documentHighlight))
       nil)))
+
+;;; Guess language
+
+(defun lsp-proxy-guess-language ()
+  "Guess the programming language based on the current major-mode name.
+Take the first part of the major-mode name before the first dash."
+  (when major-mode
+    (let ((mode-name (symbol-name major-mode)))
+      (car (split-string mode-name "-")))))
 
 
 ;;; Mode definition

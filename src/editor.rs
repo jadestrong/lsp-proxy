@@ -40,7 +40,7 @@ impl Editor {
         let doc_id = self
             .document_by_uri(uri)
             .map(|doc| doc.id)
-            .unwrap_or_else(|| self.new_document(uri).id);
+            .unwrap_or_else(|| self.new_document(uri, None).id);
 
         self.documents.get_mut(&doc_id).unwrap()
     }
@@ -88,8 +88,8 @@ impl Editor {
         }
     }
 
-    pub fn new_document(&mut self, uri: &Url) -> &Document {
-        let mut doc = Document::new(uri, Some(self.syn_loader.clone()));
+    pub fn new_document(&mut self, uri: &Url, language: Option<&str>) -> &Document {
+        let mut doc = Document::new(uri, Some(self.syn_loader.clone()), language);
         let id = self.next_document_id;
         self.next_document_id =
             DocumentId(unsafe { NonZeroUsize::new_unchecked(self.next_document_id.0.get() + 1) });
@@ -148,5 +148,22 @@ impl Editor {
     #[inline]
     pub fn language_server_by_id(&self, language_server_id: usize) -> Option<Arc<Client>> {
         self.language_servers.get_by_id(language_server_id)
+    }
+
+    /// Remove document from editor by URI
+    /// Returns true if the document was found and removed
+    pub fn remove_document(&mut self, uri: &Url) -> bool {
+        if let Some(doc) = self.document_by_uri(uri) {
+            let doc_id = doc.id;
+            self.documents.remove(&doc_id).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Remove document from editor by DocumentId  
+    /// Returns the removed document if it existed
+    pub fn remove_document_by_id(&mut self, doc_id: DocumentId) -> Option<Document> {
+        self.documents.remove(&doc_id)
     }
 }

@@ -106,6 +106,7 @@ that support `textDocument/hover' request.")
 ;;; External variables (to be defined by main module)
 (defvar lsp-proxy-max-completion-item)
 (defvar lsp-proxy-diagnostics-max-push-count)
+(defvar lsp-proxy--language)
 (defvar lsp-proxy-mode)
 
 ;;; External functions from eglot (for backward compatibility)
@@ -417,7 +418,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                (list :textDocument (append (eglot--TextDocumentIdentifier)
                                                            (list
                                                             :text initial-content
-                                                            :languageId ""
+                                                            :languageId lsp-proxy--language
                                                             :version (if (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file) -1 (lsp-proxy--doc-version))
                                                             :isLargeFile (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file)))))
             ;; send large file content

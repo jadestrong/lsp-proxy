@@ -761,7 +761,7 @@ impl Application {
             not: Some(not),
             app: self,
         }
-        .on_sync_mut::<notfis::DidOpenTextDocument>(
+        .on_sync_mut_with_language::<notfis::DidOpenTextDocument>(
             handlers::notification::handle_did_open_text_document,
         )?
         .on_sync_mut::<notfis::DidChangeTextDocument>(

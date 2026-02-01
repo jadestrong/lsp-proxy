@@ -59,7 +59,7 @@ pub struct Document {
 }
 
 impl Document {
-    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>) -> Self {
+    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>, language: Option<&str>) -> Self {
         let mut doc = Document {
             id: DocumentId::default(),
             uri: uri.clone(),
@@ -71,7 +71,7 @@ impl Document {
         };
 
         if let Some(loader) = config_loader {
-            doc.set_language_config(loader);
+            doc.set_language_config(loader, language);
         }
 
         doc
@@ -162,9 +162,9 @@ impl Document {
         server_capabilities
     }
 
-    fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>) {
+    fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>, language: Option<&str>) {
         let language_config =
-            config_loader.language_config_for_file_name(self.path().unwrap().as_ref());
+            config_loader.language_config_for_file_name(self.path().unwrap().as_ref(), language);
         self.language_config = language_config;
     }
 
