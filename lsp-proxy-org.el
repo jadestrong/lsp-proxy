@@ -55,47 +55,54 @@ Used to restore when leaving a code block.")
 
 
 (defun lsp-proxy--inside-block-p ()
-  "Return non-nil if inside LANGS code block."
-  (when-let* ((face (get-text-property (point) 'face))
-              (lang (and (if (listp face)
-                             (memq 'org-block face)
-                           (eq 'org-block face))
-                         (plist-get (cadr (org-element-context)) :language))))
-    lang))
+  "Return the language if inside a code block, nil otherwise.
+Uses text property check first for fast path."
+  (when-let* ((face (get-text-property (point) 'face)))
+    (when (if (listp face)
+              (memq 'org-block face)
+            (eq 'org-block face))
+      ;; Return t to indicate we're in a block, actual element will be fetched later
+      t)))
 
 (defun lsp-proxy-org-babel-check-lsp-server ()
   "Check if current point is in org babel block.
 If in a new block, schedule an idle timer to preemptively start LSP server.
 If leaving a block, clean up the cache."
-  (when (and lsp-proxy-enable-org-babel (eq major-mode 'org-mode))
+  ;; Early return if not in org-mode or org-babel disabled
+  (when (and lsp-proxy-enable-org-babel
+             (eq major-mode 'org-mode))
     (if (and lsp-proxy-org-babel--info-cache (lsp-proxy-org-babel-in-block-p (point)))
         ;; Still in the same block, return cached info (do nothing)
         lsp-proxy-org-babel--info-cache
       ;; Either no cache or moved out of block, check current position
-      (let ((lang (lsp-proxy--inside-block-p)))
-        (if lang
-            ;; Entered a (possibly new) src-block
-            (let ((element (org-element-context)))
-              ;; Only update if it's a different block or first time
-              (unless (and lsp-proxy-org-babel--info-cache
-                           (eq (org-element-property :begin element)
-                               (org-element-property :begin lsp-proxy-org-babel--info-cache)))
-                ;; Clean previous block state if switching blocks
-                (when lsp-proxy-org-babel--info-cache
-                  (lsp-proxy-org-babel-clean-cache))
-                (setq-local lsp-proxy-org-babel--info-cache element)
-                (save-excursion
-                  (goto-char (org-element-property :post-affiliated element))
-                  (setq-local lsp-proxy-org-babel--block-bop (1+ (line-end-position))))
-                (setq-local lsp-proxy-org-babel--block-eop
-                            (+ lsp-proxy-org-babel--block-bop -1
-                               (length (org-element-property :value element))))
-                (setq-local lsp-proxy-org-babel--update-file-before-change t)
-                ;; Schedule idle timer to preemptively start LSP server
-                (lsp-proxy-org-babel--schedule-lsp-start)))
-          ;; Not in a src-block, clean up if we were in one before
-          (when lsp-proxy-org-babel--info-cache
-            (lsp-proxy-org-babel-clean-cache)))))))
+      (if (lsp-proxy--inside-block-p)
+          ;; Might be in a src-block, get element to confirm
+          (let ((element (org-element-context)))
+            (if (and (eq (org-element-type element) 'src-block)
+                     (org-element-property :language element))
+                ;; Confirmed in a src-block with language
+                (unless (and lsp-proxy-org-babel--info-cache
+                             (eq (org-element-property :begin element)
+                                 (org-element-property :begin lsp-proxy-org-babel--info-cache)))
+                  ;; Clean previous block state if switching blocks
+                  (when lsp-proxy-org-babel--info-cache
+                    (lsp-proxy-org-babel-clean-cache))
+                  (setq-local lsp-proxy-org-babel--info-cache element)
+                  (save-excursion
+                    (goto-char (org-element-property :post-affiliated element))
+                    (setq-local lsp-proxy-org-babel--block-bop (1+ (line-end-position))))
+                  (setq-local lsp-proxy-org-babel--block-eop
+                              (+ lsp-proxy-org-babel--block-bop -1
+                                 (length (org-element-property :value element))))
+                  (setq-local lsp-proxy-org-babel--update-file-before-change t)
+                  ;; Schedule idle timer to preemptively start LSP server
+                  (lsp-proxy-org-babel--schedule-lsp-start))
+              ;; Not a src-block (maybe other block type), clean up
+              (when lsp-proxy-org-babel--info-cache
+                (lsp-proxy-org-babel-clean-cache))))
+        ;; Not in any block, clean up if we were in one before
+        (when lsp-proxy-org-babel--info-cache
+          (lsp-proxy-org-babel-clean-cache))))))
 
 (defun lsp-proxy-org-babel--schedule-lsp-start ()
   "Schedule an idle timer to start LSP server for current org babel block.
@@ -136,13 +143,6 @@ with the block content as a virtual document."
                                 :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
                                 :language (org-element-property :language lsp-proxy-org-babel--info-cache)
                                 :source-type "org-babel")))
-      ;; 先发送 didClose 避免重复 didOpen，携带 virtual-doc 以关闭对应的虚拟文档语言服务器
-      ;; (lsp-proxy--notify 'textDocument/didClose
-      ;;                    (list :textDocument (eglot--TextDocumentIdentifier))
-      ;;                    :virtual-doc virtual-doc-context)
-      ;; 使用当前 org 文件来做 didOpen 但是 content 是提取出的 org-src-block 内容
-      ;; 但是在补全或其他操作中，需要做行偏移，因为在 org 中编辑时，是 org 的实际行号，但是 lsp server 只有 src block 的内容
-      ;; 行号是对应不上的，所以需要偏移校正
       (lsp-proxy--notify 'textDocument/didOpen
                          (list :textDocument (append (eglot--TextDocumentIdentifier)
                                                      (list

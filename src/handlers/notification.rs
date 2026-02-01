@@ -43,13 +43,10 @@ pub(crate) fn handle_did_open_text_document(
             if let Some(ref vdoc_ctx) = virtual_doc_ctx {
                 let doc_id = doc.id();
                 let version = doc.version();
-                
+
                 // Check current virtual doc state
-                let has_server_for_language = match &doc.virtual_doc {
-                    Some(_) => doc.language_servers_of_virtual_doc.contains_key(&vdoc_ctx.language),
-                    None => false,
-                };
-                
+                let has_server_for_language = doc.has_virtual_doc_server(&vdoc_ctx.language);
+
                 let org_line_bias = vdoc_ctx.line_bias;
                 let language = vdoc_ctx.language.clone();
                 let syn_loader = app.editor.syn_loader.clone();
@@ -58,15 +55,19 @@ pub(crate) fn handle_did_open_text_document(
                 let virtual_doc =
                     VirtualDocumentInfo::new(org_line_bias, language.clone(), Some(syn_loader));
                 let language_id = virtual_doc.language_id().to_owned();
-                
+
                 if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
                     doc.virtual_doc = Some(virtual_doc);
                 }
 
                 if has_server_for_language {
                     // Reuse existing server - send didClose first, then didOpen for the new block
-                    if let Some(doc) = app.editor.documents.get(&doc_id) {
-                        if let Some(ls) = doc.language_servers_of_virtual_doc.get(&language) {
+                    if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
+                        // Touch the entry to update last_used timestamp
+                        if let Some(entry) = doc.language_servers_of_virtual_doc.get_mut(&language) {
+                            entry.touch();
+                            let ls = entry.client.clone();
+                            
                             // Always send didClose before didOpen when reusing server
                             ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
                                 text_document: lsp_types::TextDocumentIdentifier {
@@ -200,7 +201,8 @@ pub(crate) fn handle_did_change_text_document(
             debug!("is_org_file? {:?}", doc.is_org_file());
             // 如果是 org file 要单独给自己的 server 发送一份
             if doc.is_org_file() {
-                let ls = doc.language_servers_of_virtual_doc.get(&vdoc_ctx.language);
+                // Get and touch the server entry
+                let ls = doc.get_virtual_doc_server(&vdoc_ctx.language);
                 debug!("get a ls {:?}", ls.is_some());
                 if let Some(ls) = ls {
                     debug!("the ls is {:?}", ls.name());

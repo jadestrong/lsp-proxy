@@ -5,7 +5,7 @@ use crate::{
     connection::Connection,
     controller::Controller,
     dispatch::{NotificationDispatcher, RequestDispatcher},
-    document::{DiagnosticItem, DiagnosticProvider, Document, DocumentId},
+    document::{DiagnosticItem, DiagnosticProvider, Document, DocumentId, DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS},
     handlers::{
         self,
         request::{
@@ -35,6 +35,7 @@ use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
@@ -65,6 +66,13 @@ pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuratio
 impl Application {
     async fn run(&mut self, emacs_receiver: &mut UnboundedReceiver<Message>) -> Result<()> {
         let (tx, mut rx) = unbounded_channel();
+        
+        // Create interval for cleaning up expired virtual document servers
+        // Check every 60 seconds
+        let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
+        // Don't run immediately on start
+        cleanup_interval.tick().await;
+        
         loop {
             tokio::select! {
                 biased;
@@ -80,6 +88,43 @@ impl Application {
                 Some(callback) = self.jobs.callbacks.recv() => {
                     self.jobs.handle_callback(&mut self.editor, Ok(Some(callback)));
                 }
+                _ = cleanup_interval.tick() => {
+                    self.cleanup_expired_virtual_doc_servers().await;
+                }
+            }
+        }
+    }
+    
+    /// Cleanup expired virtual document servers.
+    /// This is called periodically to reclaim resources from unused servers.
+    async fn cleanup_expired_virtual_doc_servers(&mut self) {
+        let removed = self.editor.cleanup_expired_virtual_doc_servers(DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS);
+        
+        for (uri, language, client) in removed {
+            // Send shutdown request to the server
+            if client.is_initialized() {
+                debug!("Shutting down expired virtual doc server '{}' for '{}'", client.name(), uri);
+                
+                // First send didClose for the virtual document
+                let _ = client.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                });
+                
+                // Note: We don't shutdown the server itself because it might be shared
+                // with other documents. The server will be cleaned up when no more
+                // documents reference it.
+                
+                // Notify user about server cleanup
+                self.send_notification::<lsp_types::notification::ShowMessage>(
+                    lsp_types::ShowMessageParams {
+                        typ: lsp_types::MessageType::INFO,
+                        message: format!(
+                            "Recycled {} server for {} (idle timeout).",
+                            client.name(),
+                            language
+                        ),
+                    },
+                );
             }
         }
     }
@@ -334,7 +379,7 @@ impl Application {
                             .filter(|doc| {
                                 doc.language_servers_of_virtual_doc
                                     .values()
-                                    .any(|ls| ls.id() == language_server.id())
+                                    .any(|entry| entry.client.id() == language_server.id())
                             })
                             .for_each(|doc| {
                                 self.send_notification::<lsp_ext::CustomServerCapabilities>(
@@ -702,13 +747,26 @@ impl Application {
                         if doc.is_org_file() {
                             // Check for virtual document context
                             if let Some(ref vdoc_ctx) = req.params.virtual_doc {
-                                let language_server =
-                                    doc.language_servers_of_virtual_doc.get(&vdoc_ctx.language);
+                                // Get the client from the entry
+                                let language_server = doc
+                                    .language_servers_of_virtual_doc
+                                    .get(&vdoc_ctx.language)
+                                    .map(|entry| entry.client.clone());
+                                
                                 if let Some(ls) = language_server {
+                                    // Touch the entry to update last_used (need mutable access)
+                                    let uri = doc.uri.clone();
+                                    let language = vdoc_ctx.language.clone();
+                                    if let Some(doc_mut) = self.editor.document_by_uri_mut(&uri) {
+                                        if let Some(entry) = doc_mut.language_servers_of_virtual_doc.get_mut(&language) {
+                                            entry.touch();
+                                        }
+                                    }
+                                    
                                     Self::on_request(
                                         req,
                                         self.sender.clone(),
-                                        vec![ls.clone()],
+                                        vec![ls],
                                     );
                                 } else {
                                     self.respond(create_error_response(

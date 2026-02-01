@@ -6,7 +6,7 @@ use crate::{
 };
 use lsp::Diagnostic;
 use lsp_types::{self as lsp, Url};
-use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DocumentId(pub NonZeroUsize);
@@ -45,6 +45,35 @@ pub struct DiagnosticItem {
     pub file_path: String,
 }
 
+/// Default TTL for virtual document servers (5 minutes)
+pub const DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS: u64 = 300;
+
+/// Entry for a cached virtual document language server with TTL tracking.
+#[derive(Debug)]
+pub struct VirtualDocServerEntry {
+    pub client: Arc<Client>,
+    pub last_used: Instant,
+}
+
+impl VirtualDocServerEntry {
+    pub fn new(client: Arc<Client>) -> Self {
+        Self {
+            client,
+            last_used: Instant::now(),
+        }
+    }
+
+    /// Update the last used timestamp to now.
+    pub fn touch(&mut self) {
+        self.last_used = Instant::now();
+    }
+
+    /// Check if this entry has expired based on the given TTL.
+    pub fn is_expired(&self, ttl_secs: u64) -> bool {
+        self.last_used.elapsed().as_secs() > ttl_secs
+    }
+}
+
 #[derive(Debug)]
 pub struct VirtualDocumentInfo {
     pub(crate) org_line_bias: u32,
@@ -73,9 +102,8 @@ impl VirtualDocumentInfo {
 
     pub fn language_id(&self) -> &str {
         self.language_config
-            .as_deref().unwrap()
-            .language_server_language_id
             .as_deref()
+            .and_then(|c| c.language_server_language_id.as_deref())
             .unwrap_or(&self.language)
     }
 }
@@ -94,7 +122,7 @@ pub struct Document {
 
     // If the document is a Org file, contains virtual document information
     pub virtual_doc: Option<VirtualDocumentInfo>,
-    pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, Arc<Client>>,
+    pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, VirtualDocServerEntry>,
 }
 
 impl Document {
@@ -226,7 +254,8 @@ impl Document {
         let mut has_any_servers = false;
         let mut all_support_incremental = true;
 
-        for ls in self.language_servers_of_virtual_doc.values() {
+        for entry in self.language_servers_of_virtual_doc.values() {
+            let ls = &entry.client;
             has_any_servers = true;
 
             let sync_kind = ls.get_text_document_sync_kind();
@@ -437,5 +466,40 @@ impl Document {
             }
         }
         false
+    }
+
+    /// Get a virtual document server by language, updating its last_used timestamp.
+    pub fn get_virtual_doc_server(&mut self, language: &str) -> Option<Arc<Client>> {
+        if let Some(entry) = self.language_servers_of_virtual_doc.get_mut(language) {
+            entry.touch();
+            Some(entry.client.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Check if a virtual document server exists for the given language.
+    pub fn has_virtual_doc_server(&self, language: &str) -> bool {
+        self.language_servers_of_virtual_doc.contains_key(language)
+    }
+
+    /// Insert a new virtual document server entry.
+    pub fn insert_virtual_doc_server(&mut self, language: String, client: Arc<Client>) {
+        self.language_servers_of_virtual_doc
+            .insert(language, VirtualDocServerEntry::new(client));
+    }
+
+    /// Get expired virtual document server languages based on TTL.
+    pub fn get_expired_virtual_doc_servers(&self, ttl_secs: u64) -> Vec<String> {
+        self.language_servers_of_virtual_doc
+            .iter()
+            .filter(|(_, entry)| entry.is_expired(ttl_secs))
+            .map(|(lang, _)| lang.clone())
+            .collect()
+    }
+
+    /// Remove and return a virtual document server entry.
+    pub fn remove_virtual_doc_server(&mut self, language: &str) -> Option<VirtualDocServerEntry> {
+        self.language_servers_of_virtual_doc.remove(language)
     }
 }

@@ -181,7 +181,7 @@ impl Editor {
         // 存储到 language_servers_of_virtual_doc，使用 language 作为 key
         // 需要重新获取 doc 的可变引用
         if let Some(doc) = self.documents.get_mut(&doc_id) {
-            doc.language_servers_of_virtual_doc.insert(language.to_owned(), server.clone());
+            doc.insert_virtual_doc_server(language.to_owned(), server.clone());
         }
         
         Some(server)
@@ -190,6 +190,29 @@ impl Editor {
     #[inline]
     pub fn language_server_by_id(&self, language_server_id: usize) -> Option<Arc<Client>> {
         self.language_servers.get_by_id(language_server_id)
+    }
+
+    /// Cleanup expired virtual document servers across all documents.
+    /// Returns a list of (uri, language, client) tuples for servers that were removed.
+    pub fn cleanup_expired_virtual_doc_servers(&mut self, ttl_secs: u64) -> Vec<(Url, String, Arc<Client>)> {
+        let mut removed = Vec::new();
+
+        for doc in self.documents.values_mut() {
+            let expired_languages = doc.get_expired_virtual_doc_servers(ttl_secs);
+            
+            for lang in expired_languages {
+                if let Some(entry) = doc.remove_virtual_doc_server(&lang) {
+                    log::info!(
+                        "Recycling expired virtual doc server for language '{}' in document '{}'",
+                        lang,
+                        doc.uri
+                    );
+                    removed.push((doc.uri.clone(), lang, entry.client));
+                }
+            }
+        }
+
+        removed
     }
 
     /// Remove document from editor by URI
