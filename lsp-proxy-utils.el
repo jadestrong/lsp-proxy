@@ -257,7 +257,6 @@ virtual document sent to the language server."
                  (apply 'append args)))
          (base-params (append (eglot--TextDocumentIdentifier)
                               `(:params ,params)
-                              `(:language ,lsp-proxy--language)
                               rest))
          (virtual-doc (lsp-proxy--make-virtual-doc-context)))
     (if virtual-doc

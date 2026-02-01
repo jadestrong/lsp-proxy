@@ -20,6 +20,14 @@
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-core)
 
+;;; External declarations
+
+(declare-function org-element-property "ext:org-element")
+
+;; External variables from lsp-proxy-org.el
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
+
 ;;; Variables
 
 (defcustom lsp-proxy-max-completion-item 20
@@ -90,8 +98,23 @@ Or nil if none."
 
 ;;; Main completion at point function
 
+(defun lsp-proxy-org-babel--elisp-language-p ()
+  "Return non-nil if current org babel block is elisp or emacs-lisp."
+  (when (and (bound-and-true-p lsp-proxy-enable-org-babel)
+             (eq major-mode 'org-mode)
+             (bound-and-true-p lsp-proxy-org-babel--info-cache))
+    (let ((lang (org-element-property :language lsp-proxy-org-babel--info-cache)))
+      (member lang '("elisp" "emacs-lisp")))))
+
 (defun lsp-proxy-completion-at-point ()
-  "Get lsp completions."
+  "Get lsp completions.
+For org-babel blocks with elisp/emacs-lisp, use `elisp-completion-at-point'
+instead of sending LSP requests."
+  ;; Special case: use elisp completion for elisp/emacs-lisp org babel blocks
+  (when (lsp-proxy-org-babel--elisp-language-p)
+    (cl-return-from lsp-proxy-completion-at-point
+      (elisp-completion-at-point)))
+
   (let* ((trigger-characters lsp-proxy--completion-trigger-characters)
          (bounds-start (if-let* ((bounds (lsp-proxy--get-english-dash-string-boundaries)))
                            (cl-first bounds)

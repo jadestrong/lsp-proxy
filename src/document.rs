@@ -76,19 +76,20 @@ impl VirtualDocServerEntry {
 
 #[derive(Debug)]
 pub struct VirtualDocumentInfo {
-    pub(crate) org_line_bias: u32,
+    #[allow(dead_code)]
+    pub(crate) line_bias: u32,
     pub(crate) language: String,
     pub language_config: Option<Arc<LanguageConfiguration>>,
 }
 
 impl VirtualDocumentInfo {
     pub fn new(
-        org_line_bias: u32,
+        line_bias: u32,
         language: String,
         config_loader: Option<Arc<syntax::Loader>>,
     ) -> Self {
         let mut virtual_doc = VirtualDocumentInfo {
-            org_line_bias,
+            line_bias,
             language: language.clone(),
             language_config: None,
         };
@@ -123,6 +124,9 @@ pub struct Document {
     // If the document is a Org file, contains virtual document information
     pub virtual_doc: Option<VirtualDocumentInfo>,
     pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, VirtualDocServerEntry>,
+
+    /// Cached result of is_org_file check
+    is_org_file: bool,
 }
 
 impl Document {
@@ -131,6 +135,13 @@ impl Document {
         config_loader: Option<Arc<syntax::Loader>>,
         language: Option<&str>,
     ) -> Self {
+        // Pre-compute is_org_file
+        let is_org_file = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.extension().map(|ext| ext == "org"))
+            .unwrap_or(false);
+
         let mut doc = Document {
             id: DocumentId::default(),
             uri: uri.clone(),
@@ -141,6 +152,7 @@ impl Document {
             previous_diagnostic_id: None,
             virtual_doc: None,
             language_servers_of_virtual_doc: HashMap::new(),
+            is_org_file,
         };
 
         if let Some(loader) = config_loader {
@@ -237,6 +249,7 @@ impl Document {
 
     /// Get server capabilities for virtual document (e.g., org babel code block).
     /// This is similar to get_server_capabilities but uses language_servers_of_virtual_doc.
+    /// Only completion-related features are enabled for virtual documents.
     pub fn get_virtual_doc_server_capabilities(&self) -> CustomServerCapabilitiesParams {
         let mut server_capabilities = CustomServerCapabilitiesParams {
             uri: self.uri.to_string(),
@@ -272,24 +285,9 @@ impl Document {
                 server_capabilities.trigger_characters.append(&mut triggers);
             }
 
-            // if ls.supports_feature(LanguageServerFeature::InlayHints) {
-            //     server_capabilities.support_inlay_hints = true;
-            // }
-            // if ls.supports_feature(LanguageServerFeature::DocumentHighlight) {
-            //     server_capabilities.support_document_highlight = true;
-            // }
-            // if ls.supports_feature(LanguageServerFeature::DocumentSymbols) {
-            //     server_capabilities.support_document_symbols = true;
-            // }
             if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
                 server_capabilities.support_signature_help = true;
             }
-            // if ls.supports_feature(LanguageServerFeature::PullDiagnostics) {
-            //     server_capabilities.support_pull_diagnostic = true;
-            // }
-            // if ls.supports_feature(LanguageServerFeature::InlineCompletion) {
-            //     server_capabilities.support_inline_completion = true;
-            // }
             if ls.supports_feature(LanguageServerFeature::Hover) {
                 server_capabilities.support_hover = true;
             }
@@ -456,16 +454,10 @@ impl Document {
         self.language_servers.clear();
     }
 
-    /// Check if this document is an Org file
+    /// Check if this document is an Org file (cached)
+    #[inline]
     pub fn is_org_file(&self) -> bool {
-        if let Some(path) = self.path() {
-            if let Some(ext) = path.extension() {
-                if let Some(ext_str) = ext.to_str() {
-                    return ext_str == "org";
-                }
-            }
-        }
-        false
+        self.is_org_file
     }
 
     /// Get a virtual document server by language, updating its last_used timestamp.

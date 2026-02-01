@@ -12,7 +12,11 @@
 ;;; Code:
 
 (defcustom lsp-proxy-enable-org-babel t
-  "Use `lsp-proxy' in org-babel, default is disable.")
+  "Enable LSP support in org-babel code blocks.
+When non-nil, lsp-proxy will provide code completion and other
+LSP features inside org-mode source blocks."
+  :type 'boolean
+  :group 'lsp-proxy)
 
 (declare-function org-element-context "ext:org")
 (declare-function org-element-type "ext:org")
@@ -31,6 +35,9 @@
 (defvar-local lsp-proxy-org-babel--saved-trigger-characters nil
   "Saved trigger characters from the org file's original LSP server.
 Used to restore when leaving a code block.")
+(defvar-local lsp-proxy-org-babel--check-timer nil
+  "Idle timer for checking if cursor entered/left a code block.
+Used to defer expensive `org-element-context' calls.")
 
 (defun lsp-proxy-org-babel-in-block-p (pos)
   "Check if POS is in org babel block."
@@ -44,6 +51,9 @@ Used to restore when leaving a code block.")
   (when lsp-proxy-org-babel--idle-timer
     (cancel-timer lsp-proxy-org-babel--idle-timer)
     (setq-local lsp-proxy-org-babel--idle-timer nil))
+  (when lsp-proxy-org-babel--check-timer
+    (cancel-timer lsp-proxy-org-babel--check-timer)
+    (setq-local lsp-proxy-org-babel--check-timer nil))
   ;; Restore original trigger characters when leaving code block
   (when lsp-proxy-org-babel--saved-trigger-characters
     (setq-local lsp-proxy--completion-trigger-characters
@@ -67,42 +77,70 @@ Uses text property check first for fast path."
 (defun lsp-proxy-org-babel-check-lsp-server ()
   "Check if current point is in org babel block.
 If in a new block, schedule an idle timer to preemptively start LSP server.
-If leaving a block, clean up the cache."
+If leaving a block, clean up the cache.
+
+This function is called from `post-command-hook', so it uses a fast path
+to check if we're still in the same block, and defers expensive
+`org-element-context' calls to an idle timer."
   ;; Early return if not in org-mode or org-babel disabled
   (when (and lsp-proxy-enable-org-babel
              (eq major-mode 'org-mode))
-    (if (and lsp-proxy-org-babel--info-cache (lsp-proxy-org-babel-in-block-p (point)))
-        ;; Still in the same block, return cached info (do nothing)
-        lsp-proxy-org-babel--info-cache
-      ;; Either no cache or moved out of block, check current position
-      (if (lsp-proxy--inside-block-p)
-          ;; Might be in a src-block, get element to confirm
-          (let ((element (org-element-context)))
-            (if (and (eq (org-element-type element) 'src-block)
-                     (org-element-property :language element))
-                ;; Confirmed in a src-block with language
-                (unless (and lsp-proxy-org-babel--info-cache
-                             (eq (org-element-property :begin element)
-                                 (org-element-property :begin lsp-proxy-org-babel--info-cache)))
-                  ;; Clean previous block state if switching blocks
-                  (when lsp-proxy-org-babel--info-cache
-                    (lsp-proxy-org-babel-clean-cache))
-                  (setq-local lsp-proxy-org-babel--info-cache element)
-                  (save-excursion
-                    (goto-char (org-element-property :post-affiliated element))
-                    (setq-local lsp-proxy-org-babel--block-bop (1+ (line-end-position))))
-                  (setq-local lsp-proxy-org-babel--block-eop
-                              (+ lsp-proxy-org-babel--block-bop -1
-                                 (length (org-element-property :value element))))
-                  (setq-local lsp-proxy-org-babel--update-file-before-change t)
-                  ;; Schedule idle timer to preemptively start LSP server
-                  (lsp-proxy-org-babel--schedule-lsp-start))
-              ;; Not a src-block (maybe other block type), clean up
-              (when lsp-proxy-org-babel--info-cache
-                (lsp-proxy-org-babel-clean-cache))))
-        ;; Not in any block, clean up if we were in one before
-        (when lsp-proxy-org-babel--info-cache
-          (lsp-proxy-org-babel-clean-cache))))))
+    (cond
+     ;; Fast path: still in the same cached block
+     ((and lsp-proxy-org-babel--info-cache
+           (lsp-proxy-org-babel-in-block-p (point)))
+      lsp-proxy-org-babel--info-cache)
+
+     ;; Might have entered/left a block - schedule deferred check
+     ((lsp-proxy--inside-block-p)
+      ;; Cancel any pending check timer and schedule a new one
+      (when lsp-proxy-org-babel--check-timer
+        (cancel-timer lsp-proxy-org-babel--check-timer))
+      (setq-local lsp-proxy-org-babel--check-timer
+                  (run-with-idle-timer
+                   0.1 nil
+                   #'lsp-proxy-org-babel--deferred-check
+                   (current-buffer)
+                   (point))))
+
+     ;; Not in any block, clean up immediately if we were in one before
+     (lsp-proxy-org-babel--info-cache
+      (lsp-proxy-org-babel-clean-cache)))))
+
+(defun lsp-proxy-org-babel--deferred-check (buffer pos)
+  "Deferred check for org babel block at POS in BUFFER.
+Called by idle timer to avoid expensive `org-element-context' on every keystroke."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (setq-local lsp-proxy-org-babel--check-timer nil)
+      ;; Only proceed if point hasn't moved significantly
+      (when (and lsp-proxy-enable-org-babel
+                 (eq major-mode 'org-mode)
+                 ;; Check if we're still roughly at the same position
+                 (<= (abs (- (point) pos)) 5))
+        (let ((element (org-element-context)))
+          (if (and (eq (org-element-type element) 'src-block)
+                   (org-element-property :language element))
+              ;; Confirmed in a src-block with language
+              (unless (and lsp-proxy-org-babel--info-cache
+                           (eq (org-element-property :begin element)
+                               (org-element-property :begin lsp-proxy-org-babel--info-cache)))
+                ;; Clean previous block state if switching blocks
+                (when lsp-proxy-org-babel--info-cache
+                  (lsp-proxy-org-babel-clean-cache))
+                (setq-local lsp-proxy-org-babel--info-cache element)
+                (save-excursion
+                  (goto-char (org-element-property :post-affiliated element))
+                  (setq-local lsp-proxy-org-babel--block-bop (1+ (line-end-position))))
+                (setq-local lsp-proxy-org-babel--block-eop
+                            (+ lsp-proxy-org-babel--block-bop -1
+                               (length (org-element-property :value element))))
+                (setq-local lsp-proxy-org-babel--update-file-before-change t)
+                ;; Schedule idle timer to preemptively start LSP server
+                (lsp-proxy-org-babel--schedule-lsp-start))
+            ;; Not a src-block (maybe other block type), clean up
+            (when lsp-proxy-org-babel--info-cache
+              (lsp-proxy-org-babel-clean-cache))))))))
 
 (defun lsp-proxy-org-babel--schedule-lsp-start ()
   "Schedule an idle timer to start LSP server for current org babel block.
@@ -129,8 +167,8 @@ Called by idle timer to preemptively initialize the language server."
 
 (defun lsp-proxy-org-babel-send-src-block-to-lsp-server ()
   "Send current org babel src block to LSP server.
-First sends didClose to avoid duplicate didOpen, then sends didOpen
-with the block content as a virtual document."
+Sends didOpen with the block content as a virtual document.
+The server side will handle didClose if needed when reusing servers."
   (when (and (eq major-mode 'org-mode)
              lsp-proxy-org-babel--block-bop
              lsp-proxy-org-babel--update-file-before-change)
@@ -153,13 +191,21 @@ with the block content as a virtual document."
 
 
 (defun lsp-proxy-org-babel-monitor-after-change (begin end length)
-  "Monitor org babel after change, BEGIN END LENGTH."
-  ;; estimate org block end point according change length
+  "Monitor org babel after change, BEGIN END LENGTH.
+BEGIN and END are the bounds of the changed region after the change.
+LENGTH is the length of the text that was replaced (0 for pure insertion).
+
+Updates `lsp-proxy-org-babel--block-eop' to track the end of the code block
+as edits are made, without needing to re-parse the org element."
   (when (and lsp-proxy-enable-org-babel (eq major-mode 'org-mode)
              lsp-proxy-org-babel--block-bop lsp-proxy-org-babel--block-eop)
+    ;; Update block-eop based on the change:
+    ;; - (end - begin) is the length of new text inserted
+    ;; - length is the length of old text that was deleted
+    ;; - net change = (end - begin) - length
     (setq-local lsp-proxy-org-babel--block-eop
-                (- lsp-proxy-org-babel--block-eop length (- begin end)))
-    ;; end_src or begin_src has been changed, reload block
+                (+ lsp-proxy-org-babel--block-eop (- end begin length)))
+    ;; If the change is outside the block or block becomes invalid, clean up
     (when (or (not (lsp-proxy-org-babel-in-block-p begin))
               (<= lsp-proxy-org-babel--block-eop lsp-proxy-org-babel--block-bop))
       (lsp-proxy-org-babel-clean-cache))))

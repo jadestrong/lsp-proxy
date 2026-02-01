@@ -333,7 +333,6 @@ pub struct Params {
     #[serde(rename = "virtual-doc")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub virtual_doc: Option<VirtualDocContext>,
-    pub language: Option<String>,
     #[serde(default = "serde_json::Value::default")]
     #[serde(skip_serializing_if = "serde_json::Value::is_null")]
     pub params: serde_json::Value,
@@ -457,7 +456,6 @@ impl Request {
                 uri: None,
                 context: None,
                 virtual_doc: None,
-                language: None,
                 params: serde_json::to_value(params).unwrap(),
             },
         }
@@ -472,7 +470,6 @@ impl Notification {
                 uri: None,
                 context: None,
                 virtual_doc: None,
-                language: None,
                 params: serde_json::to_value(params).unwrap(),
             },
         }

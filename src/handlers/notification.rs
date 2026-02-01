@@ -64,26 +64,33 @@ pub(crate) fn handle_did_open_text_document(
                     // Reuse existing server - send didClose first, then didOpen for the new block
                     if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
                         // Touch the entry to update last_used timestamp
-                        if let Some(entry) = doc.language_servers_of_virtual_doc.get_mut(&language) {
+                        if let Some(entry) = doc.language_servers_of_virtual_doc.get_mut(&language)
+                        {
                             entry.touch();
                             let ls = entry.client.clone();
-                            
+
                             // Always send didClose before didOpen when reusing server
-                            ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
-                                text_document: lsp_types::TextDocumentIdentifier {
-                                    uri: uri.clone(),
-                                },
-                            }).unwrap();
+                            if let Err(e) =
+                                ls.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
+                                    text_document: lsp_types::TextDocumentIdentifier {
+                                        uri: uri.clone(),
+                                    },
+                                })
+                            {
+                                error!("Failed to send didClose for virtual doc: {e}");
+                            }
                             debug!("Sent didClose for previous block to {:?}", ls.name());
-                            
-                            ls.text_document_did_open(
+
+                            if let Err(e) = ls.text_document_did_open(
                                 uri.clone(),
                                 version,
                                 params.text_document.text.to_owned(),
                                 language_id.clone(),
-                            ).unwrap();
+                            ) {
+                                error!("Failed to send didOpen for virtual doc: {e}");
+                            }
                             debug!("Reusing {:?} server, sent didOpen for new block", ls.name());
-                            
+
                             // Notify user about reusing existing server
                             app.send_notification::<lsp_types::notification::ShowMessage>(
                                 lsp_types::ShowMessageParams {
@@ -95,6 +102,7 @@ pub(crate) fn handle_did_open_text_document(
                                     ),
                                 },
                             );
+                            // No message notification when reusing server to reduce noise
                         }
                     }
                 } else {
@@ -104,16 +112,17 @@ pub(crate) fn handle_did_open_text_document(
                         .launch_language_servers_for_virtual_document(doc_id, &language);
 
                     if let Some(ls) = client {
-                        ls.text_document_did_open(
+                        if let Err(e) = ls.text_document_did_open(
                             uri.clone(),
                             version,
                             params.text_document.text.to_owned(),
                             language_id.clone(),
-                        )
-                        .unwrap();
+                        ) {
+                            error!("Failed to send didOpen for virtual doc: {e}");
+                        }
                         debug!("Success launch {:?} server for current block.", ls.name());
 
-                        // Notify user about virtual document server startup
+                        // Only notify user when first connecting to a new server
                         app.send_notification::<lsp_types::notification::ShowMessage>(
                             lsp_types::ShowMessageParams {
                                 typ: MessageType::INFO,
@@ -148,15 +157,16 @@ pub(crate) fn handle_did_open_text_document(
         if let Some(doc) = doc {
             // send didOpen notification directly, notifies will pending until server initialized.
             let language_id = doc.language_id().to_owned().unwrap_or_default();
-            doc.language_servers.values().for_each(|ls| {
-                ls.text_document_did_open(
+            for ls in doc.language_servers.values() {
+                if let Err(e) = ls.text_document_did_open(
                     uri.clone(),
                     doc.version(),
                     text.clone(),
                     language_id.to_string(),
-                )
-                .unwrap();
-            });
+                ) {
+                    error!("Failed to send didOpen to {}: {e}", ls.name());
+                }
+            }
             if doc.language_servers.values().any(|ls| ls.is_initialized()) {
                 app.send_notification::<lsp_ext::CustomServerCapabilities>(
                     doc.get_server_capabilities(),
@@ -186,14 +196,15 @@ pub(crate) fn handle_did_change_text_document(
     params: DidChangeTextDocumentParams,
     virtual_doc_ctx: Option<VirtualDocContext>,
 ) -> Result<()> {
-    // 如果是 org file 且在 babel block 中，则需要基于 line_bias 来校正
-    // server 也需要取 virtual_doc 的 server
     let doc = app.editor.document_by_uri_mut(&params.text_document.uri);
     if let Some(doc) = doc {
         doc.version = params.text_document.version;
         doc.language_servers().for_each(|ls| {
-            ls.notify::<lsp_types::notification::DidChangeTextDocument>(params.clone())
-                .unwrap()
+            if let Err(e) =
+                ls.notify::<lsp_types::notification::DidChangeTextDocument>(params.clone())
+            {
+                error!("Failed to send didChange to {}: {e}", ls.name());
+            }
         });
 
         debug!("virtual_doc_ctx: {virtual_doc_ctx:?}");
@@ -205,8 +216,7 @@ pub(crate) fn handle_did_change_text_document(
                 let ls = doc.get_virtual_doc_server(&vdoc_ctx.language);
                 debug!("get a ls {:?}", ls.is_some());
                 if let Some(ls) = ls {
-                    debug!("the ls is {:?}", ls.name());
-                    ls.notify::<lsp_types::notification::DidChangeTextDocument>(
+                    if let Err(e) = ls.notify::<lsp_types::notification::DidChangeTextDocument>(
                         lsp_types::DidChangeTextDocumentParams {
                             text_document: params.text_document.clone(),
                             content_changes: params
@@ -215,7 +225,8 @@ pub(crate) fn handle_did_change_text_document(
                                 .map(|change| {
                                     let range = change.range.unwrap();
                                     // Use translation utilities from VirtualDocContext
-                                    let translated_range = vdoc_ctx.translate_range_to_virtual(range);
+                                    let translated_range =
+                                        vdoc_ctx.translate_range_to_virtual(range);
                                     lsp_types::TextDocumentContentChangeEvent {
                                         text: change.text.clone(),
                                         range_length: change.range_length,
@@ -224,8 +235,9 @@ pub(crate) fn handle_did_change_text_document(
                                 })
                                 .collect_vec(),
                         },
-                    )
-                    .unwrap();
+                    ) {
+                        error!("Failed to send didChange to virtual doc server: {e}");
+                    }
                 }
             }
         }
@@ -242,7 +254,9 @@ pub(crate) fn handle_will_save_text_document(
     let doc = app.editor.document_by_uri(&params.text_document.uri);
     if let Some(doc) = doc {
         doc.language_servers().for_each(|ls| {
-            ls.text_document_will_save(params.clone()).unwrap();
+            if let Err(e) = ls.text_document_will_save(params.clone()) {
+                error!("Failed to send willSave to {}: {e}", ls.name());
+            }
         });
     } else {
         error!("no corresponding doc found for will save notification");
@@ -259,10 +273,13 @@ pub(crate) fn handle_did_save_text_document(
     let doc = app.editor.document_by_uri_mut(&params.text_document.uri);
     if let Some(doc) = doc {
         doc.language_servers().for_each(|ls| {
-            ls.text_document_did_save(params.clone()).unwrap();
-            // tokio::spawn();
+            if let Err(e) = ls.text_document_did_save(params.clone()) {
+                error!("Failed to send didSave to {}: {e}", ls.name());
+            }
         });
-        handler.file_changed(doc.path().unwrap());
+        if let Some(path) = doc.path() {
+            handler.file_changed(path);
+        }
     } else {
         error!("no corresponding doc found for did save notification");
     }
@@ -281,14 +298,12 @@ pub(crate) fn handle_did_close_text_document(
 
     if let Some(doc_id) = doc_id {
         // Get a reference to the document to close language servers
-        {
-            let doc = editor.document_mut(doc_id).unwrap();
-
+        if let Some(doc) = editor.document_mut(doc_id) {
             // Close language servers
             for language_server in doc.language_servers() {
-                language_server
-                    .text_document_did_close(params.clone())
-                    .unwrap();
+                if let Err(e) = language_server.text_document_did_close(params.clone()) {
+                    error!("Failed to send didClose to {}: {e}", language_server.name());
+                }
             }
 
             doc.reset();
@@ -310,16 +325,23 @@ pub(crate) fn handle_cancel(
     app: &mut Application,
     params: lsp_ext::CustomizeCancelParams,
 ) -> Result<()> {
-    let uri = &params.uri.as_ref().unwrap();
-    let doc = app
-        .editor
-        .document_by_uri(&lsp_types::Url::parse(uri).unwrap());
-    if let Some(doc) = doc {
+    let Some(uri_str) = params.uri.as_ref() else {
+        error!("Cancel request missing URI");
+        return Ok(());
+    };
+
+    let Ok(uri) = lsp_types::Url::parse(uri_str) else {
+        error!("Failed to parse URI: {uri_str}");
+        return Ok(());
+    };
+
+    if let Some(doc) = app.editor.document_by_uri(&uri) {
         doc.language_servers().for_each(|ls| {
-            ls.cancel(lsp_types::CancelParams {
+            if let Err(e) = ls.cancel(lsp_types::CancelParams {
                 id: params.id.clone().into(),
-            })
-            .unwrap()
+            }) {
+                error!("Failed to send cancel to {}: {e}", ls.name());
+            }
         })
     }
     Ok(())
