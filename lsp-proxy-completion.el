@@ -23,6 +23,7 @@
 ;;; External declarations
 
 (declare-function org-element-property "ext:org-element")
+(declare-function lsp-proxy-org-babel--elisp-language-p "lsp-proxy-org")
 
 ;; External variables from lsp-proxy-org.el
 (defvar lsp-proxy-enable-org-babel)
@@ -97,16 +98,7 @@ Or nil if none."
      trigger-characters)))
 
 ;;; Main completion at point function
-
-(defun lsp-proxy-org-babel--elisp-language-p ()
-  "Return non-nil if current org babel block is elisp or emacs-lisp."
-  (when (and (bound-and-true-p lsp-proxy-enable-org-babel)
-             (eq major-mode 'org-mode)
-             (bound-and-true-p lsp-proxy-org-babel--info-cache))
-    (let ((lang (org-element-property :language lsp-proxy-org-babel--info-cache)))
-      (member lang '("elisp" "emacs-lisp")))))
-
-(defun lsp-proxy-completion-at-point ()
+(cl-defun lsp-proxy-completion-at-point ()
   "Get lsp completions.
 For org-babel blocks with elisp/emacs-lisp, use `elisp-completion-at-point'
 instead of sending LSP requests."

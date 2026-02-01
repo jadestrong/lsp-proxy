@@ -61,7 +61,9 @@ Used to defer expensive `org-element-context' calls.")
     (setq-local lsp-proxy-org-babel--saved-trigger-characters nil))
   (setq-local lsp-proxy-org-babel--info-cache nil)
   (setq-local lsp-proxy-org-babel--block-bop nil)
-  (setq-local lsp-proxy-org-babel--block-eop nil))
+  (setq-local lsp-proxy-org-babel--block-eop nil)
+  (setq-local lsp-proxy--support-signature-help nil)
+  (setq-local lsp-proxy--support-hover nil))
 
 
 (defun lsp-proxy--inside-block-p ()
@@ -210,6 +212,13 @@ as edits are made, without needing to re-parse the org element."
               (<= lsp-proxy-org-babel--block-eop lsp-proxy-org-babel--block-bop))
       (lsp-proxy-org-babel-clean-cache))))
 
+(defun lsp-proxy-org-babel--elisp-language-p ()
+  "Return non-nil if current org babel block is elisp or emacs-lisp."
+  (when (and (bound-and-true-p lsp-proxy-enable-org-babel)
+             (eq major-mode 'org-mode)
+             (bound-and-true-p lsp-proxy-org-babel--info-cache))
+    (let ((lang (org-element-property :language lsp-proxy-org-babel--info-cache)))
+      (member lang '("elisp" "emacs-lisp")))))
 
 (provide 'lsp-proxy-org)
 ;;; lsp-proxy-org.el ends here
