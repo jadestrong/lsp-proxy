@@ -377,12 +377,6 @@ pub(crate) async fn handle_completion(
 
                             // Translate textEdit range from virtual doc coordinates back to org file coordinates
                             if let Some(ref vdoc) = vdoc_ctx {
-                                // match &mut new_item.text_edit {
-                                //     Some(lsp_types::CompletionTextEdit::Edit(edit)) => {
-                                //         edit.range = vdoc.translate_range_from_virtual(edit.range);
-                                //     }
-                                //     _ => {}
-                                // }
                                 if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
                                     &mut new_item.text_edit
                                 {
