@@ -5,7 +5,10 @@ use crate::{
     connection::Connection,
     controller::Controller,
     dispatch::{NotificationDispatcher, RequestDispatcher},
-    document::{DiagnosticItem, DiagnosticProvider, Document, DocumentId, DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS},
+    document::{
+        DiagnosticItem, DiagnosticProvider, Document, DocumentId,
+        DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS,
+    },
     handlers::{
         self,
         request::{
@@ -66,13 +69,13 @@ pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuratio
 impl Application {
     async fn run(&mut self, emacs_receiver: &mut UnboundedReceiver<Message>) -> Result<()> {
         let (tx, mut rx) = unbounded_channel();
-        
+
         // Create interval for cleaning up expired virtual document servers
         // Check every 60 seconds
         let mut cleanup_interval = tokio::time::interval(Duration::from_secs(60));
         // Don't run immediately on start
         cleanup_interval.tick().await;
-        
+
         loop {
             tokio::select! {
                 biased;
@@ -94,26 +97,32 @@ impl Application {
             }
         }
     }
-    
+
     /// Cleanup expired virtual document servers.
     /// This is called periodically to reclaim resources from unused servers.
     async fn cleanup_expired_virtual_doc_servers(&mut self) {
-        let removed = self.editor.cleanup_expired_virtual_doc_servers(DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS);
-        
+        let removed = self
+            .editor
+            .cleanup_expired_virtual_doc_servers(DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS);
+
         for (uri, language, client) in removed {
             // Send shutdown request to the server
             if client.is_initialized() {
-                debug!("Shutting down expired virtual doc server '{}' for '{}'", client.name(), uri);
-                
+                debug!(
+                    "Shutting down expired virtual doc server '{}' for '{}'",
+                    client.name(),
+                    uri
+                );
+
                 // First send didClose for the virtual document
                 let _ = client.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
                     text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
                 });
-                
+
                 // Note: We don't shutdown the server itself because it might be shared
                 // with other documents. The server will be cleaned up when no more
                 // documents reference it.
-                
+
                 // Notify user about server cleanup
                 self.send_notification::<lsp_types::notification::ShowMessage>(
                     lsp_types::ShowMessageParams {
@@ -359,7 +368,7 @@ impl Application {
                         };
 
                         language_server.did_change_configuration(config).unwrap();
-                        
+
                         // Send capabilities for regular documents
                         self.editor
                             .documents()
@@ -372,7 +381,7 @@ impl Application {
                                     doc.get_server_capabilities(),
                                 )
                             });
-                        
+
                         // Send capabilities for virtual documents (org babel blocks)
                         self.editor
                             .documents()
@@ -411,6 +420,10 @@ impl Application {
                             return;
                         }
                         let doc = self.editor.get(&params.uri);
+                        if doc.is_org_file() {
+                            log::debug!("Disabled pushlishDiagnostics for org file.");
+                            return;
+                        }
                         if let Some(version) = params.version {
                             if version != doc.version {
                                 log::error!("Version ({version}) is out of date for {:?} (expected ({}), dropping PublishDiagnostic notification", params.uri, doc.version());
@@ -752,22 +765,21 @@ impl Application {
                                     .language_servers_of_virtual_doc
                                     .get(&vdoc_ctx.language)
                                     .map(|entry| entry.client.clone());
-                                
+
                                 if let Some(ls) = language_server {
                                     // Touch the entry to update last_used (need mutable access)
                                     let uri = doc.uri.clone();
                                     let language = vdoc_ctx.language.clone();
                                     if let Some(doc_mut) = self.editor.document_by_uri_mut(&uri) {
-                                        if let Some(entry) = doc_mut.language_servers_of_virtual_doc.get_mut(&language) {
+                                        if let Some(entry) = doc_mut
+                                            .language_servers_of_virtual_doc
+                                            .get_mut(&language)
+                                        {
                                             entry.touch();
                                         }
                                     }
-                                    
-                                    Self::on_request(
-                                        req,
-                                        self.sender.clone(),
-                                        vec![ls],
-                                    );
+
+                                    Self::on_request(req, self.sender.clone(), vec![ls]);
                                 } else {
                                     self.respond(create_error_response(
                                         &req.id,
