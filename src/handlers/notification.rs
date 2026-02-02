@@ -60,6 +60,7 @@ pub(crate) fn handle_did_open_text_document(
                 if has_server_for_language {
                     // Reuse existing server - send didClose first, then didOpen for the new block
                     if let Some(doc) = app.editor.documents.get_mut(&doc_id) {
+                        let server_capabilities = doc.get_virtual_doc_server_capabilities();
                         // Touch the entry to update last_used timestamp
                         if let Some(entry) = doc.language_servers_of_virtual_doc.get_mut(&language)
                         {
@@ -87,7 +88,6 @@ pub(crate) fn handle_did_open_text_document(
                                 error!("Failed to send didOpen for virtual doc: {e}");
                             }
                             debug!("Reusing {:?} server, sent didOpen for new block", ls.name());
-
                             // Notify user about reusing existing server
                             app.send_notification::<lsp_types::notification::ShowMessage>(
                                 lsp_types::ShowMessageParams {
@@ -98,6 +98,9 @@ pub(crate) fn handle_did_open_text_document(
                                         language
                                     ),
                                 },
+                            );
+                            app.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                server_capabilities,
                             );
                         }
                     }
