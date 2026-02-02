@@ -18,9 +18,12 @@ LSP features inside org-mode source blocks."
   :type 'boolean
   :group 'lsp-proxy)
 
+(declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function org-element-context "ext:org")
 (declare-function org-element-type "ext:org")
 (declare-function org-element-property "ext:org")
+
+(declare-function lsp-proxy--notify "lsp-proxy-core")
 
 ;; External variables from lsp-proxy-completion.el
 (defvar lsp-proxy--completion-trigger-characters)

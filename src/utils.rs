@@ -1,5 +1,5 @@
 use crate::syntax::SupportWorkspace;
-use log::{debug, error};
+use log::error;
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
