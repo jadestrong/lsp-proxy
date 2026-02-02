@@ -222,7 +222,7 @@ pub(crate) async fn handle_completion(
     params: lsp_types::CompletionParams,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CompletionContext(context)) = req.params.context {
+    if let Some(Context::Completion(context)) = req.params.context {
         let prefix_len = &context.prefix.len();
         let bounds_start = &context.bounds_start;
         let trigger_kind = &context.trigger_kind;
@@ -468,7 +468,7 @@ pub(crate) async fn handle_completion_resolve(
     params: lsp_types::CompletionItem,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::ResolveContext(context)) = &req.params.context {
+    if let Some(Context::Resolve(context)) = &req.params.context {
         let params_detail = params.detail.clone();
         let params_text_edit = params.text_edit.clone();
         call_single_language_server::<lsp_types::request::ResolveCompletionItem>(
@@ -579,7 +579,7 @@ pub(crate) async fn handle_code_action_resolve(
     code_action: lsp_types::CodeAction,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CommonContext(context)) = &req.params.context {
+    if let Some(Context::Common(context)) = &req.params.context {
         call_single_language_server::<lsp_types::request::CodeActionResolveRequest>(
             &req,
             code_action,
@@ -630,7 +630,7 @@ pub(crate) async fn handle_execute_command(
     params: lsp_types::ExecuteCommandParams,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CommonContext(context)) = &req.params.context {
+    if let Some(Context::Common(context)) = &req.params.context {
         let language_server = language_servers
             .iter()
             .find(|ls| ls.id() == context.language_server_id);
@@ -1275,7 +1275,7 @@ pub(crate) async fn handle_inline_completion(
     _language_id: String,
     response_sender: Sender<Message>,
 ) {
-    if let Some(Context::InlineCompletionContext(context)) = req.params.context {
+    if let Some(Context::InlineCompletion(context)) = req.params.context {
         match serde_json::from_value::<lsp_types::InlineCompletionParams>(req.params.params) {
             Ok(params) => {
                 if context.trigger_kind == lsp_types::InlineCompletionTriggerKind::Invoked

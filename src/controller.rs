@@ -101,10 +101,10 @@ impl Controller {
 
     pub(crate) fn register_request(&mut self, request: &Request, request_received: Instant) {
         let should_cancel_old = match &request.params.context {
-            Some(Context::CompletionContext(new_context)) => {
+            Some(Context::Completion(new_context)) => {
                 if let Some(old_request) = self.processing_requests.get(&request.method) {
                     matches!(&old_request.params.context, 
-                        Some(Context::CompletionContext(old_context)) 
+                        Some(Context::Completion(old_context)) 
                         if old_context.prefix.is_empty() && !new_context.prefix.is_empty())
                 } else {
                     false

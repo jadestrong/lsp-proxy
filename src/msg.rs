@@ -288,12 +288,6 @@ impl VirtualDocContext {
     }
 }
 
-// #[derive(Debug, Serialize, Deserialize, Clone)]
-// pub struct SignatureHelpContext {
-//     #[serde(rename = "signature-trigger-character")]
-//     pub signature_trigger_character: String,
-// }
-
 /// Request-specific context for LSP operations.
 ///
 /// This enum represents different types of context that are specific to particular
@@ -302,13 +296,12 @@ impl VirtualDocContext {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum Context {
-    CompletionContext(CompletionContext),
-    ResolveContext(ResolveContext),
-    CommonContext(CommonContext),
-    WorkspaceContext(WorkspaceContext),
-    InlineCompletionContext(InlineCompletionContext),
-    DiagnosticContext(DiagnosticContext),
-    // Removed: OrgBabelContext (now in Params.virtual_doc as VirtualDocContext)
+    Completion(CompletionContext),
+    Resolve(ResolveContext),
+    Common(CommonContext),
+    Workspace(WorkspaceContext),
+    InlineCompletion(InlineCompletionContext),
+    Diagnostic(DiagnosticContext),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

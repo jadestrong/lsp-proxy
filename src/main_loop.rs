@@ -622,7 +622,7 @@ impl Application {
                             .context
                             .as_ref()
                             .and_then(|ctx| match ctx {
-                                msg::Context::DiagnosticContext(diag_ctx) => {
+                                msg::Context::Diagnostic(diag_ctx) => {
                                     Some(diag_ctx.limit_diagnostics)
                                 }
                                 _ => None,
