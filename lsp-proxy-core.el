@@ -119,6 +119,7 @@ that support `textDocument/hover' request.")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
 (declare-function eglot--widening "ext:eglot")
 (declare-function eglot--apply-workspace-edit "ext:eglot")
+(declare-function lsp-proxy--make-virtual-doc-context "lsp-proxy-org")
 
 ;;; External variables from eglot
 (defvar eglot--versioned-identifier)
@@ -151,24 +152,6 @@ that support `textDocument/hover' request.")
 (declare-function lsp-proxy--progress-status "lsp-proxy")
 (declare-function lsp-proxy--async-load-large-file "lsp-proxy-large-file")
 (declare-function lsp-proxy--should-skip-request-p "lsp-proxy-utils")
-
-;;; Virtual document context utilities
-
-(defun lsp-proxy--make-virtual-doc-context ()
-  "Create virtual-doc context if in org babel block.
-Returns a plist with :line-bias, :language, and :source-type keys
-when the current buffer is in an org-mode babel source block.
-Returns nil otherwise.
-
-This context is orthogonal to request-specific context (like completion
-triggers) and is used for position translation between the org file
-and the virtual document sent to the language server."
-  (when (and lsp-proxy-enable-org-babel
-             (eq major-mode 'org-mode)
-             lsp-proxy-org-babel--info-cache)
-    (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-          :language (org-element-property :language lsp-proxy-org-babel--info-cache)
-          :source-type "org-babel")))
 
 ;;; Connection utilities
 
@@ -223,44 +206,43 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
              (eq ,method 'textDocument/didSave)
              lsp-proxy--buffer-opened)
          (let ((new-params (lsp-proxy--request-or-notify-params 
-                           ,@params
-                           ,@(when context `((:context ,context))))))
+                            ,@params
+                            ,@(when context `((:context ,context))))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
        (lsp-proxy--on-doc-open))))
 
 (cl-defmacro lsp-proxy--async-request (method params &rest args &key (success-fn #'lsp-proxy--ignore-response) (error-fn #'lsp-proxy--show-error) (timeout-fn #'lsp-proxy--show-timeout) &allow-other-keys)
-  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent.
-In org-mode with `lsp-proxy-enable-org-babel' enabled, requests are
-skipped when cursor is not inside a code block."
+  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent."
   `(progn
-     (unless (lsp-proxy--should-skip-request-p)
-       (lsp-proxy--ensure-connection)
-       (if (not (eq ,method 'textDocument/diagnostic))
-           (lsp-proxy--send-did-change))
-       (unless lsp-proxy--buffer-opened
-         (lsp-proxy--on-doc-open))
-       ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
-       (let ((buf (current-buffer)))
-         (jsonrpc-async-request lsp-proxy--connection
-                                ,method ,params
-                                :success-fn (lambda (result)
-                                              (with-current-buffer buf
-                                                (funcall ,success-fn result)))
-                                :error-fn (lambda (err)
-                                            (funcall ,error-fn err))
-                                :timeout-fn (lambda ()
-                                              (with-current-buffer buf
-                                                (funcall ,timeout-fn ,method)))
-                                ,@args)))))
+     ;; (unless (lsp-proxy--should-skip-request-p)
+     (lsp-proxy--ensure-connection)
+     (if (not (eq ,method 'textDocument/diagnostic))
+         (lsp-proxy--send-did-change))
+     (unless lsp-proxy--buffer-opened
+       (lsp-proxy--on-doc-open))
+     ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
+     (let ((buf (current-buffer)))
+       (jsonrpc-async-request lsp-proxy--connection
+                              ,method ,params
+                              :success-fn (lambda (result)
+                                            (with-current-buffer buf
+                                              (funcall ,success-fn result)))
+                              :error-fn (lambda (err)
+                                          (funcall ,error-fn err))
+                              :timeout-fn (lambda ()
+                                            (with-current-buffer buf
+                                              (funcall ,timeout-fn ,method)))
+                              ,@args))))
+;; )
 
 
 (cl-defmacro lsp-proxy--request (&rest args)
-  "Send a request to the lsp proxy agent with ARGS.
-In org-mode with `lsp-proxy-enable-org-babel' enabled, requests are
-skipped when cursor is not inside a code block."
+  "Send a request to the lsp proxy agent with ARGS."
   `(progn
-     (when (and lsp-proxy-mode
-                (not (lsp-proxy--should-skip-request-p)))
+     (when lsp-proxy-mode
+       ;; (and lsp-proxy-mode
+       ;; (not (lsp-proxy--should-skip-request-p))
+       ;; )
        (lsp-proxy--ensure-connection)
        (lsp-proxy--send-did-change)
        (unless lsp-proxy--buffer-opened

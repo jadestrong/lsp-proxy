@@ -11,7 +11,7 @@
 
 ;;; Code:
 
-(defcustom lsp-proxy-enable-org-babel t
+(defcustom lsp-proxy-enable-org-babel nil
   "Enable LSP support in org-babel code blocks.
 When non-nil, lsp-proxy will provide code completion and other
 LSP features inside org-mode source blocks."
@@ -219,6 +219,25 @@ as edits are made, without needing to re-parse the org element."
              (bound-and-true-p lsp-proxy-org-babel--info-cache))
     (let ((lang (org-element-property :language lsp-proxy-org-babel--info-cache)))
       (member lang '("elisp" "emacs-lisp")))))
+
+;;; Virtual document context utilities
+
+(defun lsp-proxy--make-virtual-doc-context ()
+  "Create virtual-doc context if in org babel block.
+Returns a plist with :line-bias, :language, and :source-type keys
+when the current buffer is in an org-mode babel source block.
+Returns nil otherwise.
+
+This context is orthogonal to request-specific context (like completion
+triggers) and is used for position translation between the org file
+and the virtual document sent to the language server."
+  (when (and lsp-proxy-enable-org-babel
+             (eq major-mode 'org-mode)
+             lsp-proxy-org-babel--info-cache)
+    (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+          :language (org-element-property :language lsp-proxy-org-babel--info-cache)
+          :source-type "org-babel")))
+
 
 (provide 'lsp-proxy-org)
 ;;; lsp-proxy-org.el ends here

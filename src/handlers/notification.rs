@@ -118,7 +118,7 @@ pub(crate) fn handle_did_open_text_document(
                         }
                         debug!("Success launch {:?} server for current block.", ls.name());
 
-                        // Only notify user when first connecting to a new server
+                        // Notify user when first connecting to a new server
                         app.send_notification::<lsp_types::notification::ShowMessage>(
                             lsp_types::ShowMessageParams {
                                 typ: MessageType::INFO,
@@ -205,12 +205,10 @@ pub(crate) fn handle_did_change_text_document(
 
         debug!("virtual_doc_ctx: {virtual_doc_ctx:?}");
         if let Some(ref vdoc_ctx) = virtual_doc_ctx {
-            debug!("is_org_file? {:?}", doc.is_org_file());
-            // 如果是 org file 要单独给自己的 server 发送一份
+            // If it's org file, send didChange to virtual doc server
             if doc.is_org_file() {
                 // Get and touch the server entry
                 let ls = doc.get_virtual_doc_server(&vdoc_ctx.language);
-                debug!("get a ls {:?}", ls.is_some());
                 if let Some(ls) = ls {
                     if let Err(e) = ls.notify::<lsp_types::notification::DidChangeTextDocument>(
                         lsp_types::DidChangeTextDocumentParams {

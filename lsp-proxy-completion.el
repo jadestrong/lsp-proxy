@@ -115,8 +115,6 @@ instead of sending LSP requests."
          (candidates
           (lambda ()
             (let* ((prefix (buffer-substring-no-properties bounds-start (point)))
-                   ;; Virtual-doc context is now automatically added by
-                   ;; lsp-proxy--request-or-notify-params when in org babel block
                    (resp (lsp-proxy--request
                           'textDocument/completion
                           (lsp-proxy--request-or-notify-params

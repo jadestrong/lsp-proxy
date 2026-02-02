@@ -531,14 +531,10 @@ pub(crate) async fn handle_completion_resolve(
             } else if let Some(lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit)) =
                 &resp.text_edit
             {
-                // if let =
-                //     text_edit
-                // {
                 resp.text_edit = Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
                     range: replace_text_edit.replace,
                     new_text: replace_text_edit.new_text.clone(),
                 }));
-                // }
             }
 
             // For virtual documents (org babel blocks), translate textEdit range back to org file coordinates
