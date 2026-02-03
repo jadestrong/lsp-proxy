@@ -232,8 +232,8 @@ impl VirtualDocContext {
     /// code block).
     ///
     /// # Example
-    /// If a code block starts at line 10 in an org file (`line_bias = 10`), and the cursor
-    /// is at line 15, column 5 in the org file, this translates to line 5, column 5 in the
+    /// If a code block starts at line 10 in an org file (`line_bias = 9`), and the cursor
+    /// is at line 15, column 5 in the org file, this translates to line 6, column 5 in the
     /// virtual document.
     pub fn translate_position_to_virtual(&self, pos: lsp_types::Position) -> lsp_types::Position {
         lsp_types::Position {

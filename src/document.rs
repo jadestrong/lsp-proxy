@@ -253,7 +253,6 @@ impl Document {
 
     /// Get server capabilities for virtual document (e.g., org babel code block).
     /// This is similar to get_server_capabilities but uses language_servers_of_virtual_doc.
-    /// Only completion-related features are enabled for virtual documents.
     pub fn get_virtual_doc_server_capabilities(&self) -> CustomServerCapabilitiesParams {
         let mut server_capabilities = CustomServerCapabilitiesParams {
             uri: self.uri.to_string(),
@@ -460,6 +459,8 @@ impl Document {
         self.diagnostics = None;
         self.previous_diagnostic_id = None;
         self.language_servers.clear();
+        self.virtual_doc = None;
+        self.language_servers_of_virtual_doc.clear();
     }
 
     /// Check if this document is an Org file (cached)

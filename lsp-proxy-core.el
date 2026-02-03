@@ -123,7 +123,8 @@ This is used to determine if LSP requests should be sent.")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
 (declare-function eglot--widening "ext:eglot")
 (declare-function eglot--apply-workspace-edit "ext:eglot")
-(declare-function lsp-proxy--make-virtual-doc-context "lsp-proxy-org")
+(declare-function lsp-proxy-org-babel-send-src-block-to-lsp-server "lsp-proxy-org")
+(declare-function lsp-proxy-org-babel-monitor-after-change "lsp-proxy-org")
 
 ;;; External variables from eglot
 (defvar eglot--versioned-identifier)
