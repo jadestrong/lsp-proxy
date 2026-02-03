@@ -19,9 +19,9 @@ LSP features inside org-mode source blocks."
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-org-babel-language-map
-  '(("emacs-lisp" . "elisp")
-    ("shell" . "bash")
-    ("sh" . "bash"))
+  '(("shell" . "bash")
+    ("sh" . "bash")
+    ("tsx-ts" . "tsx"))
   "Mapping from org-babel language names to LSP language IDs.
 Each entry is a cons cell (ORG-LANG . LSP-LANG) where ORG-LANG is
 the language identifier used in org-mode source blocks, and LSP-LANG
@@ -85,7 +85,8 @@ Used to defer expensive `org-element-context' calls.")
   (setq-local lsp-proxy-org-babel--block-bop nil)
   (setq-local lsp-proxy-org-babel--block-eop nil)
   (setq-local lsp-proxy--support-signature-help nil)
-  (setq-local lsp-proxy--support-hover nil))
+  (setq-local lsp-proxy--support-hover nil)
+  (setq-local lsp-proxy--has-any-servers nil))
 
 
 (defun lsp-proxy--inside-block-p ()

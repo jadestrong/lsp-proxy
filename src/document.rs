@@ -189,6 +189,7 @@ impl Document {
             support_inline_completion: false,
             support_hover: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
+            has_any_servers: false,
         };
 
         let mut has_any_servers = false;
@@ -238,6 +239,9 @@ impl Document {
             }
         });
 
+        // Set has_any_servers flag
+        server_capabilities.has_any_servers = has_any_servers;
+
         // If any server only supports full sync, use full sync for all
         // If all servers support incremental (or no servers), use incremental
         if has_any_servers && !all_support_incremental {
@@ -262,6 +266,7 @@ impl Document {
             support_inline_completion: false,
             support_hover: false,
             text_document_sync_kind: "incremental".to_string(),
+            has_any_servers: false,
         };
 
         let mut has_any_servers = false;
@@ -292,6 +297,9 @@ impl Document {
                 server_capabilities.support_hover = true;
             }
         }
+
+        // Set has_any_servers flag
+        server_capabilities.has_any_servers = has_any_servers;
 
         if has_any_servers && !all_support_incremental {
             server_capabilities.text_document_sync_kind = "full".to_string();

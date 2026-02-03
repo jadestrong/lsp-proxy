@@ -80,6 +80,10 @@ that support `textDocument/diagnostic' request.")
   "Is there any server associated with this buffer
 that support `textDocument/hover' request.")
 
+(defvar-local lsp-proxy--has-any-servers nil
+  "Whether this buffer has any language servers available.
+This is used to determine if LSP requests should be sent.")
+
 (defvar-local lsp-proxy--text-document-sync-kind "incremental"
   "Text document synchronization mode: 'full' or 'incremental'.")
 
@@ -198,21 +202,26 @@ that support `textDocument/hover' request.")
 
 (cl-defmacro lsp-proxy--notify (method &rest params &key context &allow-other-keys)
   "Send a notification (METHOD PARAMS) to the lsp proxy agent.
-Optional CONTEXT can be provided for org-mode and other special contexts."
+Optional CONTEXT can be provided for org-mode and other special contexts.
+Only sends notifications if servers are available, except for didOpen which is always sent."
   `(progn
      (lsp-proxy--ensure-connection)
      (if (or (eq ,method 'textDocument/didOpen)
              (eq ,method 'textDocument/willSave)
              (eq ,method 'textDocument/didSave)
              lsp-proxy--buffer-opened)
-         (let ((new-params (lsp-proxy--build-params
-                            ,@params
-                            ,@(when context `((:context ,context))))))
-           (jsonrpc-notify lsp-proxy--connection ,method new-params))
+         ;; Only send notification if didOpen OR has-any-servers is true
+         (when (or (eq ,method 'textDocument/didOpen)
+                   lsp-proxy--has-any-servers)
+           (let ((new-params (lsp-proxy--build-params
+                              ,@params
+                              ,@(when context `((:context ,context))))))
+             (jsonrpc-notify lsp-proxy--connection ,method new-params)))
        (lsp-proxy--on-doc-open))))
 
 (cl-defmacro lsp-proxy--async-request (method params &rest args &key (success-fn #'lsp-proxy--ignore-response) (error-fn #'lsp-proxy--show-error) (timeout-fn #'lsp-proxy--show-timeout) &allow-other-keys)
-  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent."
+  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent.
+Only sends requests if servers are available."
   `(progn
      ;; (unless (lsp-proxy--should-skip-request-p)
      (lsp-proxy--ensure-connection)
@@ -220,24 +229,27 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
          (lsp-proxy--send-did-change))
      (unless lsp-proxy--buffer-opened
        (lsp-proxy--on-doc-open))
-     ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
-     (let ((buf (current-buffer)))
-       (jsonrpc-async-request lsp-proxy--connection
-                              ,method ,params
-                              :success-fn (lambda (result)
-                                            (with-current-buffer buf
-                                              (funcall ,success-fn result)))
-                              :error-fn (lambda (err)
-                                          (funcall ,error-fn err))
-                              :timeout-fn (lambda ()
-                                            (with-current-buffer buf
-                                              (funcall ,timeout-fn ,method)))
-                              ,@args))))
+     ;; Only send request if has-any-servers is true
+     (when lsp-proxy--has-any-servers
+       ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
+       (let ((buf (current-buffer)))
+         (jsonrpc-async-request lsp-proxy--connection
+                                ,method ,params
+                                :success-fn (lambda (result)
+                                              (with-current-buffer buf
+                                                (funcall ,success-fn result)))
+                                :error-fn (lambda (err)
+                                            (funcall ,error-fn err))
+                                :timeout-fn (lambda ()
+                                              (with-current-buffer buf
+                                                (funcall ,timeout-fn ,method)))
+                                ,@args)))))
 ;; )
 
 
 (cl-defmacro lsp-proxy--request (&rest args)
-  "Send a request to the lsp proxy agent with ARGS."
+  "Send a request to the lsp proxy agent with ARGS.
+Only sends requests if servers are available."
   `(progn
      (when lsp-proxy-mode
        ;; (and lsp-proxy-mode
@@ -247,7 +259,9 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
        (lsp-proxy--send-did-change)
        (unless lsp-proxy--buffer-opened
          (lsp-proxy--on-doc-open))
-       (jsonrpc-request lsp-proxy--connection ,@args))))
+       ;; Only send request if has-any-servers is true
+       (when lsp-proxy--has-any-servers
+         (jsonrpc-request lsp-proxy--connection ,@args)))))
 
 ;;; Connection
 
@@ -307,7 +321,8 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
                        :supportPullDiagnostic support-pull-diagnostic
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
-                       :textDocumentSyncKind text-document-sync-kind)
+                       :textDocumentSyncKind text-document-sync-kind
+                       :hasAnyServers has-any-servers)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (file-exists-p filepath)
@@ -319,6 +334,7 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
+            (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
