@@ -18,6 +18,25 @@ LSP features inside org-mode source blocks."
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-org-babel-language-map
+  '(("emacs-lisp" . "elisp")
+    ("shell" . "bash")
+    ("sh" . "bash"))
+  "Mapping from org-babel language names to LSP language IDs.
+Each entry is a cons cell (ORG-LANG . LSP-LANG) where ORG-LANG is
+the language identifier used in org-mode source blocks, and LSP-LANG
+is the corresponding language ID for the language server."
+  :type '(alist :key-type string :value-type string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-org-babel-enabled-languages
+  '("python" "typescript" "javascript" "tsx" "bash")
+  "List of languages to enable LSP support for in org-babel blocks.
+Only source blocks with languages in this list will have LSP features enabled.
+Use the language IDs after applying `lsp-proxy-org-babel-language-map'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function org-element-context "ext:org")
 (declare-function org-element-type "ext:org")
@@ -123,10 +142,13 @@ Called by idle timer to avoid expensive `org-element-context' on every keystroke
                  (eq major-mode 'org-mode)
                  ;; Check if we're still roughly at the same position
                  (<= (abs (- (point) pos)) 5))
-        (let ((element (org-element-context)))
+        (let* ((element (org-element-context))
+               (language (org-element-property :language element)))
           (if (and (eq (org-element-type element) 'src-block)
-                   (org-element-property :language element))
-              ;; Confirmed in a src-block with language
+                   language
+                   ;; Check if this language is enabled for LSP support
+                   (lsp-proxy-org-babel--language-enabled-p language))
+              ;; Confirmed in a src-block with enabled language
               (unless (and lsp-proxy-org-babel--info-cache
                            (eq (org-element-property :begin element)
                                (org-element-property :begin lsp-proxy-org-babel--info-cache)))
@@ -143,7 +165,7 @@ Called by idle timer to avoid expensive `org-element-context' on every keystroke
                 (setq-local lsp-proxy-org-babel--update-file-before-change t)
                 ;; Schedule idle timer to preemptively start LSP server
                 (lsp-proxy-org-babel--schedule-lsp-start))
-            ;; Not a src-block (maybe other block type), clean up
+            ;; Not a src-block, or language not enabled, clean up
             (when lsp-proxy-org-babel--info-cache
               (lsp-proxy-org-babel-clean-cache))))))))
 
@@ -178,21 +200,20 @@ The server side will handle didClose if needed when reusing servers."
              lsp-proxy-org-babel--block-bop
              lsp-proxy-org-babel--update-file-before-change)
     (setq-local lsp-proxy-org-babel--update-file-before-change nil)
-    ;; Save original trigger characters before they get overwritten by virtual doc's capabilities
-    (unless lsp-proxy-org-babel--saved-trigger-characters
-      (setq-local lsp-proxy-org-babel--saved-trigger-characters
-                  lsp-proxy--completion-trigger-characters))
-    (let ((virtual-doc-context (list
-                                :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-                                :language (org-element-property :language lsp-proxy-org-babel--info-cache)
-                                :source-type "org-babel")))
-      (lsp-proxy--notify 'textDocument/didOpen
-                         (list :textDocument (append (eglot--TextDocumentIdentifier)
-                                                     (list
-                                                      :text (org-element-property :value lsp-proxy-org-babel--info-cache)
-                                                      :languageId (org-element-property :language lsp-proxy-org-babel--info-cache)
-                                                      :version 0)))
-                         :virtual-doc virtual-doc-context))))
+    (let* ((orig-language (org-element-property :language lsp-proxy-org-babel--info-cache))
+           (normalized-language (lsp-proxy-org-babel--normalize-language orig-language)))
+      ;; Only send to LSP server if the language is enabled
+      (when (lsp-proxy-org-babel--language-enabled-p orig-language)
+        ;; Save original trigger characters before they get overwritten by virtual doc's capabilities
+        (unless lsp-proxy-org-babel--saved-trigger-characters
+          (setq-local lsp-proxy-org-babel--saved-trigger-characters
+                      lsp-proxy--completion-trigger-characters))
+        (lsp-proxy--notify 'textDocument/didOpen
+                           (list :textDocument (append (eglot--TextDocumentIdentifier)
+                                                       (list
+                                                        :text (org-element-property :value lsp-proxy-org-babel--info-cache)
+                                                        :languageId normalized-language
+                                                        :version 0))))))))
 
 
 (defun lsp-proxy-org-babel-monitor-after-change (begin end length)
@@ -225,6 +246,21 @@ as edits are made, without needing to re-parse the org element."
 
 ;;; Virtual document context utilities
 
+(defun lsp-proxy-org-babel--normalize-language (language)
+  "Normalize LANGUAGE using the language map.
+Returns the mapped language if it exists in the map, otherwise returns
+the original LANGUAGE unchanged."
+  (or (cdr (assoc language lsp-proxy-org-babel-language-map))
+      language))
+
+(defun lsp-proxy-org-babel--language-enabled-p (language)
+  "Check if LANGUAGE is enabled for LSP support in org-babel blocks.
+LANGUAGE is first normalized using `lsp-proxy-org-babel-language-map',
+then checked against `lsp-proxy-org-babel-enabled-languages'."
+  (when language
+    (let ((normalized-lang (lsp-proxy-org-babel--normalize-language language)))
+      (member normalized-lang lsp-proxy-org-babel-enabled-languages))))
+
 (defun lsp-proxy--make-virtual-doc-context ()
   "Create virtual-doc context if in org babel block.
 Returns a plist with :line-bias, :language, and :source-type keys
@@ -237,9 +273,12 @@ and the virtual document sent to the language server."
   (when (and lsp-proxy-enable-org-babel
              (eq major-mode 'org-mode)
              lsp-proxy-org-babel--info-cache)
-    (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
-          :language (org-element-property :language lsp-proxy-org-babel--info-cache)
-          :source-type "org-babel")))
+    (let* ((orig-language (org-element-property :language lsp-proxy-org-babel--info-cache))
+           (normalized-language (lsp-proxy-org-babel--normalize-language orig-language)))
+      (when (lsp-proxy-org-babel--language-enabled-p orig-language)
+        (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
+              :language normalized-language
+              :source-type "org-babel")))))
 
 
 (provide 'lsp-proxy-org)

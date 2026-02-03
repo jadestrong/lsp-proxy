@@ -480,8 +480,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                                  (cl-loop for (beg end len text) in (reverse lsp-proxy--recent-changes)
                                           when (numberp len)
                                           vconcat `[,(list :range `(:start ,beg :end ,end)
-                                                           :rangeLength len :text text)])))
-                         :virtual-doc (lsp-proxy--make-virtual-doc-context))
+                                                           :rangeLength len :text text)]))))
       (lsp-proxy-diagnostics--request-pull-diagnostics)
       (setq lsp-proxy--recent-changes nil))))
 
