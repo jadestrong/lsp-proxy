@@ -146,9 +146,7 @@ Called by idle timer to avoid expensive `org-element-context' on every keystroke
         (let* ((element (org-element-context))
                (language (org-element-property :language element)))
           (if (and (eq (org-element-type element) 'src-block)
-                   language
-                   ;; Check if this language is enabled for LSP support
-                   (lsp-proxy-org-babel--language-enabled-p language))
+                   language)
               ;; Confirmed in a src-block with enabled language
               (unless (and lsp-proxy-org-babel--info-cache
                            (eq (org-element-property :begin element)
@@ -163,9 +161,11 @@ Called by idle timer to avoid expensive `org-element-context' on every keystroke
                 (setq-local lsp-proxy-org-babel--block-eop
                             (+ lsp-proxy-org-babel--block-bop -1
                                (length (org-element-property :value element))))
-                (setq-local lsp-proxy-org-babel--update-file-before-change t)
-                ;; Schedule idle timer to preemptively start LSP server
-                (lsp-proxy-org-babel--schedule-lsp-start))
+                ;; Check if this language is enabled for LSP support
+                (when (lsp-proxy-org-babel--language-enabled-p language)
+                  (setq-local lsp-proxy-org-babel--update-file-before-change t)
+                  ;; Schedule idle timer to preemptively start LSP server
+                  (lsp-proxy-org-babel--schedule-lsp-start)))
             ;; Not a src-block, or language not enabled, clean up
             (when lsp-proxy-org-babel--info-cache
               (lsp-proxy-org-babel-clean-cache))))))))
