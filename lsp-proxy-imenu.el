@@ -29,7 +29,7 @@ Returns a list as described in docstring of `imenu--index-alist'."
   (unless lsp-proxy--support-document-symbols
     (cl-return-from lsp-proxy-imenu))
   (let* ((res (lsp-proxy--request 'textDocument/documentSymbol
-                                  (lsp-proxy--request-or-notify-params
+                                  (lsp-proxy--build-params
                                    (list :textDocument (eglot--TextDocumentIdentifier)))
                                   :cancel-on-input non-essential)))
     (lsp-proxy--convert-imenu-format res)))

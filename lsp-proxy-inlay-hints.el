@@ -158,7 +158,7 @@ Update the range of `(FROM TO)'."
                                    i (length label))))))))))))
     (lsp-proxy--async-request
      'textDocument/inlayHint
-     (lsp-proxy--request-or-notify-params
+     (lsp-proxy--build-params
       (list :textDocument (eglot--TextDocumentIdentifier)
             :range (list :start (eglot--pos-to-lsp-position from)
                          :end (eglot--pos-to-lsp-position to))))

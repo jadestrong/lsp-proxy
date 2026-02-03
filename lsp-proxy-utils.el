@@ -264,8 +264,8 @@ only allowed when cursor is inside a code block."
        (eq major-mode 'org-mode)
        (not lsp-proxy-org-babel--info-cache)))
 
-(defun lsp-proxy--request-or-notify-params (params &rest args)
-  "Wrap request or notify params base PARAMS and add extra ARGS.
+(defun lsp-proxy--build-params (params &rest args)
+  "Build complete request/notify params from base PARAMS and extra ARGS.
 Automatically adds virtual-doc context when in org babel block.
 
 The virtual-doc context is orthogonal to request-specific context

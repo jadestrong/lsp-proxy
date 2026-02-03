@@ -117,7 +117,7 @@ instead of sending LSP requests."
             (let* ((prefix (buffer-substring-no-properties bounds-start (point)))
                    (resp (lsp-proxy--request
                           'textDocument/completion
-                          (lsp-proxy--request-or-notify-params
+                          (lsp-proxy--build-params
                            (eglot--TextDocumentPositionParams)
                            `(:context
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
@@ -209,7 +209,7 @@ instead of sending LSP requests."
               (item (plist-get proxy-item :item)))
     (lsp-proxy--request
      'completionItem/resolve
-     (lsp-proxy--request-or-notify-params
+     (lsp-proxy--build-params
       item
       `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :cancel-on-input t)))
@@ -223,7 +223,7 @@ The CLEANUP-FN will be called to cleanup."
               (item (plist-get proxy-item :item)))
     (lsp-proxy--async-request
      'completionItem/resolve
-     (lsp-proxy--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
+     (lsp-proxy--build-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :success-fn (lambda (resolved-item)
                    (if-let* ((complete-item (plist-get resolved-item :item))
                              (additionalTextEdits (plist-get complete-item :additionalTextEdits)))

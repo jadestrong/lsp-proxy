@@ -205,7 +205,7 @@ Optional CONTEXT can be provided for org-mode and other special contexts."
              (eq ,method 'textDocument/willSave)
              (eq ,method 'textDocument/didSave)
              lsp-proxy--buffer-opened)
-         (let ((new-params (lsp-proxy--request-or-notify-params 
+         (let ((new-params (lsp-proxy--build-params
                             ,@params
                             ,@(when context `((:context ,context))))))
            (jsonrpc-notify lsp-proxy--connection ,method new-params))
@@ -490,8 +490,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   (interactive)
   (unwind-protect
       (progn
-        (lsp-proxy--request 'shutdown (lsp-proxy--request-or-notify-params nil) :timeout 1.5)
-        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--request-or-notify-params nil)))
+        (lsp-proxy--request 'shutdown (lsp-proxy--build-params nil) :timeout 1.5)
+        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--build-params nil)))
     (jsonrpc-shutdown lsp-proxy--connection)
     (setq lsp-proxy--connection nil))
   (lsp-proxy--cleanup)
