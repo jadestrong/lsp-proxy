@@ -18,6 +18,13 @@ LSP features inside org-mode source blocks."
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-org-edit-special-enable-lsp t
+  "Enable LSP support in `org-edit-special' buffers.
+When non-nil, org source blocks opened with `org-edit-special' will
+automatically start the appropriate LSP server for the block's language."
+  :type 'boolean
+  :group 'lsp-proxy)
+
 (defcustom lsp-proxy-org-babel-language-map
   '(("shell" . "bash")
     ("sh" . "bash")
@@ -41,6 +48,7 @@ Use the language IDs after applying `lsp-proxy-org-babel-language-map'."
 (declare-function org-element-context "ext:org")
 (declare-function org-element-type "ext:org")
 (declare-function org-element-property "ext:org")
+(declare-function org-edit-special "ext:org")
 
 (declare-function lsp-proxy--notify "lsp-proxy-core")
 
@@ -60,6 +68,16 @@ Used to restore when leaving a code block.")
 (defvar-local lsp-proxy-org-babel--check-timer nil
   "Idle timer for checking if cursor entered/left a code block.
 Used to defer expensive `org-element-context' calls.")
+
+(defvar-local lsp-proxy-org-edit--original-buffer nil
+  "Reference to the original org buffer from which this edit buffer was created.")
+
+(defvar-local lsp-proxy-org-edit--orig-file-name nil
+  "Original file name stored for restoration after save operations.")
+
+(defvar-local lsp-proxy-org-edit--cached-language nil
+  "Cached language information from the org babel block.")
+
 
 (defun lsp-proxy-org-babel-in-block-p (pos)
   "Check if POS is in org babel block."
@@ -99,17 +117,38 @@ Uses text property check first for fast path."
       ;; Return t to indicate we're in a block, actual element will be fetched later
       t)))
 
+(defun lsp-proxy-org-babel--in-babel-context-p ()
+  "Return non-nil if current buffer is in a babel context.
+This includes both direct org-mode babel blocks and org-edit-special buffers."
+  (or
+   ;; Case 1: Direct editing in org-mode babel block
+   (and (eq major-mode 'org-mode)
+        lsp-proxy-org-babel--info-cache)
+   ;; Case 2: org-edit-special buffer
+   (and lsp-proxy-org-edit--original-buffer
+        (buffer-live-p lsp-proxy-org-edit--original-buffer))))
+
 (defun lsp-proxy-org-babel-check-lsp-server ()
-  "Check if current point is in org babel block.
+  "Check if current point is in org babel block or org-edit-special buffer.
 If in a new block, schedule an idle timer to preemptively start LSP server.
 If leaving a block, clean up the cache.
 
 This function is called from `post-command-hook', so it uses a fast path
 to check if we're still in the same block, and defers expensive
 `org-element-context' calls to an idle timer."
-  ;; Early return if not in org-mode or org-babel disabled
-  (when (and lsp-proxy-enable-org-babel
-             (eq major-mode 'org-mode))
+  ;; Handle org-edit-special buffers differently
+  (cond
+   ;; Case 1: org-edit-special buffer - always considered "in babel context"
+   ((and lsp-proxy-enable-org-babel
+         lsp-proxy-org-edit--original-buffer
+         (buffer-live-p lsp-proxy-org-edit--original-buffer))
+    ;; For org-edit-special buffers, we don't need to do periodic checks
+    ;; since the entire buffer is the code block content
+    t)
+
+   ;; Case 2: Direct org-mode editing (original logic)
+   ((and lsp-proxy-enable-org-babel
+         (eq major-mode 'org-mode))
     (cond
      ;; Fast path: still in the same cached block
      ((and lsp-proxy-org-babel--info-cache
@@ -130,7 +169,10 @@ to check if we're still in the same block, and defers expensive
 
      ;; Not in any block, clean up immediately if we were in one before
      (lsp-proxy-org-babel--info-cache
-      (lsp-proxy-org-babel-clean-cache)))))
+      (lsp-proxy-org-babel-clean-cache))))
+
+   ;; Case 3: Not in babel context at all
+   (t nil)))
 
 (defun lsp-proxy-org-babel--deferred-check (buffer pos)
   "Deferred check for org babel block at POS in BUFFER.
@@ -263,23 +305,156 @@ then checked against `lsp-proxy-org-babel-enabled-languages'."
       (member normalized-lang lsp-proxy-org-babel-enabled-languages))))
 
 (defun lsp-proxy--make-virtual-doc-context ()
-  "Create virtual-doc context if in org babel block.
+  "Create virtual-doc context if in org babel block or org-edit-special buffer.
 Returns a plist with :line-bias, :language, and :source-type keys
-when the current buffer is in an org-mode babel source block.
+when the current buffer is in an org-mode babel source block or
+an org-edit-special buffer created from a babel block.
 Returns nil otherwise.
 
 This context is orthogonal to request-specific context (like completion
 triggers) and is used for position translation between the org file
 and the virtual document sent to the language server."
-  (when (and lsp-proxy-enable-org-babel
-             (eq major-mode 'org-mode)
-             lsp-proxy-org-babel--info-cache)
+  (cond
+   ;; Case 1: Direct editing in org-mode babel block
+   ((and lsp-proxy-enable-org-babel
+         (eq major-mode 'org-mode)
+         lsp-proxy-org-babel--info-cache)
     (let* ((orig-language (org-element-property :language lsp-proxy-org-babel--info-cache))
            (normalized-language (lsp-proxy-org-babel--normalize-language orig-language)))
       (when (lsp-proxy-org-babel--language-enabled-p orig-language)
         (list :line-bias (1- (line-number-at-pos lsp-proxy-org-babel--block-bop t))
               :language normalized-language
-              :source-type "org-babel")))))
+              :source-type "org-babel"))))
+
+   ;; Case 2: org-edit-special buffer (indirect editing)
+   ((and lsp-proxy-enable-org-babel
+         lsp-proxy-org-edit--original-buffer
+         lsp-proxy-org-edit--cached-language
+         (buffer-live-p lsp-proxy-org-edit--original-buffer))
+    (when (lsp-proxy-org-babel--language-enabled-p lsp-proxy-org-edit--cached-language)
+      ;; For org-edit-special buffers, we don't need line-bias since
+      ;; the edit buffer contains only the block content (no translation needed)
+      (list :line-bias 0
+            :language (lsp-proxy-org-babel--normalize-language lsp-proxy-org-edit--cached-language)
+            :source-type "org-babel")))
+
+   ;; Case 3: Not in a babel context
+   (t nil)))
+
+
+;;; Enhanced org-edit-special with LSP support
+(defun lsp-proxy-org-edit--setup-lsp-in-edit-buffer (orig-buffer)
+  "Set up LSP support in the current org-edit-special buffer.
+ORIG-BUFFER is the original org-mode buffer.
+Reuses cached information from the original buffer."
+  (when (and lsp-proxy-org-edit-special-enable-lsp
+             (buffer-live-p orig-buffer))
+
+    ;; Get cached info from original buffer
+    (let* ((cached-info (buffer-local-value 'lsp-proxy-org-babel--info-cache orig-buffer))
+           (language (when cached-info
+                       (org-element-property :language cached-info)))
+           (orig-file-name (buffer-file-name orig-buffer)))
+
+      ;; Store reference for cleanup and context detection
+      (setq-local lsp-proxy-org-edit--original-buffer orig-buffer)
+
+      ;; Set lsp-proxy-enable-org-babel so that lsp-proxy--make-virtual-doc-context works
+      (setq-local lsp-proxy-enable-org-babel
+                  (buffer-local-value 'lsp-proxy-enable-org-babel orig-buffer))
+
+      (when (and language (lsp-proxy-org-babel--language-enabled-p language) orig-file-name)
+        ;; Use the original file name directly
+        (setq-local buffer-file-name orig-file-name)
+        
+        ;; Cache the language information for later use
+        (setq-local lsp-proxy-org-edit--cached-language language)
+
+        ;; Copy useful buffer-local variables from original buffer if they exist
+        (when (buffer-local-value 'default-directory orig-buffer)
+          (setq-local default-directory
+                      (buffer-local-value 'default-directory orig-buffer)))
+
+        ;; Enable lsp-proxy mode if available
+        (when (fboundp 'lsp-proxy-mode)
+          (lsp-proxy-mode 1))
+
+        ;; Add cleanup hook
+        (add-hook 'kill-buffer-hook #'lsp-proxy-org-edit--cleanup nil t)
+        
+        ;; Add save hooks to manage buffer-file-name
+        ;; Store original file name for restoration after save
+        (setq-local lsp-proxy-org-edit--orig-file-name orig-file-name)
+        (add-hook 'before-save-hook #'lsp-proxy-org-edit--before-save nil t)
+        (add-hook 'after-save-hook #'lsp-proxy-org-edit--after-save nil t)))))
+
+(defun lsp-proxy-org-edit--before-save ()
+  "Hook function called before saving org-edit-special buffer.
+Temporarily sets buffer-file-name to nil to prevent accidentally
+overwriting the original org file."
+  (when (and lsp-proxy-org-edit--original-buffer
+             lsp-proxy-org-edit--orig-file-name)
+    (setq-local buffer-file-name nil)))
+
+(defun lsp-proxy-org-edit--after-save ()
+  "Hook function called after saving org-edit-special buffer.
+Restores the original buffer-file-name for LSP server functionality."
+  (when (and lsp-proxy-org-edit--original-buffer
+             lsp-proxy-org-edit--orig-file-name)
+    (setq-local buffer-file-name lsp-proxy-org-edit--orig-file-name)))
+
+(defun lsp-proxy-org-edit--cleanup ()
+  "Clean up resources when closing an org-edit-special buffer."
+  (when lsp-proxy-org-edit--original-buffer
+    ;; Clear the buffer-file-name
+    (setq buffer-file-name nil)
+    ;; Clear local variables
+    (setq-local lsp-proxy-org-edit--original-buffer nil)
+    (setq-local lsp-proxy-org-edit--orig-file-name nil)
+    (setq-local lsp-proxy-org-edit--cached-language nil)
+    (setq-local lsp-proxy-enable-org-babel nil)))
+
+(defun lsp-proxy-org-edit-special-advice (orig-fun &rest args)
+  "Enhanced advice for `org-edit-special' with LSP support.
+Reuses cached babel info from the original org buffer to avoid
+redundant parsing.
+
+ORIG-FUN is the original `org-edit-special' function.
+ARGS are the arguments passed to the original function."
+  (let* ((orig-buffer (current-buffer))
+         ;; Check if we have cached babel info (user was in a block)
+         (has-babel-info (and (eq major-mode 'org-mode)
+                              lsp-proxy-enable-org-babel
+                              lsp-proxy-org-babel--info-cache))
+         result)
+
+    ;; Call the original function
+    (setq result (apply orig-fun args))
+
+    ;; If we successfully opened an edit buffer and had cached babel info
+    (when (and has-babel-info
+               (not (eq orig-buffer (current-buffer)))
+               ;; Make sure we're now in a different buffer (edit buffer)
+               (buffer-live-p (current-buffer)))
+      ;; Set up LSP support using cached information
+      (lsp-proxy-org-edit--setup-lsp-in-edit-buffer orig-buffer))
+
+    result))
+
+;; Apply the advice
+(advice-add 'org-edit-special :around #'lsp-proxy-org-edit-special-advice)
+
+(defun lsp-proxy-org-edit-special-disable ()
+  "Disable the enhanced org-edit-special LSP support."
+  (interactive)
+  (advice-remove 'org-edit-special #'lsp-proxy-org-edit-special-advice)
+  (message "LSP support for org-edit-special disabled"))
+
+(defun lsp-proxy-org-edit-special-enable ()
+  "Enable the enhanced org-edit-special LSP support."
+  (interactive)
+  (advice-add 'org-edit-special :around #'lsp-proxy-org-edit-special-advice)
+  (message "LSP support for org-edit-special enabled"))
 
 
 (provide 'lsp-proxy-org)
