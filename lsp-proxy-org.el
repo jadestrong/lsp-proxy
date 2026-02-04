@@ -49,6 +49,7 @@ Use the language IDs after applying `lsp-proxy-org-babel-language-map'."
 (declare-function org-element-type "ext:org")
 (declare-function org-element-property "ext:org")
 (declare-function org-edit-special "ext:org")
+(declare-function org-edit-src-exit "ext:org-src")
 
 (declare-function lsp-proxy--notify "lsp-proxy-core")
 
@@ -414,6 +415,17 @@ Restores the original buffer-file-name for LSP server functionality."
     (setq-local lsp-proxy-org-edit--cached-language nil)
     (setq-local lsp-proxy-enable-org-babel nil)))
 
+(defun lsp-proxy-org-edit-src-exit-advice (&rest _args)
+  "Advice for `org-edit-src-exit' to clear buffer-file-name before exiting.
+This prevents issues when returning to the original org buffer."
+  (when (and lsp-proxy-org-edit--original-buffer
+             (buffer-live-p lsp-proxy-org-edit--original-buffer))
+    ;; Clear the buffer-file-name to prevent confusion when exiting
+    (setq buffer-file-name nil)))
+
+;; Apply advice to org-edit-src-exit
+(advice-add 'org-edit-src-exit :before #'lsp-proxy-org-edit-src-exit-advice)
+
 (defun lsp-proxy-org-edit-special-advice (orig-fun &rest args)
   "Enhanced advice for `org-edit-special' with LSP support.
 Reuses cached babel info from the original org buffer to avoid
@@ -448,12 +460,14 @@ ARGS are the arguments passed to the original function."
   "Disable the enhanced org-edit-special LSP support."
   (interactive)
   (advice-remove 'org-edit-special #'lsp-proxy-org-edit-special-advice)
+  (advice-remove 'org-edit-src-exit #'lsp-proxy-org-edit-src-exit-advice)
   (message "LSP support for org-edit-special disabled"))
 
 (defun lsp-proxy-org-edit-special-enable ()
   "Enable the enhanced org-edit-special LSP support."
   (interactive)
   (advice-add 'org-edit-special :around #'lsp-proxy-org-edit-special-advice)
+  (advice-add 'org-edit-src-exit :before #'lsp-proxy-org-edit-src-exit-advice)
   (message "LSP support for org-edit-special enabled"))
 
 
