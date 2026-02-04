@@ -382,6 +382,12 @@ pub(crate) async fn handle_completion(
                                 {
                                     edit.range = vdoc.translate_range_from_virtual(edit.range);
                                 }
+                                // Also translate additionalTextEdits for virtual documents
+                                if let Some(ref mut additional_edits) = new_item.additional_text_edits {
+                                    for edit in additional_edits.iter_mut() {
+                                        edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    }
+                                }
                             }
                         }
                         let label_len = &new_item.label.chars().count();
@@ -550,8 +556,12 @@ pub(crate) async fn handle_completion_resolve(
                         }
                     }
                 }
-                // Also disable additionalTextEdits for virtual documents
-                resp.additional_text_edits = None;
+                // Translate additionalTextEdits for virtual documents
+                if let Some(ref mut additional_edits) = resp.additional_text_edits {
+                    for edit in additional_edits.iter_mut() {
+                        edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
+                    }
+                }
             }
 
             Response::new_ok(
