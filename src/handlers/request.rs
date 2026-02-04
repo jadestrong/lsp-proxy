@@ -38,7 +38,7 @@ pub fn create_error_response(id: &RequestId, message: String) -> Response {
 async fn call_single_language_server<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
     feature: Option<LanguageServerFeature>,
     language_server_id: Option<usize>,
 ) -> Result<(R::Result, String)>
@@ -73,7 +73,7 @@ where
 async fn call_language_servers<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
     feature: LanguageServerFeature,
 ) -> Vec<R::Result>
 where
@@ -120,7 +120,7 @@ where
 async fn call_first_language_server<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
 ) -> Result<(R::Result, String)>
 where
     R: lsp_types::request::Request + 'static,
@@ -271,7 +271,7 @@ pub(crate) async fn handle_completion(
                     seen_language_servers.insert(ls.id())
                 } else if ls.name() == "typescript-language-server" && pretext.ends_with(" ") {
                     // typescript-language-server 未拦截空格触发的情况，但 vscode 和 vtsls 支持拦截
-                    return false;
+                    false
                 } else {
                     // 此时启动触发且 prefix_len 为空，如果不是 triggerCharacter 则不自动请求
                     let trigger_character = match &ls.capabilities().completion_provider {
@@ -281,7 +281,7 @@ pub(crate) async fn handle_completion(
                         }) => triggers.iter().find(|trigger| pretext.ends_with(*trigger)),
                         _ => None,
                     };
-                    return trigger_character.is_some();
+                    trigger_character.is_some()
                 }
             })
             .map(|language_server| {
@@ -1141,14 +1141,12 @@ pub(crate) async fn pull_diagnostics_for_document(
     params: lsp_types::DocumentDiagnosticParams,
     language_server: &Arc<Client>,
 ) -> Option<lsp_types::DocumentDiagnosticReportResult> {
-    let Some(future) = language_server.text_document_diagnostic(
+    let future = language_server.text_document_diagnostic(
         req.id.clone(),
         identifier,
         previous_result_id,
         params,
-    ) else {
-        return None;
-    };
+    )?;
 
     match future.await {
         Ok(result) => serde_json::from_value(result).ok(),
