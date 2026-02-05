@@ -154,6 +154,7 @@ pub(crate) fn handle_did_open_text_document(
         app.editor.launch_language_servers(doc_id);
         let doc = app.editor.document_by_uri(&uri);
         if let Some(doc) = doc {
+            let is_org_file = doc.is_org_file();
             // send didOpen notification directly, notifies will pending until server initialized.
             let language_id = doc.language_id().to_owned().unwrap_or_default();
             for ls in doc.language_servers.values() {
@@ -172,16 +173,20 @@ pub(crate) fn handle_did_open_text_document(
                 );
             }
             let configed_servers = doc.language_servers.keys().join("、");
-            app.send_notification::<lsp_types::notification::ShowMessage>(
-                lsp_types::ShowMessageParams {
-                    typ: MessageType::INFO,
-                    message: if configed_servers.is_empty() {
-                        "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
-                    } else {
-                        format!("Connected to {configed_servers}.")
-                    }
-                },
-            );
+
+            // Notify user about connected servers if it's not org file or configed servers is not empty
+            if !is_org_file || !configed_servers.is_empty() {
+                app.send_notification::<lsp_types::notification::ShowMessage>(
+                    lsp_types::ShowMessageParams {
+                        typ: MessageType::INFO,
+                        message: if configed_servers.is_empty() {
+                            "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
+                        } else {
+                            format!("Connected to {configed_servers}.")
+                        }
+                    },
+                );
+            }
         }
     } else {
         error!("No doc to send trigger characters");

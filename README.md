@@ -577,6 +577,9 @@ LSP-Proxy provides comprehensive support for org-mode through the `lsp-proxy-org
 To enable LSP support in org-babel code blocks, add the following to your configuration:
 
 ```elisp
+;; Enable LSP Proxy support in org-mode
+(add-hook 'org-mode-hook #'lsp-proxy-mode)
+
 ;; Enable LSP support in org-babel code blocks
 (setq lsp-proxy-enable-org-babel t)
 
