@@ -312,11 +312,7 @@ Skip reopening notifications for buffers not currently visible."
   (setq-local lsp-proxy--support-document-symbols nil)
   (setq-local lsp-proxy--support-signature-help nil)
   (setq-local lsp-proxy--support-pull-diagnostic nil)
-  (setq-local lsp-proxy--support-hover nil)
-  ;; Remove org-babel advice
-  (when (featurep 'lsp-proxy-org)
-    (advice-remove 'org-edit-special #'lsp-proxy-org-edit-special-advice)
-    (advice-remove 'org-edit-src-exit #'lsp-proxy-org-edit-src-exit-advice)))
+  (setq-local lsp-proxy--support-hover nil))
 
 (defun lsp-proxy--mode-exit ()
   "Clean up lsp proxy mode when exiting."
@@ -340,11 +336,6 @@ Skip reopening notifications for buffers not currently visible."
     (mapc #'delete-overlay lsp-proxy--highlights))
   ;; inlay hints
   (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
-
-  ;; Remove org-babel advice when mode exits
-  (when (featurep 'lsp-proxy-org)
-    (advice-remove 'org-edit-special #'lsp-proxy-org-edit-special-advice)
-    (advice-remove 'org-edit-src-exit #'lsp-proxy-org-edit-src-exit-advice))
 
   ;; Send the close event for the active buffer
   (lsp-proxy--on-doc-close))

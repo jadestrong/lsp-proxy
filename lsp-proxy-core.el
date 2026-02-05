@@ -464,7 +464,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
-  (when lsp-proxy--buffer-opened
+  (when (and lsp-proxy--buffer-opened buffer-file-name)
     (lsp-proxy--notify 'textDocument/didClose
                        (list :textDocument (eglot--TextDocumentIdentifier)))
     (setq-local lsp-proxy--buffer-opened nil)))

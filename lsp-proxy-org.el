@@ -53,6 +53,8 @@ Use the language IDs after applying `lsp-proxy-org-babel-language-map'."
 
 (declare-function lsp-proxy--notify "lsp-proxy-core")
 
+(defvar lsp-proxy-mode)
+
 ;; External variables from lsp-proxy-completion.el
 (defvar lsp-proxy--completion-trigger-characters)
 
@@ -408,7 +410,7 @@ Restores the original buffer-file-name for LSP server functionality."
   "Clean up resources when closing an org-edit-special buffer."
   (when lsp-proxy-org-edit--original-buffer
     ;; Clear the buffer-file-name
-    (setq buffer-file-name nil)
+    (setq-local buffer-file-name nil)
     ;; Clear local variables
     (setq-local lsp-proxy-org-edit--original-buffer nil)
     (setq-local lsp-proxy-org-edit--orig-file-name nil)
@@ -418,10 +420,11 @@ Restores the original buffer-file-name for LSP server functionality."
 (defun lsp-proxy-org-edit-src-exit-advice (&rest _args)
   "Advice for `org-edit-src-exit' to clear buffer-file-name before exiting.
 This prevents issues when returning to the original org buffer."
-  (when (and lsp-proxy-org-edit--original-buffer
+  (when (and lsp-proxy-mode
+             lsp-proxy-org-edit--original-buffer
              (buffer-live-p lsp-proxy-org-edit--original-buffer))
     ;; Clear the buffer-file-name to prevent confusion when exiting
-    (setq buffer-file-name nil)))
+    (setq-local buffer-file-name nil)))
 
 ;; Apply advice to org-edit-src-exit
 (advice-add 'org-edit-src-exit :before #'lsp-proxy-org-edit-src-exit-advice)
