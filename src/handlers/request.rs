@@ -523,7 +523,7 @@ pub(crate) async fn handle_completion_resolve(
                     }
                 }
             }
-
+            let mut use_cache_text_edit = false;
             // The textEdit of tsserver is different between textDocument/completion and completionItem/resolve.
             // The resolve response will have insertTextFormat and snippet information added.
             // So we cannot reuse completion's textEdit property directly.
@@ -534,6 +534,7 @@ pub(crate) async fn handle_completion_resolve(
                 // Since we have cached completion results, the input position will not update immediately. The rust-analyzer server will always return the latest position for a resolve request.
                 // Therefore, it is preferable to use the cached completionItem's textEdit property. Other servers like tsserver won't update the position, so it's fine.
                 resp.text_edit = params_text_edit;
+                use_cache_text_edit = true;
             } else if let Some(lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit)) =
                 &resp.text_edit
             {
@@ -545,14 +546,16 @@ pub(crate) async fn handle_completion_resolve(
 
             // For virtual documents (org babel blocks), translate textEdit range back to org file coordinates
             if let Some(ref vdoc_ctx) = req.params.virtual_doc {
-                if let Some(ref mut text_edit) = resp.text_edit {
-                    match text_edit {
-                        lsp_types::CompletionTextEdit::Edit(edit) => {
-                            edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
-                        }
-                        lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
-                            edit.insert = vdoc_ctx.translate_range_from_virtual(edit.insert);
-                            edit.replace = vdoc_ctx.translate_range_from_virtual(edit.replace);
+                if !use_cache_text_edit {
+                    if let Some(ref mut text_edit) = resp.text_edit {
+                        match text_edit {
+                            lsp_types::CompletionTextEdit::Edit(edit) => {
+                                edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
+                            }
+                            lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
+                                edit.insert = vdoc_ctx.translate_range_from_virtual(edit.insert);
+                                edit.replace = vdoc_ctx.translate_range_from_virtual(edit.replace);
+                            }
                         }
                     }
                 }

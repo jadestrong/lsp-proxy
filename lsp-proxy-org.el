@@ -242,7 +242,8 @@ Called by idle timer to preemptively initialize the language server."
   "Send current org babel src block to LSP server.
 Sends didOpen with the block content as a virtual document.
 The server side will handle didClose if needed when reusing servers."
-  (when (and (eq major-mode 'org-mode)
+  (when (and lsp-proxy-enable-org-babel
+             (eq major-mode 'org-mode)
              lsp-proxy-org-babel--block-bop
              lsp-proxy-org-babel--update-file-before-change)
     (setq-local lsp-proxy-org-babel--update-file-before-change nil)
