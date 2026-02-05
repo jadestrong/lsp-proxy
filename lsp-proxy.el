@@ -50,8 +50,13 @@
 (require 'lsp-proxy-imenu)
 (require 'lsp-proxy-inlay-hints)
 (require 'lsp-proxy-inline-completion)
+(require 'lsp-proxy-org)
 
 (defvar lsp-proxy-mode)
+
+;; Declare functions from lsp-proxy-org to avoid compiler warnings
+(declare-function lsp-proxy-org-edit-special-advice "lsp-proxy-org")
+(declare-function lsp-proxy-org-edit-src-exit-advice "lsp-proxy-org")
 
 ;;; Configuration
 
@@ -184,7 +189,7 @@
   (let ((orig-major-mode major-mode))
     (lsp-proxy--async-request
      'rust-analyzer/expandMacro
-     (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+     (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
      :success-fn
      (lambda (resp)
        (-if-let* ((expansion (plist-get resp :expansion))
@@ -224,6 +229,7 @@ Skip reopening notifications for buffers not currently visible."
   "Post command hook."
   (lsp-proxy--cleanup-highlights-if-needed)
   (lsp-proxy--idle-reschedule (current-buffer))
+  (lsp-proxy-org-babel-check-lsp-server)
   (when this-command
     (lsp-proxy-inline-completion-handle-command)))
 
@@ -377,7 +383,7 @@ Skip reopening notifications for buffers not currently visible."
       (when (and buffer-file-name (lsp-proxy--connection-alivep))
         (lsp-proxy--async-request
          'emacs/getWorkspaceInfo
-         (lsp-proxy--request-or-notify-params nil)
+         (lsp-proxy--build-params nil)
          :success-fn
          (lambda (workspace-info)
            (with-current-buffer debug-buffer
@@ -417,7 +423,7 @@ Skip reopening notifications for buffers not currently visible."
       (when (lsp-proxy--connection-alivep)
         (lsp-proxy--async-request
          'emacs/getLanguagesConfig
-         (lsp-proxy--request-or-notify-params nil)
+         (lsp-proxy--build-params nil)
          :success-fn
          (lambda (config-json)
            (with-current-buffer debug-buffer
@@ -438,7 +444,7 @@ Skip reopening notifications for buffers not currently visible."
   (interactive)
   (lsp-proxy--async-request
    'emacs/workspaceRestart
-   (lsp-proxy--request-or-notify-params nil)
+   (lsp-proxy--build-params nil)
    :success-fn (lambda (data)
                  ;; Clean up opened files for the project
                  (let ((paths (seq-into data 'list)))
@@ -460,7 +466,7 @@ Skip reopening notifications for buffers not currently visible."
 
 (defun lsp-proxy--get-commands ()
   "Get support commands from server."
-  (lsp-proxy--request 'emacs/getCommands (lsp-proxy--request-or-notify-params nil)))
+  (lsp-proxy--request 'emacs/getCommands (lsp-proxy--build-params nil)))
 
 (defun lsp-proxy--select-command (commands)
   "Select a command to execute from COMMANDS."
@@ -481,7 +487,7 @@ Skip reopening notifications for buffers not currently visible."
   (let ((params (list :command command :arguments arguments)))
     (lsp-proxy--async-request
      'workspace/executeCommand
-     (lsp-proxy--request-or-notify-params
+     (lsp-proxy--build-params
       params
       `(:context (:language-server-id ,server-id))))))
 
@@ -506,7 +512,7 @@ Skip reopening notifications for buffers not currently visible."
   "Retrieve the code actions for the active region or the current line."
   (lsp-proxy--request
    'textDocument/codeAction
-   (lsp-proxy--request-or-notify-params
+   (lsp-proxy--build-params
     (list
      :textDocument (eglot--TextDocumentIdentifier)
      :range (if (use-region-p)
@@ -561,7 +567,7 @@ Request codeAction/resolve for more info if server supports."
       (if (and (not command) (not edit))
           (lsp-proxy--async-request
            'codeAction/resolve
-           (lsp-proxy--request-or-notify-params item `(:context (:language-server-id ,ls-id)))
+           (lsp-proxy--build-params item `(:context (:language-server-id ,ls-id)))
            :success-fn (lambda (action)
                          (if action
                              (lsp-proxy--execute-code-action action)
@@ -591,7 +597,7 @@ Request codeAction/resolve for more info if server supports."
           (symbol-name (symbol-at-point)))))
   (lsp-proxy--async-request
    'textDocument/rename
-   (lsp-proxy--request-or-notify-params
+   (lsp-proxy--build-params
     (append (eglot--TextDocumentPositionParams) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
@@ -662,7 +668,7 @@ Request codeAction/resolve for more info if server supports."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/formatting
-   (lsp-proxy--request-or-notify-params
+   (lsp-proxy--build-params
     (list
      :options (list
                :tabSize (symbol-value (lsp-proxy--get-indent-width major-mode))
@@ -690,7 +696,7 @@ Request codeAction/resolve for more info if server supports."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/hover
-   (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
    :success-fn (lambda (hover-help)
                  (if (and hover-help (not (equal hover-help "")))
                      (with-current-buffer (get-buffer-create lsp-proxy-hover-buffer)
@@ -708,7 +714,7 @@ Request codeAction/resolve for more info if server supports."
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/hover
-       (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+       (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
        :success-fn (lambda (hover-help)
                      (eglot--when-buffer-window buf
                        (let* ((info (unless (string-empty-p hover-help)
@@ -752,7 +758,7 @@ most recently requested highlights.")
         (setq lsp-proxy--symbol-bounds-of-last-highlight-invocation curr-sym-bounds)
         (lsp-proxy--async-request
          'textDocument/documentHighlight
-         (lsp-proxy--request-or-notify-params (eglot--TextDocumentPositionParams))
+         (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
          :success-fn
          (lambda (highlights)
            (mapc #'delete-overlay lsp-proxy--highlights)

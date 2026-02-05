@@ -80,6 +80,10 @@ that support `textDocument/diagnostic' request.")
   "Is there any server associated with this buffer
 that support `textDocument/hover' request.")
 
+(defvar-local lsp-proxy--has-any-servers nil
+  "Whether this buffer has any language servers available.
+This is used to determine if LSP requests should be sent.")
+
 (defvar-local lsp-proxy--text-document-sync-kind "incremental"
   "Text document synchronization mode: 'full' or 'incremental'.")
 
@@ -109,11 +113,18 @@ that support `textDocument/hover' request.")
 (defvar lsp-proxy--language)
 (defvar lsp-proxy-mode)
 
+;;; External variables from lsp-proxy-org.el
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
+(defvar lsp-proxy-org-babel--block-bop)
+
 ;;; External functions from eglot (for backward compatibility)
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
 (declare-function eglot--widening "ext:eglot")
 (declare-function eglot--apply-workspace-edit "ext:eglot")
+(declare-function lsp-proxy-org-babel-send-src-block-to-lsp-server "lsp-proxy-org")
+(declare-function lsp-proxy-org-babel-monitor-after-change "lsp-proxy-org")
 
 ;;; External variables from eglot
 (defvar eglot--versioned-identifier)
@@ -145,6 +156,7 @@ that support `textDocument/hover' request.")
 (declare-function lsp-proxy--cleanup "lsp-proxy")
 (declare-function lsp-proxy--progress-status "lsp-proxy")
 (declare-function lsp-proxy--async-load-large-file "lsp-proxy-large-file")
+(declare-function lsp-proxy--should-skip-request-p "lsp-proxy-utils")
 
 ;;; Connection utilities
 
@@ -189,50 +201,68 @@ that support `textDocument/hover' request.")
   (lambda (_))
   "Simply ignore the response.")
 
-(cl-defmacro lsp-proxy--notify (method &rest params)
-  "Send a notification (METHOD PARAMS) to the lsp proxy agent with ARGS."
+(cl-defmacro lsp-proxy--notify (method &rest params &key context &allow-other-keys)
+  "Send a notification (METHOD PARAMS) to the lsp proxy agent.
+Optional CONTEXT can be provided for org-mode and other special contexts.
+Only sends notifications if servers are available, except for didOpen which is always sent."
   `(progn
      (lsp-proxy--ensure-connection)
      (if (or (eq ,method 'textDocument/didOpen)
              (eq ,method 'textDocument/willSave)
              (eq ,method 'textDocument/didSave)
              lsp-proxy--buffer-opened)
-         (let ((new-params (append (eglot--TextDocumentIdentifier) (list :params ,@params))))
-           (jsonrpc-notify lsp-proxy--connection ,method new-params))
+         ;; Only send notification if didOpen OR has-any-servers is true
+         (when (or (eq ,method 'textDocument/didOpen)
+                   lsp-proxy--has-any-servers)
+           (let ((new-params (lsp-proxy--build-params
+                              ,@params
+                              ,@(when context `((:context ,context))))))
+             (jsonrpc-notify lsp-proxy--connection ,method new-params)))
        (lsp-proxy--on-doc-open))))
 
 (cl-defmacro lsp-proxy--async-request (method params &rest args &key (success-fn #'lsp-proxy--ignore-response) (error-fn #'lsp-proxy--show-error) (timeout-fn #'lsp-proxy--show-timeout) &allow-other-keys)
-  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent."
+  "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent.
+Only sends requests if servers are available."
   `(progn
+     ;; (unless (lsp-proxy--should-skip-request-p)
      (lsp-proxy--ensure-connection)
      (if (not (eq ,method 'textDocument/diagnostic))
          (lsp-proxy--send-did-change))
      (unless lsp-proxy--buffer-opened
        (lsp-proxy--on-doc-open))
-     ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
-     (let ((buf (current-buffer)))
-       (jsonrpc-async-request lsp-proxy--connection
-                              ,method ,params
-                              :success-fn (lambda (result)
-                                            (with-current-buffer buf
-                                              (funcall ,success-fn result)))
-                              :error-fn (lambda (err)
-                                          (funcall ,error-fn err))
-                              :timeout-fn (lambda ()
-                                            (with-current-buffer buf
-                                              (funcall ,timeout-fn ,method)))
-                              ,@args))))
+     ;; Only send request if has-any-servers is true
+     (when lsp-proxy--has-any-servers
+       ;; jsonrpc will use temp buffer for callbacks, so we need to save the current buffer
+       (let ((buf (current-buffer)))
+         (jsonrpc-async-request lsp-proxy--connection
+                                ,method ,params
+                                :success-fn (lambda (result)
+                                              (with-current-buffer buf
+                                                (funcall ,success-fn result)))
+                                :error-fn (lambda (err)
+                                            (funcall ,error-fn err))
+                                :timeout-fn (lambda ()
+                                              (with-current-buffer buf
+                                                (funcall ,timeout-fn ,method)))
+                                ,@args)))))
+;; )
 
 
 (cl-defmacro lsp-proxy--request (&rest args)
-  "Send a request to the lsp proxy agent with ARGS."
+  "Send a request to the lsp proxy agent with ARGS.
+Only sends requests if servers are available."
   `(progn
      (when lsp-proxy-mode
+       ;; (and lsp-proxy-mode
+       ;; (not (lsp-proxy--should-skip-request-p))
+       ;; )
        (lsp-proxy--ensure-connection)
        (lsp-proxy--send-did-change)
        (unless lsp-proxy--buffer-opened
          (lsp-proxy--on-doc-open))
-       (jsonrpc-request lsp-proxy--connection ,@args))))
+       ;; Only send request if has-any-servers is true
+       (when lsp-proxy--has-any-servers
+         (jsonrpc-request lsp-proxy--connection ,@args)))))
 
 ;;; Connection
 
@@ -292,7 +322,8 @@ that support `textDocument/hover' request.")
                        :supportPullDiagnostic support-pull-diagnostic
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
-                       :textDocumentSyncKind text-document-sync-kind)
+                       :textDocumentSyncKind text-document-sync-kind
+                       :hasAnyServers has-any-servers)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (file-exists-p filepath)
@@ -304,6 +335,7 @@ that support `textDocument/hover' request.")
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
+            (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
@@ -341,12 +373,14 @@ that support `textDocument/hover' request.")
             ,(eglot--pos-to-lsp-position end)
             (,beg . ,(copy-marker beg nil))
             (,end . ,(copy-marker end t)))
-          lsp-proxy--recent-changes)))
+          lsp-proxy--recent-changes))
+  (lsp-proxy-org-babel-send-src-block-to-lsp-server))
 
 (defun lsp-proxy--after-change (beg end pre-change-length)
   "Hook onto `after-change-functions'.
 Records BEG, END and PRE-CHANGE-LENGTH locally."
   (lsp-proxy--incf-doc-version)
+  (lsp-proxy-org-babel-monitor-after-change beg end pre-change-length)
   (pcase (and (listp lsp-proxy--recent-changes)
               (car lsp-proxy--recent-changes))
     (`(,lsp-beg ,lsp-end
@@ -430,7 +464,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
 
 (defun lsp-proxy--on-doc-close (&rest _args)
   "Notify that the document has been closed."
-  (when lsp-proxy--buffer-opened
+  (when (and lsp-proxy--buffer-opened buffer-file-name)
     (lsp-proxy--notify 'textDocument/didClose
                        (list :textDocument (eglot--TextDocumentIdentifier)))
     (setq-local lsp-proxy--buffer-opened nil)))
@@ -473,8 +507,8 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   (interactive)
   (unwind-protect
       (progn
-        (lsp-proxy--request 'shutdown (lsp-proxy--request-or-notify-params nil) :timeout 1.5)
-        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--request-or-notify-params nil)))
+        (lsp-proxy--request 'shutdown (lsp-proxy--build-params nil) :timeout 1.5)
+        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--build-params nil)))
     (jsonrpc-shutdown lsp-proxy--connection)
     (setq lsp-proxy--connection nil))
   (lsp-proxy--cleanup)

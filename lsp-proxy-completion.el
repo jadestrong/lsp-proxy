@@ -20,6 +20,15 @@
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-core)
 
+;;; External declarations
+
+(declare-function org-element-property "ext:org-element")
+(declare-function lsp-proxy-org-babel--elisp-language-p "lsp-proxy-org")
+
+;; External variables from lsp-proxy-org.el
+(defvar lsp-proxy-enable-org-babel)
+(defvar lsp-proxy-org-babel--info-cache)
+
 ;;; Variables
 
 (defcustom lsp-proxy-max-completion-item 20
@@ -89,9 +98,15 @@ Or nil if none."
      trigger-characters)))
 
 ;;; Main completion at point function
+(cl-defun lsp-proxy-completion-at-point ()
+  "Get lsp completions.
+For org-babel blocks with elisp/emacs-lisp, use `elisp-completion-at-point'
+instead of sending LSP requests."
+  ;; Special case: use elisp completion for elisp/emacs-lisp org babel blocks
+  (when (lsp-proxy-org-babel--elisp-language-p)
+    (cl-return-from lsp-proxy-completion-at-point
+      (elisp-completion-at-point)))
 
-(defun lsp-proxy-completion-at-point ()
-  "Get lsp completions."
   (let* ((trigger-characters lsp-proxy--completion-trigger-characters)
          (bounds-start (if-let* ((bounds (lsp-proxy--get-english-dash-string-boundaries)))
                            (cl-first bounds)
@@ -102,7 +117,7 @@ Or nil if none."
             (let* ((prefix (buffer-substring-no-properties bounds-start (point)))
                    (resp (lsp-proxy--request
                           'textDocument/completion
-                          (lsp-proxy--request-or-notify-params
+                          (lsp-proxy--build-params
                            (eglot--TextDocumentPositionParams)
                            `(:context
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
@@ -194,7 +209,7 @@ Or nil if none."
               (item (plist-get proxy-item :item)))
     (lsp-proxy--request
      'completionItem/resolve
-     (lsp-proxy--request-or-notify-params
+     (lsp-proxy--build-params
       item
       `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :cancel-on-input t)))
@@ -208,7 +223,7 @@ The CLEANUP-FN will be called to cleanup."
               (item (plist-get proxy-item :item)))
     (lsp-proxy--async-request
      'completionItem/resolve
-     (lsp-proxy--request-or-notify-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
+     (lsp-proxy--build-params item `(:context (:language-server-id ,language-server-id :start ,start :end ,end)))
      :success-fn (lambda (resolved-item)
                    (if-let* ((complete-item (plist-get resolved-item :item))
                              (additionalTextEdits (plist-get complete-item :additionalTextEdits)))

@@ -168,7 +168,7 @@ To work around posn problems with after-string property.")
   (condition-case err
       (lsp-proxy--async-request
        'textDocument/inlineCompletion
-       (lsp-proxy--request-or-notify-params
+       (lsp-proxy--build-params
         (append (eglot--TextDocumentPositionParams)
                 `(:context (:triggerKind ,(if implicit 2 1))))
         `(:context

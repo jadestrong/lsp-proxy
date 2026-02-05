@@ -6,7 +6,7 @@ use crate::{
 };
 use lsp::Diagnostic;
 use lsp_types::{self as lsp, Url};
-use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DocumentId(pub NonZeroUsize);
@@ -45,6 +45,70 @@ pub struct DiagnosticItem {
     pub file_path: String,
 }
 
+/// Default TTL for virtual document servers (5 minutes)
+pub const DEFAULT_VIRTUAL_DOC_SERVER_TTL_SECS: u64 = 300;
+
+/// Entry for a cached virtual document language server with TTL tracking.
+#[derive(Debug)]
+pub struct VirtualDocServerEntry {
+    pub client: Arc<Client>,
+    pub last_used: Instant,
+}
+
+impl VirtualDocServerEntry {
+    pub fn new(client: Arc<Client>) -> Self {
+        Self {
+            client,
+            last_used: Instant::now(),
+        }
+    }
+
+    /// Update the last used timestamp to now.
+    pub fn touch(&mut self) {
+        self.last_used = Instant::now();
+    }
+
+    /// Check if this entry has expired based on the given TTL.
+    pub fn is_expired(&self, ttl_secs: u64) -> bool {
+        self.last_used.elapsed().as_secs() > ttl_secs
+    }
+}
+
+#[derive(Debug)]
+pub struct VirtualDocumentInfo {
+    #[allow(dead_code)]
+    pub(crate) line_bias: u32,
+    pub(crate) language: String,
+    pub language_config: Option<Arc<LanguageConfiguration>>,
+}
+
+impl VirtualDocumentInfo {
+    pub fn new(
+        line_bias: u32,
+        language: String,
+        config_loader: Option<Arc<syntax::Loader>>,
+    ) -> Self {
+        let mut virtual_doc = VirtualDocumentInfo {
+            line_bias,
+            language: language.clone(),
+            language_config: None,
+        };
+
+        if let Some(loader) = config_loader {
+            virtual_doc.language_config = loader.language_config_for_language_id(&language);
+        }
+
+        virtual_doc
+    }
+
+    pub fn language_id(&self) -> &str {
+        self.language_config
+            .as_deref()
+            .and_then(|c| c.language_server_language_id.as_deref())
+            .unwrap_or(&self.language)
+    }
+}
+
 #[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
@@ -56,10 +120,28 @@ pub struct Document {
     pub version: i32,
 
     pub previous_diagnostic_id: Option<String>,
+
+    // If the document is a Org file, contains virtual document information
+    pub virtual_doc: Option<VirtualDocumentInfo>,
+    pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, VirtualDocServerEntry>,
+
+    /// Cached result of is_org_file check
+    is_org_file: bool,
 }
 
 impl Document {
-    pub fn new(uri: &Url, config_loader: Option<Arc<syntax::Loader>>, language: Option<&str>) -> Self {
+    pub fn new(
+        uri: &Url,
+        config_loader: Option<Arc<syntax::Loader>>,
+        language: Option<&str>,
+    ) -> Self {
+        // Pre-compute is_org_file
+        let is_org_file = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| path.extension().map(|ext| ext == "org"))
+            .unwrap_or(false);
+
         let mut doc = Document {
             id: DocumentId::default(),
             uri: uri.clone(),
@@ -68,6 +150,9 @@ impl Document {
             version: 0,
             diagnostics: None,
             previous_diagnostic_id: None,
+            virtual_doc: None,
+            language_servers_of_virtual_doc: HashMap::new(),
+            is_org_file,
         };
 
         if let Some(loader) = config_loader {
@@ -104,6 +189,7 @@ impl Document {
             support_inline_completion: false,
             support_hover: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
+            has_any_servers: false,
         };
 
         let mut has_any_servers = false;
@@ -153,8 +239,67 @@ impl Document {
             }
         });
 
+        // Set has_any_servers flag
+        server_capabilities.has_any_servers = has_any_servers;
+
         // If any server only supports full sync, use full sync for all
         // If all servers support incremental (or no servers), use incremental
+        if has_any_servers && !all_support_incremental {
+            server_capabilities.text_document_sync_kind = "full".to_string();
+        }
+
+        server_capabilities
+    }
+
+    /// Get server capabilities for virtual document (e.g., org babel code block).
+    /// This is similar to get_server_capabilities but uses language_servers_of_virtual_doc.
+    pub fn get_virtual_doc_server_capabilities(&self) -> CustomServerCapabilitiesParams {
+        let mut server_capabilities = CustomServerCapabilitiesParams {
+            uri: self.uri.to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+            support_pull_diagnostic: false,
+            support_inline_completion: false,
+            support_hover: false,
+            text_document_sync_kind: "incremental".to_string(),
+            has_any_servers: false,
+        };
+
+        let mut has_any_servers = false;
+        let mut all_support_incremental = true;
+
+        for entry in self.language_servers_of_virtual_doc.values() {
+            let ls = &entry.client;
+            has_any_servers = true;
+
+            let sync_kind = ls.get_text_document_sync_kind();
+            if sync_kind == "full" {
+                all_support_incremental = false;
+            }
+
+            if let Some(lsp_types::CompletionOptions {
+                trigger_characters: Some(triggers),
+                ..
+            }) = &ls.capabilities().completion_provider
+            {
+                let mut triggers = triggers.clone();
+                server_capabilities.trigger_characters.append(&mut triggers);
+            }
+
+            if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
+                server_capabilities.support_signature_help = true;
+            }
+            if ls.supports_feature(LanguageServerFeature::Hover) {
+                server_capabilities.support_hover = true;
+            }
+        }
+
+        // Set has_any_servers flag
+        server_capabilities.has_any_servers = has_any_servers;
+
         if has_any_servers && !all_support_incremental {
             server_capabilities.text_document_sync_kind = "full".to_string();
         }
@@ -314,5 +459,48 @@ impl Document {
         self.diagnostics = None;
         self.previous_diagnostic_id = None;
         self.language_servers.clear();
+        self.virtual_doc = None;
+        self.language_servers_of_virtual_doc.clear();
+    }
+
+    /// Check if this document is an Org file (cached)
+    #[inline]
+    pub fn is_org_file(&self) -> bool {
+        self.is_org_file
+    }
+
+    /// Get a virtual document server by language, updating its last_used timestamp.
+    pub fn get_virtual_doc_server(&mut self, language: &str) -> Option<Arc<Client>> {
+        if let Some(entry) = self.language_servers_of_virtual_doc.get_mut(language) {
+            entry.touch();
+            Some(entry.client.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Check if a virtual document server exists for the given language.
+    pub fn has_virtual_doc_server(&self, language: &str) -> bool {
+        self.language_servers_of_virtual_doc.contains_key(language)
+    }
+
+    /// Insert a new virtual document server entry.
+    pub fn insert_virtual_doc_server(&mut self, language: String, client: Arc<Client>) {
+        self.language_servers_of_virtual_doc
+            .insert(language, VirtualDocServerEntry::new(client));
+    }
+
+    /// Get expired virtual document server languages based on TTL.
+    pub fn get_expired_virtual_doc_servers(&self, ttl_secs: u64) -> Vec<String> {
+        self.language_servers_of_virtual_doc
+            .iter()
+            .filter(|(_, entry)| entry.is_expired(ttl_secs))
+            .map(|(lang, _)| lang.clone())
+            .collect()
+    }
+
+    /// Remove and return a virtual document server entry.
+    pub fn remove_virtual_doc_server(&mut self, language: &str) -> Option<VirtualDocServerEntry> {
+        self.language_servers_of_virtual_doc.remove(language)
     }
 }

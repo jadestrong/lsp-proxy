@@ -529,6 +529,7 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 
 ;; corfu
 (setq corfu-auto-delay 0)
+(setq corfu-auto-prefix 0)
 (setq corfu-popupinfo-delay '(0.1 . 0.1))
 ```
 
@@ -562,6 +563,108 @@ Flycheck enabled default if flycheck-mode is installed. You can also select *fly
 ```elisp
 (setq lsp-proxy-diagnostics-provider :flymake)
 ```
+
+## Org-mode Integration
+
+LSP-Proxy provides comprehensive support for org-mode through the `lsp-proxy-org.el` module, enabling LSP features within org-babel source blocks.
+
+### Enabling Org-babel LSP Support
+
+To enable LSP support in org-babel code blocks, add the following to your configuration:
+
+```elisp
+;; Enable LSP support in org-babel code blocks
+(setq lsp-proxy-enable-org-babel t)
+
+;; Enable LSP support in org-edit-special buffers (default: t)
+(setq lsp-proxy-org-edit-special-enable-lsp t)
+```
+
+### Configuration Variables
+
+#### Language Support Configuration
+
+```elisp
+;; Specify which languages to enable LSP support for in org-babel blocks
+(setq lsp-proxy-org-babel-enabled-languages
+      '("python" "typescript" "javascript" "tsx" "bash" "rust" "go"))
+
+;; Map org-babel language names to LSP language IDs
+(setq lsp-proxy-org-babel-language-map
+      '(("shell" . "bash")
+        ("sh" . "bash")
+        ("tsx-ts" . "tsx")
+        ("typescript-ts" . "typescript")))
+```
+
+### Features
+
+#### 1. Direct Org-babel Block Editing
+- **Code completion** within org-mode source blocks
+- **Hover documentation** and signature help
+- **Diagnostics** (syntax errors, warnings)
+- **Symbol navigation** and references
+- Automatic LSP server startup when entering code blocks
+
+#### 2. Org-edit-special Buffer Support
+- Full LSP functionality in `org-edit-special` buffers (C-c ')
+- Seamless integration with existing org-mode workflow
+- Automatic language detection from source block headers
+
+### Example Usage
+
+Create an org-mode file with source blocks:
+
+```org
+#+BEGIN_SRC python
+def fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n-1) + fibonacci(n-2)
+
+# LSP features work here: completion, hover, diagnostics
+print(fibonacci(10))
+#+END_SRC
+
+#+BEGIN_SRC typescript
+interface User {
+    name: string;
+    age: number;
+}
+
+// Full TypeScript LSP support available
+const user: User = {
+    name: "Alice",
+    age: 30
+};
+#+END_SRC
+```
+
+### How It Works
+
+1. **Automatic Detection**: LSP-Proxy detects when the cursor enters an org-babel source block
+2. **Virtual Documents**: Code blocks are sent to language servers as virtual documents
+3. **Position Translation**: Cursor positions are automatically translated between the org file and virtual document
+4. **Efficient Caching**: Block information is cached to minimize parsing overhead
+5. **Smart Cleanup**: Resources are cleaned up when leaving code blocks
+
+### Advanced Configuration
+
+#### Custom Language Mappings
+For specialized setups, you can extend the language mapping:
+
+```elisp
+(add-to-list 'lsp-proxy-org-babel-language-map '("myshell" . "bash"))
+(add-to-list 'lsp-proxy-org-babel-enabled-languages "myshell")
+```
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| LSP not working in code blocks | Ensure language is in `lsp-proxy-org-babel-enabled-languages` |
+| Wrong language server started | Check `lsp-proxy-org-babel-language-map` for correct mapping |
+| Edit buffer not getting LSP | Verify `lsp-proxy-org-edit-special-enable-lsp` is `t` |
 
 ## Acknowledgements
 Thanks to [Helix](https://github.com/helix-editor/helix), the architecture of Lsp-Proxy Server is entirely based on Helix's implementation. Language configuration and communication with different language servers are all dependent on Helix. As a Rust beginner, I've gained a lot from this approach during the implementation.

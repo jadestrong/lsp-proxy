@@ -23,7 +23,7 @@
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/signatureHelp
-       (lsp-proxy--request-or-notify-params
+       (lsp-proxy--build-params
         (eglot--TextDocumentPositionParams))
        :success-fn
        (eglot--lambda ((SignatureHelp)

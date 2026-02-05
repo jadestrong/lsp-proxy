@@ -38,7 +38,7 @@ pub fn create_error_response(id: &RequestId, message: String) -> Response {
 async fn call_single_language_server<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
     feature: Option<LanguageServerFeature>,
     language_server_id: Option<usize>,
 ) -> Result<(R::Result, String)>
@@ -73,7 +73,7 @@ where
 async fn call_language_servers<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
     feature: LanguageServerFeature,
 ) -> Vec<R::Result>
 where
@@ -120,7 +120,7 @@ where
 async fn call_first_language_server<R>(
     req: &msg::Request,
     params: R::Params,
-    language_servers: &Vec<Arc<Client>>,
+    language_servers: &[Arc<Client>],
 ) -> Result<(R::Result, String)>
 where
     R: lsp_types::request::Request + 'static,
@@ -222,7 +222,7 @@ pub(crate) async fn handle_completion(
     params: lsp_types::CompletionParams,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CompletionContext(context)) = req.params.context {
+    if let Some(Context::Completion(context)) = req.params.context {
         let prefix_len = &context.prefix.len();
         let bounds_start = &context.bounds_start;
         let trigger_kind = &context.trigger_kind;
@@ -271,7 +271,7 @@ pub(crate) async fn handle_completion(
                     seen_language_servers.insert(ls.id())
                 } else if ls.name() == "typescript-language-server" && pretext.ends_with(" ") {
                     // typescript-language-server 未拦截空格触发的情况，但 vscode 和 vtsls 支持拦截
-                    return false;
+                    false
                 } else {
                     // 此时启动触发且 prefix_len 为空，如果不是 triggerCharacter 则不自动请求
                     let trigger_character = match &ls.capabilities().completion_provider {
@@ -281,7 +281,7 @@ pub(crate) async fn handle_completion(
                         }) => triggers.iter().find(|trigger| pretext.ends_with(*trigger)),
                         _ => None,
                     };
-                    return trigger_character.is_some();
+                    trigger_character.is_some()
                 }
             })
             .map(|language_server| {
@@ -297,6 +297,9 @@ pub(crate) async fn handle_completion(
                     }) => triggers.iter().find(|trigger| pretext.ends_with(*trigger)),
                     _ => None,
                 };
+
+                // Clone virtual_doc context for use in async closure
+                let vdoc_ctx = req.params.virtual_doc.clone();
 
                 let completion_request = language_server
                     .completion(
@@ -319,6 +322,18 @@ pub(crate) async fn handle_completion(
                                     lsp_types::CompletionTriggerKind::TRIGGER_CHARACTER
                                 },
                             }),
+                            text_document_position: match &req.params.virtual_doc {
+                                None => params.text_document_position.clone(),
+                                Some(vdoc_ctx) => lsp_types::TextDocumentPositionParams {
+                                    text_document: params
+                                        .text_document_position
+                                        .text_document
+                                        .clone(),
+                                    position: vdoc_ctx.translate_position_to_virtual(
+                                        params.text_document_position.position,
+                                    ),
+                                },
+                            },
                             ..params.clone()
                         },
                     )
@@ -358,6 +373,21 @@ pub(crate) async fn handle_completion(
                                         new_text: replace_text_edit.new_text.clone(),
                                     },
                                 ));
+                            }
+
+                            // Translate textEdit range from virtual doc coordinates back to org file coordinates
+                            if let Some(ref vdoc) = vdoc_ctx {
+                                if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
+                                    &mut new_item.text_edit
+                                {
+                                    edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                }
+                                // Also translate additionalTextEdits for virtual documents
+                                if let Some(ref mut additional_edits) = new_item.additional_text_edits {
+                                    for edit in additional_edits.iter_mut() {
+                                        edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    }
+                                }
                             }
                         }
                         let label_len = &new_item.label.chars().count();
@@ -444,7 +474,7 @@ pub(crate) async fn handle_completion_resolve(
     params: lsp_types::CompletionItem,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::ResolveContext(context)) = &req.params.context {
+    if let Some(Context::Resolve(context)) = &req.params.context {
         let params_detail = params.detail.clone();
         let params_text_edit = params.text_edit.clone();
         call_single_language_server::<lsp_types::request::ResolveCompletionItem>(
@@ -493,7 +523,7 @@ pub(crate) async fn handle_completion_resolve(
                     }
                 }
             }
-
+            let mut use_cache_text_edit = false;
             // The textEdit of tsserver is different between textDocument/completion and completionItem/resolve.
             // The resolve response will have insertTextFormat and snippet information added.
             // So we cannot reuse completion's textEdit property directly.
@@ -504,17 +534,39 @@ pub(crate) async fn handle_completion_resolve(
                 // Since we have cached completion results, the input position will not update immediately. The rust-analyzer server will always return the latest position for a resolve request.
                 // Therefore, it is preferable to use the cached completionItem's textEdit property. Other servers like tsserver won't update the position, so it's fine.
                 resp.text_edit = params_text_edit;
-            } else if let Some(text_edit) = &resp.text_edit {
-                if let lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit) =
-                    text_edit
-                {
-                    resp.text_edit =
-                        Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
-                            range: replace_text_edit.replace,
-                            new_text: replace_text_edit.new_text.clone(),
-                        }));
+                use_cache_text_edit = true;
+            } else if let Some(lsp_types::CompletionTextEdit::InsertAndReplace(replace_text_edit)) =
+                &resp.text_edit
+            {
+                resp.text_edit = Some(lsp_types::CompletionTextEdit::Edit(lsp_types::TextEdit {
+                    range: replace_text_edit.replace,
+                    new_text: replace_text_edit.new_text.clone(),
+                }));
+            }
+
+            // For virtual documents (org babel blocks), translate textEdit range back to org file coordinates
+            if let Some(ref vdoc_ctx) = req.params.virtual_doc {
+                if !use_cache_text_edit {
+                    if let Some(ref mut text_edit) = resp.text_edit {
+                        match text_edit {
+                            lsp_types::CompletionTextEdit::Edit(edit) => {
+                                edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
+                            }
+                            lsp_types::CompletionTextEdit::InsertAndReplace(edit) => {
+                                edit.insert = vdoc_ctx.translate_range_from_virtual(edit.insert);
+                                edit.replace = vdoc_ctx.translate_range_from_virtual(edit.replace);
+                            }
+                        }
+                    }
+                }
+                // Translate additionalTextEdits for virtual documents
+                if let Some(ref mut additional_edits) = resp.additional_text_edits {
+                    for edit in additional_edits.iter_mut() {
+                        edit.range = vdoc_ctx.translate_range_from_virtual(edit.range);
+                    }
                 }
             }
+
             Response::new_ok(
                 req.id.clone(),
                 CompletionItem {
@@ -540,7 +592,7 @@ pub(crate) async fn handle_code_action_resolve(
     code_action: lsp_types::CodeAction,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CommonContext(context)) = &req.params.context {
+    if let Some(Context::Common(context)) = &req.params.context {
         call_single_language_server::<lsp_types::request::CodeActionResolveRequest>(
             &req,
             code_action,
@@ -591,7 +643,7 @@ pub(crate) async fn handle_execute_command(
     params: lsp_types::ExecuteCommandParams,
     language_servers: Vec<Arc<Client>>,
 ) -> Result<Response> {
-    if let Some(Context::CommonContext(context)) = &req.params.context {
+    if let Some(Context::Common(context)) = &req.params.context {
         let language_server = language_servers
             .iter()
             .find(|ls| ls.id() == context.language_server_id);
@@ -770,7 +822,7 @@ pub(crate) async fn handle_get_languages_config(
 
     // Serialize to JSON string
     let json_string = serde_json::to_string_pretty(&full_config)
-        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {}\"}}", e));
+        .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize config: {e}\"}}"));
 
     Ok(Response::new_ok(req.id.clone(), json_string))
 }
@@ -792,6 +844,21 @@ pub(crate) async fn handle_hover(
             }
         }
     }
+
+    // Translate position for virtual documents (org babel blocks)
+    let params = if let Some(ref vdoc_ctx) = req.params.virtual_doc {
+        lsp_types::HoverParams {
+            text_document_position_params: lsp_types::TextDocumentPositionParams {
+                text_document: params.text_document_position_params.text_document.clone(),
+                position: vdoc_ctx
+                    .translate_position_to_virtual(params.text_document_position_params.position),
+            },
+            work_done_progress_params: params.work_done_progress_params,
+        }
+    } else {
+        params
+    };
+
     let resps = call_language_servers::<lsp_types::request::HoverRequest>(
         &req,
         params,
@@ -1077,14 +1144,12 @@ pub(crate) async fn pull_diagnostics_for_document(
     params: lsp_types::DocumentDiagnosticParams,
     language_server: &Arc<Client>,
 ) -> Option<lsp_types::DocumentDiagnosticReportResult> {
-    let Some(future) = language_server.text_document_diagnostic(
+    let future = language_server.text_document_diagnostic(
         req.id.clone(),
         identifier,
         previous_result_id,
         params,
-    ) else {
-        return None;
-    };
+    )?;
 
     match future.await {
         Ok(result) => serde_json::from_value(result).ok(),
@@ -1221,7 +1286,7 @@ pub(crate) async fn handle_inline_completion(
     _language_id: String,
     response_sender: Sender<Message>,
 ) {
-    if let Some(Context::InlineCompletionContext(context)) = req.params.context {
+    if let Some(Context::InlineCompletion(context)) = req.params.context {
         match serde_json::from_value::<lsp_types::InlineCompletionParams>(req.params.params) {
             Ok(params) => {
                 if context.trigger_kind == lsp_types::InlineCompletionTriggerKind::Invoked

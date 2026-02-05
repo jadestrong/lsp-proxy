@@ -1,5 +1,5 @@
 use crate::syntax::SupportWorkspace;
-use log::{debug, error};
+use log::error;
 use lsp_types::{Diagnostic, DocumentSymbol, DocumentSymbolResponse, SymbolInformation, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
@@ -218,11 +218,20 @@ pub fn find_lsp_workspace(
     let lsp_workspace = match support_workspace {
         // add a check that if support_roots is not empty, then use the closest marker
         // otherwise, use the topmost marker
-        SupportWorkspace::WorkspaceRoots(workspace_root_markers) if !workspace_root_markers.is_empty() => {
+        SupportWorkspace::WorkspaceRoots(workspace_root_markers)
+            if !workspace_root_markers.is_empty() =>
+        {
             // Monorepo project: try to find the closest workspace root marker first
             find_lsp_workspace_closest(doc_path, workspace_root_markers, &git_workspace)
                 // Fall back to topmost strategy if no workspace markers found
-                .or_else(|| find_lsp_workspace_topmost(doc_path, root_markers, &git_workspace, workspace_is_cwd))
+                .or_else(|| {
+                    find_lsp_workspace_topmost(
+                        doc_path,
+                        root_markers,
+                        &git_workspace,
+                        workspace_is_cwd,
+                    )
+                })
         }
         _ => {
             // Traditional project: find the topmost root marker
@@ -251,7 +260,7 @@ fn find_lsp_workspace_closest(
         .ancestors()
         .take_while(|ancestor| {
             // include git_workspace itself, but not beyond it
-            ancestor.starts_with(&workspace) || *ancestor == workspace
+            ancestor.starts_with(workspace) || *ancestor == workspace
         })
         .find(|ancestor| {
             workspace_root_markers
@@ -294,7 +303,6 @@ fn find_lsp_workspace_topmost(
         }
 
         if ancestor == workspace {
-            debug!("~~~ {:?}", workspace);
             // if the workspace is the CWD, let the LSP decide what the workspace
             // is
             return top_marker

@@ -98,7 +98,7 @@ impl Editor {
         self.documents.get(&id).unwrap()
     }
 
-    pub fn launch_langauge_servers(&mut self, doc_id: DocumentId) {
+    pub fn launch_language_servers(&mut self, doc_id: DocumentId) {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
             return;
         };
@@ -145,9 +145,74 @@ impl Editor {
         doc.language_servers = language_servers;
     }
 
+    pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {
+        let doc = self.documents.get_mut(&doc_id)?;
+
+        // 获取虚拟文档的语言配置
+        let virtual_language_config = doc.virtual_doc.as_ref()
+            .and_then(|virtual_doc| virtual_doc.language_config.clone());
+
+        // org block 只需要第一个 server，直接取第一个配置
+        let doc_path = doc.path();
+        let first_server = virtual_language_config
+            .as_ref()
+            .and_then(|language_config| {
+                // 只取第一个语言服务器配置
+                let first_ls_feature = language_config.language_servers.first()?;
+                
+                // 使用 iterator 的 next() 只获取第一个，避免启动多个 server
+                let mut iter = self.language_servers.get(language_config, doc_path.as_ref());
+                let (name, result) = iter.next()?;
+                
+                match result {
+                    Ok(client) => Some((name, client)),
+                    Err(err) => {
+                        error!(
+                            "Failed to initialize language server for virtual document `{}` - `{}` {{ {} }}",
+                            language, first_ls_feature.name, err
+                        );
+                        None
+                    }
+                }
+            });
+
+        let (_, server) = first_server?;
+
+        // 存储到 language_servers_of_virtual_doc，使用 language 作为 key
+        // 需要重新获取 doc 的可变引用
+        if let Some(doc) = self.documents.get_mut(&doc_id) {
+            doc.insert_virtual_doc_server(language.to_owned(), server.clone());
+        }
+        
+        Some(server)
+    }
+
     #[inline]
     pub fn language_server_by_id(&self, language_server_id: usize) -> Option<Arc<Client>> {
         self.language_servers.get_by_id(language_server_id)
+    }
+
+    /// Cleanup expired virtual document servers across all documents.
+    /// Returns a list of (uri, language, client) tuples for servers that were removed.
+    pub fn cleanup_expired_virtual_doc_servers(&mut self, ttl_secs: u64) -> Vec<(Url, String, Arc<Client>)> {
+        let mut removed = Vec::new();
+
+        for doc in self.documents.values_mut() {
+            let expired_languages = doc.get_expired_virtual_doc_servers(ttl_secs);
+            
+            for lang in expired_languages {
+                if let Some(entry) = doc.remove_virtual_doc_server(&lang) {
+                    log::info!(
+                        "Recycling expired virtual doc server for language '{}' in document '{}'",
+                        lang,
+                        doc.uri
+                    );
+                    removed.push((doc.uri.clone(), lang, entry.client));
+                }
+            }
+        }
+
+        removed
     }
 
     /// Remove document from editor by URI

@@ -347,7 +347,7 @@ When FULL is non-nil, request all diagnostics without limit."
   (when (or full (and (boundp 'lsp-proxy--support-pull-diagnostic) lsp-proxy--support-pull-diagnostic))
     (lsp-proxy--async-request
      'textDocument/diagnostic
-     (lsp-proxy--request-or-notify-params
+     (lsp-proxy--build-params
       (list :textDocument (eglot--TextDocumentIdentifier))
       `(:context (:limitDiagnostics ,(if full :json-false t))))
      :timeout-fn #'ignore)))
