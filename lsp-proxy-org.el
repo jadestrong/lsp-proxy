@@ -10,6 +10,7 @@
 ;;; Commentary:
 
 ;;; Code:
+(require 'lsp-proxy-core)
 
 (defcustom lsp-proxy-enable-org-babel nil
   "Enable LSP support in org-babel code blocks.
