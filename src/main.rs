@@ -89,7 +89,7 @@ fn try_main() -> Result<()> {
         return Err(e).context("failed to initialize logging");
     }
 
-    info!("Server starting...");
+    info!("Server starting... (version: {})", env!("CARGO_PKG_VERSION"));
     with_extra_thread("LspProxy", run_server)?;
 
     Ok(())

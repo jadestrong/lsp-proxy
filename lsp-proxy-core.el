@@ -56,6 +56,16 @@ characters, especially in newer Emacs versions (30.2+)."
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-server-path nil
+  "Path to the lsp-proxy server executable.
+If specified, this path will be used instead of auto-detection.
+If nil, lsp-proxy will automatically search for the executable in:
+1. System PATH (emacs-lsp-proxy)
+2. Current directory (./emacs-lsp-proxy)
+3. target/release directory (./target/release/emacs-lsp-proxy)"
+  :type '(choice (const nil) file)
+  :group 'lsp-proxy)
+
 (defvar-local lsp-proxy--support-inlay-hints nil
   "Is there any server associated with this buffer
  that support `textDocument/inlayHint' request.")
@@ -172,18 +182,27 @@ This is used to determine if LSP requests should be sent.")
 
 (defun lsp-proxy-server-executable ()
   "Find emacs-lsp-proxy executable with priority order:
-1. System PATH (emacs-lsp-proxy)
-2. Current directory (./emacs-lsp-proxy)
-3. target/release directory (./target/release/emacs-lsp-proxy)"
-  (let* ((base-dir lsp-proxy--base-dir)
-         (exe-name (if (eq system-type 'windows-nt)
-                       "emacs-lsp-proxy.exe"
-                     "emacs-lsp-proxy"))
-         (candidates (list (executable-find "emacs-lsp-proxy")
-                           (expand-file-name exe-name base-dir)
-                           (expand-file-name (concat "target/release/" exe-name) base-dir))))
-    (or (seq-find #'file-exists-p (delq nil candidates))
-        (error "No emacs-lsp-proxy executable found in any location"))))
+1. User-specified path (lsp-proxy-server-path)
+2. System PATH (emacs-lsp-proxy)
+3. Current directory (./emacs-lsp-proxy)
+4. target/release directory (./target/release/emacs-lsp-proxy)"
+  (cond
+   ;; Priority 1: User-specified path
+   ((and lsp-proxy-server-path (file-executable-p lsp-proxy-server-path))
+    lsp-proxy-server-path)
+   ;; Priority 2-4: Auto-detection
+   (t
+    (let* ((base-dir lsp-proxy--base-dir)
+           (exe-name (if (eq system-type 'windows-nt)
+                         "emacs-lsp-proxy.exe"
+                       "emacs-lsp-proxy"))
+           (candidates (list (executable-find "emacs-lsp-proxy")
+                             (expand-file-name exe-name base-dir)
+                             (expand-file-name (concat "target/release/" exe-name) base-dir))))
+      (or (seq-find #'file-exists-p (delq nil candidates))
+          (if lsp-proxy-server-path
+              (error "User-specified lsp-proxy server path not found or not executable: %s" lsp-proxy-server-path)
+            (error "No emacs-lsp-proxy executable found in any location")))))))
 
 ;;; Communication macros
 

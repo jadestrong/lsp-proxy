@@ -54,6 +54,9 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
 (use-package lsp-proxy
   ;; :load-path "/path/to/lsp-proxy"
   :config
+  ;; Optional: specify custom server path (if not using default auto-detection)
+  ;; (setq lsp-proxy-server-path "/custom/path/to/emacs-lsp-proxy")
+  
   (add-hook 'tsx-ts-mode-hook #'lsp-proxy-mode)
   (add-hook 'js-ts-mode-hook #'lsp-proxy-mode)
   (add-hook 'typescript-mode-hook #'lsp-proxy-mode)
@@ -457,6 +460,7 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 |----------|---------|-------------|
 | `lsp-proxy-log-file-directory` | `temporary-file-directory` | Directory where the external server writes its log file. Set to a persistent path if you want logs across restarts. |
 | `lsp-proxy-user-languages-config` | `${user-emacs-directory}/lsp-proxy/languages.toml` | User TOML config overriding/augmenting built-in language server definitions. Edited via `M-x lsp-proxy-open-config-file`. |
+| `lsp-proxy-server-path` | `nil` | Path to the lsp-proxy server executable. If specified, this path will be used instead of auto-detection. If nil, lsp-proxy will automatically search for the executable in: 1) System PATH 2) Current directory 3) target/release directory. |
 | `lsp-proxy-log-max` | `0` | Max size (lines/events) of internal events buffer; `0` disables; `nil` infinite. Enable only while debugging. |
 | `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
 | `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
