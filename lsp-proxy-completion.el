@@ -158,9 +158,9 @@ instead of sending LSP requests."
 
 (defun lsp-proxy--candidate-kind (item)
   "Return ITEM's kind."
-  (let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
+  (when-let* ((proxy-item (get-text-property 0 'lsp-proxy--item item))
          (completion-item (plist-get proxy-item :item))
-         (kind (alist-get (and completion-item (plist-get completion-item :kind)) eglot--kind-names)))
+         (kind (alist-get (plist-get completion-item :kind) eglot--kind-names)))
     (pcase kind
       ("EnumMember" 'enum-member)
       ("TypeParameter" 'type-parameter)

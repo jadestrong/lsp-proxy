@@ -29,7 +29,8 @@ automatically start the appropriate LSP server for the block's language."
 (defcustom lsp-proxy-org-babel-language-map
   '(("shell" . "bash")
     ("sh" . "bash")
-    ("tsx-ts" . "tsx"))
+    ("tsx-ts" . "tsx")
+    ("typescript-ts" . "typescript"))
   "Mapping from org-babel language names to LSP language IDs.
 Each entry is a cons cell (ORG-LANG . LSP-LANG) where ORG-LANG is
 the language identifier used in org-mode source blocks, and LSP-LANG
