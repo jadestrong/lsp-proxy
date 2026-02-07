@@ -383,7 +383,9 @@ pub(crate) async fn handle_completion(
                                     edit.range = vdoc.translate_range_from_virtual(edit.range);
                                 }
                                 // Also translate additionalTextEdits for virtual documents
-                                if let Some(ref mut additional_edits) = new_item.additional_text_edits {
+                                if let Some(ref mut additional_edits) =
+                                    new_item.additional_text_edits
+                                {
                                     for edit in additional_edits.iter_mut() {
                                         edit.range = vdoc.translate_range_from_virtual(edit.range);
                                     }
@@ -1378,5 +1380,47 @@ pub(crate) async fn handle_ra_expand_macro(
             "No available language server for {:?}.",
             req.method
         ))),
+    }
+}
+
+pub(crate) async fn handle_forward_request(
+    req: msg::Request,
+    params: lsp_ext::ForwardRequestParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    debug!(
+        "forwarding request {} to server {}",
+        params.method, params.server_name
+    );
+
+    // Find the target language server by name
+    let target_server = language_servers
+        .iter()
+        .find(|ls| ls.name() == params.server_name);
+
+    match target_server {
+        Some(ls) => {
+            // Forward the request using the call_method
+            let json = ls
+                .call_method(req.id.clone(), params.method.clone(), params.params)
+                .await;
+            match json {
+                Ok(resp) => Ok(Response::new_ok(req.id, resp)),
+                Err(err) => {
+                    error!("Forward request failed: {err}");
+                    Err(err.into())
+                }
+            }
+        }
+        None => {
+            let available_servers: Vec<String> = language_servers
+                .iter()
+                .map(|ls| ls.name().to_string())
+                .collect();
+            Err(anyhow::Error::msg(format!(
+                "Target language server '{}' not found. Available servers: {:?}",
+                params.server_name, available_servers
+            )))
+        }
     }
 }

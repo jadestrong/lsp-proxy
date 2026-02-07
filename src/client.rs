@@ -448,6 +448,58 @@ impl Client {
         self.call_with_timeout::<R>(req_id, params, self.req_timeout)
     }
 
+    /// Call an arbitrary method on the language server
+    pub fn call_method(
+        &self,
+        req_id: RequestId,
+        method: String,
+        params: Value,
+    ) -> impl Future<Output = Result<Value>> {
+        let server_tx = self.server_tx.clone();
+        let timeout_secs = self.req_timeout;
+        
+        async move {
+            use std::time::Duration;
+            use tokio::time::timeout;
+
+            let request = jsonrpc::MethodCall {
+                jsonrpc: Some(jsonrpc::Version::V2),
+                id: req_id.clone(),
+                method,
+                params: Self::value_into_params(params),
+            };
+            
+            let (tx, mut rx) = channel::<Result<Value>>(1);
+            server_tx
+                .send(Payload::Request {
+                    chan: tx,
+                    value: request,
+                })
+                .map_err(|e| Error::Other(e.into()))?;
+
+            let cancel_id = req_id.clone();
+            let cancel_on_drop = defer(move || {
+                let _ = server_tx.send(Payload::Notification(jsonrpc::Notification {
+                    jsonrpc: Some(jsonrpc::Version::V2),
+                    method: "$/cancelRequest".to_string(),
+                    params: Self::value_into_params(json!({
+                        "id": cancel_id,
+                    })),
+                }));
+            });
+
+            let result = timeout(Duration::from_secs(timeout_secs), rx.recv()).await;
+            match result {
+                Ok(Some(res)) => {
+                    cancel_on_drop.abort();
+                    Ok(res.map_err(|e| Error::Other(e.into()))?)
+                }
+                Ok(None) => Err(Error::StreamClosed),
+                Err(_) => Err(Error::Timeout(format!("{}({})", "call_method", req_id))),
+            }
+        }
+    }
+
     fn call_with_timeout<R: lsp::request::Request>(
         &self,
         req_id: RequestId,

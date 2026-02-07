@@ -865,6 +865,7 @@ impl Application {
                 handlers::request::handle_document_symbols,
             )
             .on::<RustAnalyzerExpandMacro, _, _>(handlers::request::handle_ra_expand_macro)
+            .on::<lsp_ext::ForwardRequest, _, _>(handlers::request::handle_forward_request)
             .finish();
     }
 

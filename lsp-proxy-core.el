@@ -272,9 +272,6 @@ Only sends requests if servers are available."
 Only sends requests if servers are available."
   `(progn
      (when lsp-proxy-mode
-       ;; (and lsp-proxy-mode
-       ;; (not (lsp-proxy--should-skip-request-p))
-       ;; )
        (lsp-proxy--ensure-connection)
        (lsp-proxy--send-did-change)
        (unless lsp-proxy--buffer-opened

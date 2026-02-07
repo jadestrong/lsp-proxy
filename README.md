@@ -15,6 +15,7 @@ The features it supports are:
 - inlay hints (triggered by `lsp-proxy-inlay-hints-mode`)
 - documentHighlight/signature (baesd on `eldoc`)
 - documentSymbols (triggered by `imenu`)
+- GitHub Copilot integration with authentication management and AI-powered code suggestions
 
 ![Demo](images/show.gif)
 
@@ -433,6 +434,8 @@ language-servers = [
 - Open `*lsp-proxy-log*`
 
 ## Commands
+
+### Navigation & Code Intelligence
  - `lsp-proxy-find-definition`
  - `lsp-proxy-find-references`
  - `lsp-proxy-find-declaration`
@@ -445,11 +448,16 @@ language-servers = [
  - `lsp-proxy-describe-thing-at-point`
  - `lsp-proxy-show-project-diagnostics`
 
------
-- lsp-proxy-open-log-file
-- lsp-proxy-open-config-file
-- lsp-proxy-restart: Restart the server
-- lsp-proxy-workspace-restart: Restart the LSP server for the current project
+### GitHub Copilot Integration
+ - `lsp-proxy-copilot-sign-in`: Sign in to GitHub Copilot
+ - `lsp-proxy-copilot-sign-out`: Sign out from GitHub Copilot  
+ - `lsp-proxy-copilot-status`: Check current Copilot authentication status
+
+### Server Management
+- `lsp-proxy-open-log-file`: Open the server log file
+- `lsp-proxy-open-config-file`: Open the language configuration file
+- `lsp-proxy-restart`: Restart the server
+- `lsp-proxy-workspace-restart`: Restart the LSP server for the current project
 
 ## Customization
 
@@ -567,6 +575,60 @@ Flycheck enabled default if flycheck-mode is installed. You can also select *fly
 ```elisp
 (setq lsp-proxy-diagnostics-provider :flymake)
 ```
+
+## GitHub Copilot Integration
+
+LSP-Proxy includes built-in support for GitHub Copilot through the `lsp-proxy-copilot.el` module, providing seamless integration with GitHub Copilot's AI-powered code suggestions.
+
+### Features
+
+- **Authentication Management**: Sign in and out of GitHub Copilot directly from Emacs
+- **Status Monitoring**: Check your current Copilot authentication status
+- **Browser Integration**: Automatic browser launch for device authentication flow
+- **Cross-platform Support**: Works in both GUI and console modes
+
+### Configuration
+
+First, install the GitHub Copilot Language Server globally using npm:
+
+``` bash
+npm i @github/copilot-language-server -g
+```
+
+To enable GitHub Copilot integration, you need to configure the Copilot language server in your `languages.toml` file:
+
+
+```toml
+[language-server.copilot]
+command = "copilot-langauge-server"
+args = ["--stdio"]
+```
+
+### Available Commands
+
+#### Authentication Commands
+
+- **`M-x lsp-proxy-copilot-sign-in`**: Sign in to GitHub Copilot
+  - Displays a device code for authentication
+  - Opens your browser automatically (in GUI mode)
+  - Guides you through the authentication process
+  
+- **`M-x lsp-proxy-copilot-sign-out`**: Sign out from GitHub Copilot
+  - Clears your authentication session
+  
+- **`M-x lsp-proxy-copilot-status`**: Check current Copilot status
+  - Shows authentication state and connection information
+
+### Customization
+
+```elisp
+;; Customize the Copilot server name (default: "copilot") , if you changed the name in languages.toml, you need to set it here too.
+(setq lsp-proxy-copilot-server-name "copilot")
+```
+
+### Technical Implementation
+
+The GitHub Copilot integration uses LSP-Proxy's generic request forwarding mechanism (`emacs/forwardRequest`), allowing seamless communication with any configured language server, including GitHub Copilot's language server.
 
 ## Org-mode Integration
 

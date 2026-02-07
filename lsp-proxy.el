@@ -51,6 +51,7 @@
 (require 'lsp-proxy-inlay-hints)
 (require 'lsp-proxy-inline-completion)
 (require 'lsp-proxy-org)
+(require 'lsp-proxy-copilot)
 
 (defvar lsp-proxy-mode)
 

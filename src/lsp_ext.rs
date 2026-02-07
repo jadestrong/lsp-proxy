@@ -318,3 +318,22 @@ impl Request for RustAnalyzerExpandMacro {
     type Result = ExpandMacroResult;
     const METHOD: &'static str = "rust-analyzer/expandMacro";
 }
+
+// emacs/forwardRequest
+#[derive(Debug)]
+pub enum ForwardRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardRequestParams {
+    pub uri: String,
+    pub server_name: String,
+    pub method: String,
+    pub params: serde_json::Value,
+}
+
+impl Request for ForwardRequest {
+    type Params = ForwardRequestParams;
+    type Result = serde_json::Value;
+    const METHOD: &'static str = "emacs/forwardRequest";
+}
