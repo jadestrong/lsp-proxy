@@ -599,6 +599,7 @@ To enable GitHub Copilot integration, you need to configure the Copilot language
 
 
 ```toml
+# this is already included in the built-in languages.toml
 [language-server.copilot]
 command = "copilot-langauge-server"
 args = ["--stdio"]

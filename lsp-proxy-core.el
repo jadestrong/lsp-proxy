@@ -128,6 +128,9 @@ This is used to determine if LSP requests should be sent.")
 (defvar lsp-proxy-org-babel--info-cache)
 (defvar lsp-proxy-org-babel--block-bop)
 
+;;; External variables from lsp-proxy-copilot.el
+(defvar lsp-proxy-copilot-server-name)
+
 ;;; External functions from eglot (for backward compatibility)
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
@@ -292,7 +295,14 @@ Only sends requests if servers are available."
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
-                                         :command (append (list lsp-proxy--exec-file "--stdio" "--config" lsp-proxy-user-languages-config "--log-level" (number-to-string lsp-proxy-log-level) "--log" lsp-proxy--log-file "--max-item" (number-to-string lsp-proxy-max-completion-item) "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count))
+                                         :command (append (list lsp-proxy--exec-file
+                                                                "--stdio"
+                                                                "--config" lsp-proxy-user-languages-config
+                                                                "--log-level" (number-to-string lsp-proxy-log-level)
+                                                                "--log" lsp-proxy--log-file
+                                                                "--max-item" (number-to-string lsp-proxy-max-completion-item)
+                                                                "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count)
+                                                                "--copilot-server-name" lsp-proxy-copilot-server-name)
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")

@@ -1,6 +1,6 @@
 use crate::{
-    application::Application, document::VirtualDocumentInfo, lsp_ext, msg::VirtualDocContext,
-    utils::get_activate_time,
+    application::Application, config::COPILOT_SERVER_NAME, document::VirtualDocumentInfo, lsp_ext,
+    msg::VirtualDocContext, utils::get_activate_time,
 };
 use anyhow::Result;
 use itertools::Itertools;
@@ -361,6 +361,16 @@ pub fn handle_did_focus_text_document(
         doc.language_servers().for_each(|ls| {
             let mut activate_time = ls.activate_time.try_lock().unwrap();
             *activate_time = get_activate_time();
+
+            // Only send didFocus to copilot server
+            if COPILOT_SERVER_NAME
+                .get()
+                .is_some_and(|name| ls.name() == name.as_str())
+            {
+                if let Err(e) = ls.notify::<lsp_ext::DidFocusTextDocument>(params.clone()) {
+                    error!("Failed to send didFocus to {}: {e}", ls.name());
+                }
+            }
         });
     }
     Ok(())

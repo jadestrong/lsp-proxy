@@ -12,7 +12,9 @@ pub static MAX_COMPLETION_ITEMS: once_cell::sync::OnceCell<usize> =
     once_cell::sync::OnceCell::new();
 pub static MAX_DIAGNOSTICS_PUSH: once_cell::sync::OnceCell<usize> =
     once_cell::sync::OnceCell::new();
-pub static ENABLE_BYTECODE: once_cell::sync::OnceCell<bool> =
+pub static ENABLE_BYTECODE: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
+
+pub static COPILOT_SERVER_NAME: once_cell::sync::OnceCell<String> =
     once_cell::sync::OnceCell::new();
 
 pub fn set_max_completion_items(max_items: usize) {
@@ -28,6 +30,10 @@ pub fn set_max_diagnostics_push(max_diagnostics: usize) {
 
 pub fn set_enable_bytecode(enable: bool) {
     ENABLE_BYTECODE.set(enable).ok();
+}
+
+pub fn set_copilot_server_name(name: String) {
+    COPILOT_SERVER_NAME.set(name).ok();
 }
 
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
@@ -100,9 +106,7 @@ pub fn default_syntax_loader() -> syntax::Configuration {
             config
         }
         Err(err) => {
-            panic!(
-                "Cound not serialize your custom languages.toml: {err}"
-            )
+            panic!("Cound not serialize your custom languages.toml: {err}")
         }
     };
     config

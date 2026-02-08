@@ -20,6 +20,18 @@ clangd = { command = "clangd" }
 solargraph = { command = "solargraph", args = ["stdio"] }
 sourcekit-lsp = { command = "sourcekit-lsp" }
 
+[language-server.copilot]
+command = "copilot-language-server"
+args = ["--stdio"]
+
+[language-server.copilot.config.editorInfo]
+name = "Emacs"
+version = "30.2"
+
+[language-server.copilot.config.editorPluginInfo]
+name = "lsp-proxy-copilot.el"
+version = "unknown"
+
 [language-server.css-ls]
 command = "vscode-css-language-server"
 args = ["--stdio"]

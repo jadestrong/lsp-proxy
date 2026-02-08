@@ -35,7 +35,7 @@ use config::{
 use log::{error, info};
 use logging::init_tracing;
 
-use crate::{connection::Connection, main_loop::main_loop};
+use crate::{config::set_copilot_server_name, connection::Connection, main_loop::main_loop};
 
 fn setup_logging(verbosity: u64) -> Result<()> {
     // Only use tracing for all logging
@@ -77,6 +77,7 @@ fn try_main() -> Result<()> {
     set_max_completion_items(args.max_item_num);
     set_max_diagnostics_push(args.max_diagnostics_push);
     set_enable_bytecode(args.enable_bytecode);
+    set_copilot_server_name(args.copilot_server_name);
 
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {e}");
@@ -89,7 +90,10 @@ fn try_main() -> Result<()> {
         return Err(e).context("failed to initialize logging");
     }
 
-    info!("Server starting... (version: {})", env!("CARGO_PKG_VERSION"));
+    info!(
+        "Server starting... (version: {})",
+        env!("CARGO_PKG_VERSION")
+    );
     with_extra_thread("LspProxy", run_server)?;
 
     Ok(())

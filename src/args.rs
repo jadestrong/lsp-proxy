@@ -12,6 +12,7 @@ pub struct Args {
     pub max_item_num: usize,
     pub max_diagnostics_push: usize,
     pub enable_bytecode: bool,
+    pub copilot_server_name: String,
 }
 
 impl Args {
@@ -27,26 +28,30 @@ impl Args {
                     None => anyhow::bail!("--config must specify a path to read"),
                 },
                 "--max-item" => match argv.next().as_deref() {
-                    Some(n) => {
-                        args.max_item_num = n.parse().unwrap_or(20)
-                    }
+                    Some(n) => args.max_item_num = n.parse().unwrap_or(20),
                     None => args.max_item_num = 20,
                 },
                 "--max-diagnostics-push" => match argv.next().as_deref() {
-                    Some(n) => {
-                        args.max_diagnostics_push = n.parse().unwrap_or(50)
-                    }
+                    Some(n) => args.max_diagnostics_push = n.parse().unwrap_or(50),
                     None => args.max_diagnostics_push = 50,
                 },
                 "--log-level" => match argv.next().as_deref() {
-                    Some(level) => {
-                        args.log_level = level.parse().unwrap_or(1)
-                    }
+                    Some(level) => args.log_level = level.parse().unwrap_or(1),
                     None => anyhow::bail!("--log-level must specify to a level"),
                 },
                 "--log" => match argv.next().as_deref() {
                     Some(path) => args.log_file = Some(path.into()),
                     None => anyhow::bail!("--log must specify path to write"),
+                },
+                "--copilot-server-name" => match argv.next().as_deref() {
+                    Some(name) => {
+                        args.copilot_server_name = if name.is_empty() {
+                            "copilot".to_string()
+                        } else {
+                            name.to_string()
+                        }
+                    }
+                    None => args.copilot_server_name = "copilot".to_string(),
                 },
                 "--stdio" => args.stdio = true,
                 "--bytecode" => args.enable_bytecode = true,
