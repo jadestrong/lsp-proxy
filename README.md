@@ -602,6 +602,13 @@ To enable GitHub Copilot integration, you need to configure the Copilot language
 [language-server.copilot]
 command = "copilot-langauge-server"
 args = ["--stdio"]
+
+
+[[language]]
+name = "markdown"
+language-id = "markdown"
+file-types = ["md"]
+language-servers = [{ name = "copilot", support-workspace = true }]
 ```
 
 ### Available Commands
