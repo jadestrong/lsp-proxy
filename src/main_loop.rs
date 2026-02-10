@@ -12,7 +12,7 @@ use crate::{
     handlers::{
         self,
         request::{
-            create_error_response, handle_code_action, handle_inline_completion,
+            create_error_response, create_error_response_with_uri, handle_code_action, handle_inline_completion,
             handle_pull_diagnostic_response, pull_diagnostics_for_document,
         },
     },
@@ -31,7 +31,7 @@ use crate::{
         limit_diagnostics_for_push,
     },
 };
-use anyhow::{Error, Result};
+use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
@@ -602,7 +602,7 @@ impl Application {
                             },
                         ));
                     }
-                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                    Err(response) => self.respond(response),
                 }
             }
             Message::Request(req)
@@ -710,7 +710,7 @@ impl Application {
                             }
                         });
                     }
-                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                    Err(response) => self.respond(response),
                 }
             }
             Message::Request(req)
@@ -732,7 +732,7 @@ impl Application {
                             ));
                         }
                     }
-                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                    Err(response) => self.respond(response),
                 }
             }
             Message::Request(req) if req.method == lsp_types::request::Shutdown::METHOD => {
@@ -803,7 +803,7 @@ impl Application {
                         }
                         Self::on_request(req, self.sender.clone(), language_servers);
                     }
-                    Err(e) => self.respond(create_error_response(&req.id, e.to_string())),
+                    Err(response) => self.respond(response),
                 }
             }
             Message::Notification(not) => self.on_notification(not)?,
@@ -953,11 +953,11 @@ impl Application {
                     }
                 };
             }
-            Err(_) => todo!(),
+            Err(response) => self.respond(response),
         }
     }
 
-    fn get_working_document(&self, req: &msg::Request) -> Result<&Document> {
+    fn get_working_document(&self, req: &msg::Request) -> Result<&Document, Response> {
         match &req.params.uri {
             Some(uri) => {
                 if let Some(doc) = self
@@ -966,10 +966,17 @@ impl Application {
                 {
                     Ok(doc)
                 } else {
-                    Err(Error::msg("No document opened"))
+                    Err(create_error_response_with_uri(
+                        &req.id,
+                        "No document opened".to_string(),
+                        uri.clone(),
+                    ))
                 }
             }
-            None => Err(Error::msg("No uri provided")),
+            None => Err(create_error_response(
+                &req.id,
+                "No uri provided".to_string(),
+            )),
         }
     }
 }

@@ -35,6 +35,20 @@ pub fn create_error_response(id: &RequestId, message: String) -> Response {
     Response::new_err(id.clone(), jsonrpc::ErrorCode::InternalError, message)
 }
 
+pub fn create_error_response_with_uri(id: &RequestId, message: String, uri: String) -> Response {
+    error!("result to response err {message} for uri {uri}");
+    let error = jsonrpc::Error {
+        code: jsonrpc::ErrorCode::InternalError,
+        message,
+        data: Some(serde_json::json!({ "uri": uri })),
+    };
+    Response {
+        id: id.clone(),
+        result: None,
+        error: Some(error),
+    }
+}
+
 async fn call_single_language_server<R>(
     req: &msg::Request,
     params: R::Params,

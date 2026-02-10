@@ -211,7 +211,18 @@ This is used to determine if LSP requests should be sent.")
 
 (defconst lsp-proxy--show-error
   (lambda (err)
-    (lsp-proxy--error "%s" (or (and err (plist-get err :message)) err)))
+    (if err
+        (let* ((msg (plist-get err :message))
+               (data (plist-get err :data)))
+          (if (equal msg "No document opened")
+              ;; Extract URI from error data if available
+              (when-let* ((uri (and data (plist-get data :uri)))
+                          (filepath (lsp-proxy--uri-to-path uri))
+                          (buf (find-buffer-visiting filepath)))
+                (with-current-buffer buf
+                  (setq-local lsp-proxy--buffer-opened nil)))
+            (lsp-proxy--error "%s" msg)))
+      (lsp-proxy--error "%s" err)))
   "Default handler for error message.")
 
 (defconst lsp-proxy--show-timeout
@@ -246,7 +257,6 @@ Only sends notifications if servers are available, except for didOpen which is a
   "Send an asynchronous request (METHOD PARAMS ARGS) to the lsp proxy agent.
 Only sends requests if servers are available."
   `(progn
-     ;; (unless (lsp-proxy--should-skip-request-p)
      (lsp-proxy--ensure-connection)
      (if (not (eq ,method 'textDocument/diagnostic))
          (lsp-proxy--send-did-change))
