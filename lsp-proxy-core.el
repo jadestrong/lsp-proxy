@@ -227,7 +227,8 @@ This is used to determine if LSP requests should be sent.")
 
 (defconst lsp-proxy--show-timeout
   (lambda (method)
-    (lsp-proxy--error "%s(%s)" "Request timeout" method))
+    (when (> lsp-proxy-log-level 2)
+      (lsp-proxy--error "%s(%s)" "Request timeout" method)))
   "Default handler for timeout.")
 
 (defconst lsp-proxy--ignore-response
