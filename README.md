@@ -32,6 +32,34 @@ npm install -g emacs-lsp-proxy
 
 This will automatically install the appropriate binary for your platform (Linux x64/ARM64, macOS x64/ARM64, Windows x64) and make the `emacs-lsp-proxy` command available in your PATH.
 
+### Nix Flake
+If you use Nix, you can build an optimized binary directly from the repository:
+
+```bash
+# Build and run directly
+nix run github:jadestrong/lsp-proxy
+
+# Build and install to your profile
+nix profile install github:jadestrong/lsp-proxy
+
+# Or build locally if you've cloned the repo
+nix build
+./result/bin/emacs-lsp-proxy --version
+```
+
+You can add it as a flake input in your NixOS/home-manager configuration:
+
+```nix
+# flake.nix
+{
+  inputs.lsp-proxy.url = "github:jadestrong/lsp-proxy";
+
+  outputs = { self, nixpkgs, lsp-proxy, ... }: {
+    # Then use lsp-proxy.packages.${system}.default wherever you need it
+  };
+}
+```
+
 ### Manually
 Before installing LSP-PROXY manually, you should install rust and cargo first.
 
