@@ -420,7 +420,7 @@ file-types = [
   "avsc",
   { glob = ".prettierrc" },
 ]
-language-servers = ["vscode-json-language-server"]
+language-servers = [{name = "vscode-json-language-server", support-workspace = true}]
 
 [[language]]
 name = "java"
