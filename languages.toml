@@ -344,7 +344,7 @@ file-types = [
   { glob = "Cargo.lock" },
   { glob = "uv.lock" },
 ]
-language-servers = ["taplo"]
+language-servers = [{ name = "taplo", support-workspace = true }]
 
 [[language]]
 name = "bash"
