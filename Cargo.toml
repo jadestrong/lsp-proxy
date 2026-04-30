@@ -55,6 +55,9 @@ async-trait = "0.1"
 [profile.release]
 lto = "fat"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 prost-build = "0.12"
 protoc-bin-vendored = "3"

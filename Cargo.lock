@@ -549,6 +549,7 @@ dependencies = [
  "itertools 0.13.0",
  "jod-thread",
  "lazy_static",
+ "libc",
  "log",
  "lsp-types",
  "num_cpus",
