@@ -135,7 +135,12 @@ impl Controller {
 
     fn is_remote_message(&self, message: &Message) -> bool {
         if let Some(path) = self.extract_path_from_message(message) {
-            return path.starts_with("/ssh:") || path.starts_with("/rpc:");
+            // Emacs / eglot wrap TRAMP paths in `file://` URIs. The detector
+            // understands the wrapped form, but the fast-path prefix check
+            // here also has to strip it, otherwise a real remote request
+            // silently falls through to the local LSP pipeline.
+            let probe = path.strip_prefix("file://").unwrap_or(&path);
+            return probe.starts_with("/ssh:") || probe.starts_with("/rpc:");
         }
         false
     }

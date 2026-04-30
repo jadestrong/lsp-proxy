@@ -184,6 +184,35 @@ If the system is not Windows, return the original path."
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
 
+(defun lsp-proxy--path-to-uri (path)
+  "Convert PATH to an LSP `file://' URI.
+Unlike `eglot-path-to-uri', this preserves a TRAMP prefix (`/ssh:host:')
+rather than stripping it. lsp-proxy's Rust backend uses that prefix as
+the sole signal for routing the request to a remote LSP server; if we
+let eglot drop it, every buffer looks local and remote mode never
+engages."
+  (let ((remote-prefix (and path (file-remote-p path))))
+    (if remote-prefix
+        (concat "file://"
+                remote-prefix
+                (url-hexify-string
+                 (substring path (length remote-prefix))
+                 url-path-allowed-chars))
+      (concat "file://"
+              (if (eq system-type 'windows-nt) "/" "")
+              (url-hexify-string path url-path-allowed-chars)))))
+
+(defun lsp-proxy--TextDocumentIdentifier ()
+  "Build a TextDocumentIdentifier for the current buffer.
+Drop-in replacement for `eglot--TextDocumentIdentifier' that uses
+`lsp-proxy--path-to-uri', so TRAMP-rooted buffers produce URIs the
+Rust-side remote router can recognise."
+  (let ((path (or buffer-file-name
+                  (ignore-errors (buffer-file-name (buffer-base-buffer))))))
+    (unless path
+      (error "lsp-proxy: buffer has no file name"))
+    (list :uri (lsp-proxy--path-to-uri path))))
+
 (defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
@@ -276,7 +305,7 @@ virtual document sent to the language server."
                    args
                  ;; Otherwise, flatten as before
                  (apply 'append args)))
-         (base-params (append (eglot--TextDocumentIdentifier)
+         (base-params (append (lsp-proxy--TextDocumentIdentifier)
                               `(:params ,params)
                               rest))
          (virtual-doc (lsp-proxy--make-virtual-doc-context)))

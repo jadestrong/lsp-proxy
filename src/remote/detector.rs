@@ -25,11 +25,18 @@ pub struct RemoteDetector {
 
 impl RemoteDetector {
     pub fn new() -> Result<Self> {
-        // SSH TRAMP 格式: /ssh:user@host:/path/to/file 或 /ssh:user@host#port:/path/to/file
-        let ssh_regex = Regex::new(r"^/ssh:([^@]+)@([^:#]+)(?:#(\d+))?:(.*)$")?;
-
-        // RPC TRAMP 格式: /rpc:user@host:/path/to/file 或 /rpc:user@host#port:/path/to/file
-        let rpc_regex = Regex::new(r"^/rpc:([^@]+)@([^:#]+)(?:#(\d+))?:(.*)$")?;
+        // 兼容三种情况:
+        //   1. 裸 TRAMP 路径: /ssh:user@host:/path  或  /ssh:host:/path  或
+        //      /ssh:user@host#port:/path
+        //   2. eglot/Emacs 侧经 `file://` 包装的同样路径
+        //   3. RPC 同理
+        // user@ 是可选的(SSH config 别名没有用户名),file:// 前缀也是可选的。
+        let ssh_regex = Regex::new(
+            r"^(?:file://)?/ssh:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$",
+        )?;
+        let rpc_regex = Regex::new(
+            r"^(?:file://)?/rpc:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$",
+        )?;
 
         Ok(Self {
             ssh_regex,
@@ -39,11 +46,14 @@ impl RemoteDetector {
 
     /// 解析路径，判断是本地路径还是远程路径
     pub fn parse_path(&self, path: &str) -> RemotePathInfo {
-        // 尝试解析 SSH 路径
+        // 尝试解析 SSH 路径 (user@ 可选, file:// 前缀可选)
         if let Some(captures) = self.ssh_regex.captures(path) {
-            let user = captures.get(1).unwrap().as_str().to_string();
+            let user = captures
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
             let host = captures.get(2).unwrap().as_str().to_string();
-            let port = captures.get(3).map(|m| m.as_str().parse().ok()).flatten();
+            let port = captures.get(3).and_then(|m| m.as_str().parse().ok());
             let remote_path = captures.get(4).unwrap().as_str().to_string();
 
             return RemotePathInfo::Remote(RemoteInfo {
@@ -57,11 +67,14 @@ impl RemoteDetector {
             });
         }
 
-        // 尝试解析 RPC 路径
+        // 尝试解析 RPC 路径 (user@ 可选)
         if let Some(captures) = self.rpc_regex.captures(path) {
-            let user = captures.get(1).unwrap().as_str().to_string();
+            let user = captures
+                .get(1)
+                .map(|m| m.as_str().to_string())
+                .unwrap_or_default();
             let host = captures.get(2).unwrap().as_str().to_string();
-            let port = captures.get(3).map(|m| m.as_str().parse().ok()).flatten();
+            let port = captures.get(3).and_then(|m| m.as_str().parse().ok());
             let remote_path = captures.get(4).unwrap().as_str().to_string();
 
             return RemotePathInfo::Remote(RemoteInfo {
@@ -93,22 +106,24 @@ impl RemoteDetector {
             RemoteType::Ssh => "ssh",
             RemoteType::Rpc => "rpc",
         };
-
+        // `user@` 只在有 user 时出现,否则按 TRAMP 的惯例省略。
+        let user_part = if remote_info.host.user.is_empty() {
+            String::new()
+        } else {
+            format!("{}@", remote_info.host.user)
+        };
         match remote_info.host.port {
             Some(port) => format!(
-                "/{}:{}@{}#{}:{}",
+                "/{}:{}{}#{}:{}",
                 remote_type_str,
-                remote_info.host.user,
+                user_part,
                 remote_info.host.host,
                 port,
                 remote_info.remote_path
             ),
             None => format!(
-                "/{}:{}@{}:{}",
-                remote_type_str,
-                remote_info.host.user,
-                remote_info.host.host,
-                remote_info.remote_path
+                "/{}:{}{}:{}",
+                remote_type_str, user_part, remote_info.host.host, remote_info.remote_path
             ),
         }
     }
@@ -205,6 +220,61 @@ mod tests {
             }
             _ => panic!("Expected local path"),
         }
+    }
+
+    #[test]
+    fn ssh_path_without_user_uses_empty_user() {
+        // TRAMP path against an SSH config alias: `/ssh:home:/path/file`.
+        // There's no user@ segment because the alias config has `User …`.
+        let detector = RemoteDetector::new().unwrap();
+        match detector.parse_path("/ssh:home:/Users/jadestrong/proj/file.ts") {
+            RemotePathInfo::Remote(info) => {
+                assert_eq!(info.host.remote_type, RemoteType::Ssh);
+                assert_eq!(info.host.user, "");
+                assert_eq!(info.host.host, "home");
+                assert_eq!(info.host.port, None);
+                assert_eq!(info.remote_path, "/Users/jadestrong/proj/file.ts");
+            }
+            _ => panic!("expected remote"),
+        }
+    }
+
+    #[test]
+    fn file_uri_wrapping_is_accepted() {
+        // eglot's path-to-uri produces `file://` prefix on a TRAMP path.
+        let detector = RemoteDetector::new().unwrap();
+        match detector.parse_path("file:///ssh:home:/Users/jadestrong/proj/file.ts") {
+            RemotePathInfo::Remote(info) => {
+                assert_eq!(info.host.user, "");
+                assert_eq!(info.host.host, "home");
+                assert_eq!(info.remote_path, "/Users/jadestrong/proj/file.ts");
+            }
+            _ => panic!("expected remote"),
+        }
+
+        // file://-wrapped with user@ form.
+        match detector.parse_path("file:///ssh:alice@box:/home/alice/a.py") {
+            RemotePathInfo::Remote(info) => {
+                assert_eq!(info.host.user, "alice");
+                assert_eq!(info.host.host, "box");
+            }
+            _ => panic!("expected remote"),
+        }
+    }
+
+    #[test]
+    fn remote_to_local_omits_at_when_user_empty() {
+        let detector = RemoteDetector::new().unwrap();
+        let info = RemoteInfo {
+            host: RemoteHost {
+                remote_type: RemoteType::Ssh,
+                user: "".to_string(),
+                host: "home".to_string(),
+                port: None,
+            },
+            remote_path: "/a/b.ts".to_string(),
+        };
+        assert_eq!(detector.remote_to_local_path(&info), "/ssh:home:/a/b.ts");
     }
 
     #[test]

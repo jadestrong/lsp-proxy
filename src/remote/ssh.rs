@@ -75,9 +75,12 @@ pub struct SshConnectionOptions {
 
 impl SshConnectionOptions {
     pub fn new(host: String, username: String) -> Self {
+        // Empty username means "let ssh resolve via ~/.ssh/config", which is
+        // the common case with SSH aliases like `Host home\n  User me`.
+        let username = if username.is_empty() { None } else { Some(username) };
         Self {
             host: host.into(),
-            username: Some(username),
+            username,
             port: None,
             args: None,
             connection_timeout: Some(30),

@@ -12,7 +12,6 @@ use super::{
     detector::{RemoteDetector, RemoteInfo, RemotePathInfo},
     rpc::RpcClient,
     ssh::{SshConnection, SshConnectionOptions},
-    RemoteType,
 };
 use crate::msg::{Message, Response};
 
@@ -119,19 +118,16 @@ impl RemoteConnectionManager {
         Ok(None)
     }
 
-    /// 处理远程消息
-    async fn handle_remote_message(&self, message: Message, remote_info: RemoteInfo) -> Result<Option<Message>> {
-        match remote_info.host.remote_type {
-            RemoteType::Ssh => {
-                // SSH类型使用RPC客户端
-                let client = self.get_or_create_rpc_client(&remote_info).await?;
-                self.handle_message_via_rpc(message, client, remote_info).await
-            }
-            RemoteType::Rpc => {
-                // 直接RPC连接（暂未实现）
-                Err(anyhow!("Direct RPC connections not yet implemented"))
-            }
-        }
+    /// 处理远程消息。`/ssh:` 和 `/rpc:` 前缀都走同一套 SSH 传输 — TRAMP
+    /// 方法名只是 Emacs 侧的约定,对我们而言底层都是 `ssh <host> …`。
+    async fn handle_remote_message(
+        &self,
+        message: Message,
+        remote_info: RemoteInfo,
+    ) -> Result<Option<Message>> {
+        let _ = remote_info.host.remote_type; // variant kept for future diversification
+        let client = self.get_or_create_rpc_client(&remote_info).await?;
+        self.handle_message_via_rpc(message, client, remote_info).await
     }
 
     /// 通过RPC处理消息

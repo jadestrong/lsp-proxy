@@ -453,7 +453,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   (when (and lsp-proxy-mode (eq window (selected-window)))
     (if lsp-proxy--buffer-opened
         (lsp-proxy--notify ':textDocument/didFocus
-                           (list :textDocument (eglot--TextDocumentIdentifier)))
+                           (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
       (lsp-proxy--on-doc-open))))
 
 (defun lsp-proxy--get-initial-content ()
@@ -486,7 +486,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
             (if is-large-file
                 (setq-local lsp-proxy--support-document-highlight nil))
             (lsp-proxy--notify 'textDocument/didOpen
-                               (list :textDocument (append (eglot--TextDocumentIdentifier)
+                               (list :textDocument (append (lsp-proxy--TextDocumentIdentifier)
                                                            (list
                                                             :text initial-content
                                                             :languageId lsp-proxy--language
@@ -503,19 +503,19 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   "Notify that the document has been closed."
   (when (and lsp-proxy--buffer-opened buffer-file-name)
     (lsp-proxy--notify 'textDocument/didClose
-                       (list :textDocument (eglot--TextDocumentIdentifier)))
+                       (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
     (setq-local lsp-proxy--buffer-opened nil)))
 
 (defun lsp-proxy--will-save ()
   "Send textDocument/willSave notification."
   (lsp-proxy--notify 'textDocument/willSave
                      ;; 1 Manual, 2 AfterDelay, 3 FocusOut
-                     (list :textDocument (eglot--TextDocumentIdentifier) :reason 1)))
+                     (list :textDocument (lsp-proxy--TextDocumentIdentifier) :reason 1)))
 
 (defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
   (lsp-proxy--notify 'textDocument/didSave
-                     (list :textDocument (eglot--TextDocumentIdentifier)))
+                     (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
   (setq-local lsp-proxy--skip-auto-open nil))
 
 (defun lsp-proxy--send-did-change ()

@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 
 use super::ssh::SshConnection;
 
-/// Default location we install the remote binary. Chosen so it shows up on
-/// the user's PATH on typical Linux/macOS setups without needing sudo.
-pub const DEFAULT_REMOTE_BINARY_PATH: &str = "~/.local/bin/emacs-lsp-proxy";
+/// Default location we install the remote binary. Lives under the XDG-style
+/// cache directory so it doesn't pollute the user's PATH — callers invoke it
+/// by absolute path, not by name.
+pub const DEFAULT_REMOTE_BINARY_PATH: &str = "~/.cache/emacs/lsp-proxy/emacs-lsp-proxy";
 
 /// Version expected on the remote side — baked in at compile time so that
 /// upgrading the local crate naturally triggers a redeploy.

@@ -28,9 +28,16 @@ pub struct RemoteHost {
 
 impl RemoteHost {
     pub fn connection_key(&self) -> String {
+        // Empty user means "let ssh resolve via config" — omit the `@` so
+        // the key we cache matches how ssh would see the destination.
+        let user_part = if self.user.is_empty() {
+            String::new()
+        } else {
+            format!("{}@", self.user)
+        };
         match self.port {
-            Some(port) => format!("{}@{}:{}", self.user, self.host, port),
-            None => format!("{}@{}", self.user, self.host),
+            Some(port) => format!("{}{}:{}", user_part, self.host, port),
+            None => format!("{}{}", user_part, self.host),
         }
     }
 }

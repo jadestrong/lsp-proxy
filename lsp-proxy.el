@@ -515,7 +515,7 @@ Skip reopening notifications for buffers not currently visible."
    'textDocument/codeAction
    (lsp-proxy--build-params
     (list
-     :textDocument (eglot--TextDocumentIdentifier)
+     :textDocument (lsp-proxy--TextDocumentIdentifier)
      :range (if (use-region-p)
                 (lsp-proxy--region-range (region-beginning) (region-end))
               (lsp-proxy--region-range (point) (point)))
@@ -677,7 +677,7 @@ Request codeAction/resolve for more info if server supports."
                :trimTrailingWhitespace lsp-proxy-trim-trailing-whitespace
                :insertFinalNewline lsp-proxy-insert-final-newline
                :trimFinalNewlines lsp-proxy-trim-final-newlines)
-     :textDocument (eglot--TextDocumentIdentifier)))
+     :textDocument (lsp-proxy--TextDocumentIdentifier)))
    :success-fn (lambda (edits)
                  (when (buffer-live-p (current-buffer))
                    (if (and edits (> (length edits) 0))

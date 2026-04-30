@@ -27,7 +27,7 @@ Returns a promise that resolves with the response."
   (unless buffer-file-name
     (user-error "Buffer must be visiting a file to communicate with Copilot"))
 
-  (let* ((uri-plist (eglot--TextDocumentIdentifier))
+  (let* ((uri-plist (lsp-proxy--TextDocumentIdentifier))
          (uri (plist-get uri-plist :uri)))
     (lsp-proxy--request
      'emacs/forwardRequest

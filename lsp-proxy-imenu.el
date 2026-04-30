@@ -30,7 +30,7 @@ Returns a list as described in docstring of `imenu--index-alist'."
     (cl-return-from lsp-proxy-imenu))
   (let* ((res (lsp-proxy--request 'textDocument/documentSymbol
                                   (lsp-proxy--build-params
-                                   (list :textDocument (eglot--TextDocumentIdentifier)))
+                                   (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
                                   :cancel-on-input non-essential)))
     (lsp-proxy--convert-imenu-format res)))
 
