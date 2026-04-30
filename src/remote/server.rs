@@ -91,6 +91,22 @@ fn write_loop(receiver: Receiver<Message>) -> std::io::Result<()> {
     let mut buf = Vec::<u8>::new();
 
     for msg in receiver {
+        if let Message::Response(resp) = &msg {
+            let preview: String = resp
+                .result
+                .as_ref()
+                .map(|v| {
+                    let s = v.to_string();
+                    s[..s.len().min(512)].to_string()
+                })
+                .unwrap_or_else(|| "<none>".into());
+            debug!(
+                "remote-server write response id={:?} error={:?} result_preview={}",
+                resp.id,
+                resp.error.as_ref().map(|e| &e.message),
+                preview
+            );
+        }
         let envelope = match message_to_envelope(msg) {
             Ok(e) => e,
             Err(e) => {

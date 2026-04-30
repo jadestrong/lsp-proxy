@@ -185,9 +185,37 @@ impl RemoteConnectionManager {
 
         match transformed_message {
             Message::Request(request) => {
+                let method = request.method.clone();
                 let response = client.send_request(request).await?;
+                let result_preview = response
+                    .result
+                    .as_ref()
+                    .map(|v| {
+                        let s = v.to_string();
+                        s[..s.len().min(256)].to_string()
+                    })
+                    .unwrap_or_else(|| "<none>".into());
+                debug!(
+                    "remote response before transform method={} id={:?} error={:?} result_preview={}",
+                    method,
+                    response.id,
+                    response.error.as_ref().map(|e| &e.message),
+                    result_preview
+                );
                 // 转换响应中的路径：将远程路径转换回TRAMP路径
                 let transformed_response = self.transform_response_paths_from_remote(response, &remote_info)?;
+                let after_preview = transformed_response
+                    .result
+                    .as_ref()
+                    .map(|v| {
+                        let s = v.to_string();
+                        s[..s.len().min(256)].to_string()
+                    })
+                    .unwrap_or_else(|| "<none>".into());
+                debug!(
+                    "remote response after transform method={} id={:?} result_preview={}",
+                    method, transformed_response.id, after_preview
+                );
                 Ok(Some(Message::Response(transformed_response)))
             }
             Message::Notification(notification) => {

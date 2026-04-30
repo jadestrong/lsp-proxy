@@ -223,6 +223,20 @@ impl Controller {
                         Ok(msg) => {
                             match msg {
                                 Message::Response(resp) => {
+                                    let preview = resp
+                                        .result
+                                        .as_ref()
+                                        .map(|v| {
+                                            let s = v.to_string();
+                                            s[..s.len().min(256)].to_string()
+                                        })
+                                        .unwrap_or_else(|| "<none>".into());
+                                    debug!(
+                                        "controller remote response id={:?} error={:?} result_preview={}",
+                                        resp.id,
+                                        resp.error.as_ref().map(|e| &e.message),
+                                        preview
+                                    );
                                     self.respond(resp);
                                 }
                                 Message::Notification(not) => {

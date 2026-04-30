@@ -195,6 +195,20 @@ impl RpcClient {
                             Some(envelope::Payload::Response(resp)) => {
                                 if let Some(env_id) = envelope.responding_to {
                                     if let Some((orig_id, tx)) = pending.remove(&env_id) {
+                                        debug!(
+                                            "RPC recv response env_id={} orig_id={:?} result_bytes={} error={:?}",
+                                            env_id,
+                                            orig_id,
+                                            resp.result.as_ref().map(|b| b.len()).unwrap_or(0),
+                                            resp.error.as_ref().map(|e| &e.message)
+                                        );
+                                        if let Some(bytes) = resp.result.as_ref() {
+                                            let preview: String = String::from_utf8_lossy(
+                                                &bytes[..bytes.len().min(512)],
+                                            )
+                                            .into_owned();
+                                            debug!("RPC recv result preview: {}", preview);
+                                        }
                                         let response = decode_response(orig_id, resp);
                                         let _ = tx.send(response);
                                     } else {
