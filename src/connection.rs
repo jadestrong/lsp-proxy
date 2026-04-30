@@ -52,6 +52,13 @@ pub struct IoThreads {
 }
 
 impl IoThreads {
+    pub fn new(
+        reader: thread::JoinHandle<io::Result<()>>,
+        writer: thread::JoinHandle<io::Result<()>>,
+    ) -> Self {
+        Self { reader, writer }
+    }
+
     pub fn join(self) -> io::Result<()> {
         match self.reader.join() {
             Ok(r) => r?,

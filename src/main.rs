@@ -21,6 +21,7 @@ mod lsp_ext;
 mod main_loop;
 mod msg;
 mod registry;
+mod remote;
 mod req_queue;
 mod syntax;
 mod thread;
@@ -65,12 +66,14 @@ fn try_main() -> Result<()> {
         return Ok(());
     }
 
-    // Check if --stdio flag is provided
-    if !args.stdio {
-        eprintln!("Error: --stdio flag is required to start the server");
+    // One of --stdio or --remote-server must be set.
+    if !args.stdio && !args.remote_server {
+        eprintln!("Error: one of --stdio or --remote-server is required to start the server");
         eprintln!("Use --help for usage information");
         std::process::exit(1);
     }
+
+    let remote_server = args.remote_server;
 
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
@@ -91,10 +94,15 @@ fn try_main() -> Result<()> {
     }
 
     info!(
-        "Server starting... (version: {})",
-        env!("CARGO_PKG_VERSION")
+        "Server starting... (version: {}, mode: {})",
+        env!("CARGO_PKG_VERSION"),
+        if remote_server { "remote-server" } else { "stdio" }
     );
-    with_extra_thread("LspProxy", run_server)?;
+    if remote_server {
+        with_extra_thread("LspProxy", run_remote_server)?;
+    } else {
+        with_extra_thread("LspProxy", run_server)?;
+    }
 
     Ok(())
 }
@@ -122,6 +130,15 @@ fn run_server() -> Result<()> {
     let syn_loader_config = config::default_syntax_loader();
     main_loop(connect, syn_loader_config).unwrap();
     info!("Server started successfully.");
+    io_threads.join()?;
+    Ok(())
+}
+
+fn run_remote_server() -> Result<()> {
+    let (connect, io_threads) = remote::server::envelope_stdio();
+    let syn_loader_config = config::default_syntax_loader();
+    main_loop(connect, syn_loader_config).unwrap();
+    info!("Remote server started successfully.");
     io_threads.join()?;
     Ok(())
 }

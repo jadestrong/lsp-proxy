@@ -7,6 +7,7 @@ pub struct Args {
     pub log_level: u64,
     pub log_file: Option<PathBuf>,
     pub stdio: bool,
+    pub remote_server: bool,
     pub show_help: bool,
     pub show_version: bool,
     pub max_item_num: usize,
@@ -54,6 +55,7 @@ impl Args {
                     None => args.copilot_server_name = "copilot".to_string(),
                 },
                 "--stdio" => args.stdio = true,
+                "--remote-server" => args.remote_server = true,
                 "--bytecode" => args.enable_bytecode = true,
                 "-h" | "--help" => {
                     args.show_help = true;
@@ -83,6 +85,7 @@ impl Args {
         println!("        --max-item <NUM>      Maximum completion items (default: 20)");
         println!("        --max-diagnostics-push <NUM>  Maximum diagnostics to push (default: 50)");
         println!("        --stdio               Enable stdio communication mode (required)");
+        println!("        --remote-server       Run as a remote server (reads/writes Protobuf Envelopes on stdio)");
         println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");
