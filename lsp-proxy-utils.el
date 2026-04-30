@@ -235,23 +235,34 @@ Rust remote router can dispatch the request."
         :position (eglot--pos-to-lsp-position)))
 
 (defun lsp-proxy--uri-to-path (uri)
-  "Convert URI to file path."
+  "Convert URI to file path.
+When the URI's path already carries a TRAMP method marker (`/ssh:' or
+`/rpc:') the Rust backend preserved the remote identity in the URI
+itself — we must NOT glue the project's own remote-prefix on top, or
+the path ends up with the method/host segment doubled (which then
+fails to open on the remote FS)."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-proxy--current-project-root (file-remote-p lsp-proxy--current-project-root)))
+  (let* ((remote-prefix (and lsp-proxy--current-project-root
+                             (file-remote-p lsp-proxy--current-project-root)))
          (url (url-generic-parse-url uri)))
-    ;; Only parse file:// URIs, leave other URI untouched as
+    ;; Only parse file:// URIs, leave other URIs untouched as
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
         (let* ((retval (url-unhex-string (url-filename url)))
+               (already-tramp (or (string-prefix-p "/ssh:" retval)
+                                  (string-prefix-p "/rpc:" retval)))
                ;; Remove the leading "/" for local MS Windows-style paths.
                (normalized (if (and (not remote-prefix)
+                                    (not already-tramp)
                                     (eq system-type 'windows-nt)
                                     (cl-plusp (length retval))
                                     (eq (aref retval 0) ?/))
                                (w32-long-file-name (substring retval 1))
                              retval)))
-          (concat remote-prefix normalized))
+          (if already-tramp
+              normalized
+            (concat remote-prefix normalized)))
       uri)))
 
 ;;; Snippet expansion
