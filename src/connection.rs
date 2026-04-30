@@ -1,5 +1,6 @@
 use crate::msg::Message;
 use crossbeam_channel::{bounded, Receiver, Sender};
+use log::{debug, error};
 use std::{
     io::{self, stdin, stdout},
     thread,
@@ -28,12 +29,24 @@ impl Connection {
         let reader = thread::spawn(move || {
             let stdin = stdin();
             let mut stdin = stdin.lock();
-            while let Some(msg) = Message::read(&mut stdin)? {
-                reader_sender
-                    .send(msg)
-                    .expect("receiver was dropped, failed to send a message.");
+            loop {
+                match Message::read(&mut stdin) {
+                    Ok(Some(msg)) => {
+                        if let Err(e) = reader_sender.send(msg) {
+                            error!("stdio reader: inbox receiver dropped: {}", e);
+                            return Ok(());
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("stdio reader: EOF on stdin, exiting");
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        error!("stdio reader: read error on stdin: {}", e);
+                        return Err(e);
+                    }
+                }
             }
-            Ok(())
         });
         let threads = IoThreads { reader, writer };
         (

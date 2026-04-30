@@ -274,6 +274,19 @@ pub(crate) async fn handle_completion(
 
         COMPLETION_CACHE.try_lock().unwrap().clear_cache();
 
+        debug!(
+            "completion: candidate servers = {:?}",
+            language_servers
+                .iter()
+                .map(|ls| format!(
+                    "{}(init={},feature={})",
+                    ls.name(),
+                    ls.is_initialized(),
+                    ls.with_feature(LanguageServerFeature::Completion)
+                ))
+                .collect::<Vec<_>>()
+        );
+
         let lang_servers = language_servers
             .iter()
             .filter(|ls| ls.with_feature(LanguageServerFeature::Completion));
@@ -365,14 +378,21 @@ pub(crate) async fn handle_completion(
                     let response: Option<lsp_types::CompletionResponse> =
                         serde_json::from_value(json)?;
 
-                    let items = match response {
+                    let raw_items = match response {
                         Some(lsp_types::CompletionResponse::Array(items)) => items,
                         Some(lsp_types::CompletionResponse::List(lsp_types::CompletionList {
                             is_incomplete: _is_incomplete,
                             items,
                         })) => items,
                         None => Vec::new(),
-                    }
+                    };
+                    debug!(
+                        "completion [{:?}] {} raw items from {:?}",
+                        id,
+                        raw_items.len(),
+                        language_server_name
+                    );
+                    let items = raw_items
                     .into_iter()
                     .map(|item| {
                         let mut new_item = truncate_completion_item(item);
@@ -441,6 +461,13 @@ pub(crate) async fn handle_completion(
                         }
                     }
                 }
+                debug!(
+                    "completion collected items={} prefix={:?} pretext={:?} position={:?}",
+                    items.len(),
+                    context.prefix,
+                    pretext,
+                    params.text_document_position.position
+                );
 
                 // cache items with pretext\uri\bounds_start
                 // NOTE 只有当 prefix 存在的情况下才缓存，空 prefix 的补全结果是不准确的
@@ -461,18 +488,35 @@ pub(crate) async fn handle_completion(
                     &context.prefix,
                 );
                 info!("filter elapsed {:0.2?}", now.elapsed());
+                debug!(
+                    "completion after fuzzy filter: in={} out={}",
+                    items.len(),
+                    filtered_items.len()
+                );
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len == 0 {
+                    debug!("completion return all filtered items: {}", filtered_items.len());
                     anyhow::Ok(filtered_items.to_owned())
                 } else {
                     let slice_length = std::cmp::min(*max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
+                    debug!(
+                        "completion return slice: max={} slice_len={}",
+                        max_items, slice_length
+                    );
                     anyhow::Ok(slice_items.to_owned())
                 }
             };
 
             let res = items_future.await;
             match res {
-                Ok(res) => Response::new_ok(req.id.clone(), res),
+                Ok(res) => {
+                    debug!(
+                        "completion final Response::new_ok items={} id={:?}",
+                        res.len(),
+                        req.id
+                    );
+                    Response::new_ok(req.id.clone(), res)
+                }
                 Err(e) => create_error_response(&req.id, e.to_string()),
             }
         };
