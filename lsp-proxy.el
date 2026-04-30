@@ -190,7 +190,7 @@
   (let ((orig-major-mode major-mode))
     (lsp-proxy--async-request
      'rust-analyzer/expandMacro
-     (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+     (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
      :success-fn
      (lambda (resp)
        (-if-let* ((expansion (plist-get resp :expansion))
@@ -599,7 +599,7 @@ Request codeAction/resolve for more info if server supports."
   (lsp-proxy--async-request
    'textDocument/rename
    (lsp-proxy--build-params
-    (append (eglot--TextDocumentPositionParams) `(:newName ,newname)))
+    (append (lsp-proxy--TextDocumentPositionParams) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
                      (eglot--apply-workspace-edit edits this-command)
@@ -697,7 +697,7 @@ Request codeAction/resolve for more info if server supports."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/hover
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn (lambda (hover-help)
                  (if (and hover-help (not (equal hover-help "")))
                      (with-current-buffer (get-buffer-create lsp-proxy-hover-buffer)
@@ -715,7 +715,7 @@ Request codeAction/resolve for more info if server supports."
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/hover
-       (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+       (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
        :success-fn (lambda (hover-help)
                      (eglot--when-buffer-window buf
                        (let* ((info (unless (string-empty-p hover-help)
@@ -759,7 +759,7 @@ most recently requested highlights.")
         (setq lsp-proxy--symbol-bounds-of-last-highlight-invocation curr-sym-bounds)
         (lsp-proxy--async-request
          'textDocument/documentHighlight
-         (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+         (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
          :success-fn
          (lambda (highlights)
            (mapc #'delete-overlay lsp-proxy--highlights)

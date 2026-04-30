@@ -525,7 +525,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                            (string= lsp-proxy--text-document-sync-kind "full"))))
       (lsp-proxy--notify 'textDocument/didChange
                          (list :textDocument
-                               (eglot--VersionedTextDocumentIdentifier)
+                               (lsp-proxy--VersionedTextDocumentIdentifier)
                                :contentChanges
                                (if full-sync-p
                                    (vector (list :text (eglot--widening

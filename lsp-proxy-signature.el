@@ -24,7 +24,7 @@
       (lsp-proxy--async-request
        'textDocument/signatureHelp
        (lsp-proxy--build-params
-        (eglot--TextDocumentPositionParams))
+        (lsp-proxy--TextDocumentPositionParams))
        :success-fn
        (eglot--lambda ((SignatureHelp)
                        signatures activeSignature (activeParameter 0))

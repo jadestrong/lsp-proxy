@@ -68,6 +68,10 @@ impl Controller {
             Some(manager) => {
                 let (task_tx, task_rx) = mpsc::unbounded_channel::<RemoteTask>();
                 let (result_tx, result_rx) = bounded::<Message>(64);
+                // Give the manager the same result sink so per-connection
+                // bridges can push server-initiated notifications through
+                // the same select! arm the remote worker uses for Responses.
+                manager.set_result_sink(result_tx.clone());
                 spawn_remote_worker(manager, task_rx, result_tx);
                 (Some(task_tx), Some(result_rx))
             }

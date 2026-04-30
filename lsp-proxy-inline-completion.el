@@ -169,7 +169,7 @@ To work around posn problems with after-string property.")
       (lsp-proxy--async-request
        'textDocument/inlineCompletion
        (lsp-proxy--build-params
-        (append (eglot--TextDocumentPositionParams)
+        (append (lsp-proxy--TextDocumentPositionParams)
                 `(:context (:triggerKind ,(if implicit 2 1))))
         `(:context
           (:triggerKind ,(if implicit 2 1)

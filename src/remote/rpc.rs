@@ -6,6 +6,7 @@ use prost::Message as ProstMessage;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender as TokioUnboundedSender;
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
@@ -73,12 +74,21 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
-    pub fn new<S>(stream: S) -> Result<Self>
+    /// Create an RpcClient over `stream`. When `unsolicited` is `Some(_)`,
+    /// server-originated Notifications (and Requests) that arrive on the
+    /// stream are decoded and pushed to that channel, so the caller can
+    /// forward them to Emacs (e.g. for `textDocument/publishDiagnostics`).
+    /// When `None`, they are silently dropped — useful for tests and for
+    /// code paths that only care about request/response round-trips.
+    pub fn new<S>(
+        stream: S,
+        unsolicited: Option<TokioUnboundedSender<Message>>,
+    ) -> Result<Self>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
-        tokio::spawn(Self::run_communication_loop(stream, receiver));
+        tokio::spawn(Self::run_communication_loop(stream, receiver, unsolicited));
         Ok(Self {
             sender,
             next_id: Arc::new(AtomicU32::new(1)),
@@ -108,8 +118,11 @@ impl RpcClient {
         Ok(())
     }
 
-    async fn run_communication_loop<S>(mut stream: S, mut receiver: UnboundedReceiver<OutgoingCommand>)
-    where
+    async fn run_communication_loop<S>(
+        mut stream: S,
+        mut receiver: UnboundedReceiver<OutgoingCommand>,
+        unsolicited: Option<TokioUnboundedSender<Message>>,
+    ) where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
         // envelope_id -> (original LSP request id, response sender)
@@ -178,8 +191,8 @@ impl RpcClient {
                 }
                 incoming = read_envelope(&mut stream, &mut buffer) => {
                     match incoming {
-                        Ok(envelope) => {
-                            if let Some(envelope::Payload::Response(resp)) = envelope.payload {
+                        Ok(envelope) => match envelope.payload {
+                            Some(envelope::Payload::Response(resp)) => {
                                 if let Some(env_id) = envelope.responding_to {
                                     if let Some((orig_id, tx)) = pending.remove(&env_id) {
                                         let response = decode_response(orig_id, resp);
@@ -190,11 +203,23 @@ impl RpcClient {
                                 } else {
                                     debug!("Response envelope missing responding_to");
                                 }
-                            } else {
-                                // Client currently ignores server-initiated requests and notifications.
-                                debug!("Ignoring non-response envelope from server");
                             }
-                        }
+                            Some(envelope::Payload::Notification(notif)) => {
+                                match decode_notification(notif) {
+                                    Ok(msg) => forward_unsolicited(&unsolicited, msg),
+                                    Err(e) => warn!("bad server notification: {}", e),
+                                }
+                            }
+                            Some(envelope::Payload::Request(req)) => {
+                                match decode_server_request(envelope.id, req) {
+                                    Ok(msg) => forward_unsolicited(&unsolicited, msg),
+                                    Err(e) => warn!("bad server request: {}", e),
+                                }
+                            }
+                            None => {
+                                debug!("envelope with no payload");
+                            }
+                        },
                         Err(e) => {
                             error!("RPC read error: {}", e);
                             break;
@@ -211,6 +236,40 @@ impl RpcClient {
 
     pub fn next_request_id(&self) -> u32 {
         self.next_id.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+fn decode_notification(notif: proto::Notification) -> Result<Message> {
+    let params: crate::msg::Params = serde_json::from_slice(&notif.params)?;
+    Ok(Message::Notification(Notification {
+        method: notif.method,
+        params,
+    }))
+}
+
+fn decode_server_request(envelope_id: Option<u32>, req: proto::Request) -> Result<Message> {
+    let params: crate::msg::Params = serde_json::from_slice(&req.params)?;
+    // Server-initiated requests still need an id so the client can respond.
+    let id = envelope_id
+        .map(|n| RequestId::from(n as i32))
+        .ok_or_else(|| anyhow!("server request envelope missing id"))?;
+    Ok(Message::Request(Request {
+        id,
+        method: req.method,
+        params,
+    }))
+}
+
+fn forward_unsolicited(sink: &Option<TokioUnboundedSender<Message>>, msg: Message) {
+    match sink {
+        Some(tx) => {
+            if let Err(e) = tx.send(msg) {
+                debug!("unsolicited channel closed: {}", e);
+            }
+        }
+        None => {
+            debug!("no unsolicited sink configured, dropping server-initiated message");
+        }
     }
 }
 
@@ -477,7 +536,8 @@ mod tests {
             let _ = server.serve(server_stream).await;
         });
 
-        RpcClient::new(client_stream).expect("build RpcClient")
+        // Tests don't care about server-initiated messages, so pass None.
+        RpcClient::new(client_stream, None).expect("build RpcClient")
     }
 
     #[tokio::test]

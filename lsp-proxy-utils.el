@@ -213,6 +213,27 @@ Rust-side remote router can recognise."
       (error "lsp-proxy: buffer has no file name"))
     (list :uri (lsp-proxy--path-to-uri path))))
 
+(defun lsp-proxy--VersionedTextDocumentIdentifier ()
+  "Build a VersionedTextDocumentIdentifier for the current buffer.
+Mirrors `eglot--VersionedTextDocumentIdentifier' but routes the URI
+through `lsp-proxy--path-to-uri' so TRAMP prefixes survive.
+Reads the version directly from the eglot-side buffer-local variables
+to avoid a circular require on `lsp-proxy-core'."
+  (let ((version (cond ((boundp 'eglot--docver) eglot--docver)
+                       ((boundp 'eglot--versioned-identifier)
+                        eglot--versioned-identifier)
+                       (t 0))))
+    (append (lsp-proxy--TextDocumentIdentifier)
+            (list :version version))))
+
+(defun lsp-proxy--TextDocumentPositionParams ()
+  "Build a TextDocumentPositionParams for the current buffer + point.
+Mirrors `eglot--TextDocumentPositionParams' but the embedded URI goes
+through `lsp-proxy--path-to-uri', keeping TRAMP prefixes intact so the
+Rust remote router can dispatch the request."
+  (list :textDocument (lsp-proxy--TextDocumentIdentifier)
+        :position (eglot--pos-to-lsp-position)))
+
 (defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))

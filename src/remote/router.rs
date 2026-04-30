@@ -12,6 +12,7 @@ use super::{
     detector::{RemoteDetector, RemoteInfo, RemotePathInfo},
     rpc::RpcClient,
     ssh::{SshConnection, SshConnectionOptions},
+    RemoteType,
 };
 use crate::msg::{Message, Response};
 
@@ -20,6 +21,10 @@ pub struct RemoteConnectionManager {
     detector: RemoteDetector,
     ssh_connections: Arc<Mutex<HashMap<String, Arc<SshConnection>>>>,
     rpc_clients: Arc<Mutex<HashMap<String, Arc<RpcClient>>>>,
+    /// Where path-corrected server-initiated messages get pushed. Set once
+    /// by the Controller during startup; each new RpcClient spawns a bridge
+    /// task that drains its unsolicited channel into this sink.
+    result_sink: Arc<parking_lot::Mutex<Option<crossbeam_channel::Sender<Message>>>>,
 }
 
 impl RemoteConnectionManager {
@@ -28,7 +33,15 @@ impl RemoteConnectionManager {
             detector: RemoteDetector::new()?,
             ssh_connections: Arc::new(Mutex::new(HashMap::new())),
             rpc_clients: Arc::new(Mutex::new(HashMap::new())),
+            result_sink: Arc::new(parking_lot::Mutex::new(None)),
         })
+    }
+
+    /// Install the channel used to deliver server-initiated notifications /
+    /// requests back to the Controller (and from there to Emacs). Must be
+    /// called before the first remote connection is opened.
+    pub fn set_result_sink(&self, sink: crossbeam_channel::Sender<Message>) {
+        *self.result_sink.lock() = Some(sink);
     }
 
     /// 检查是否为远程路径
@@ -89,7 +102,37 @@ impl RemoteConnectionManager {
 
         // 创建RPC客户端，使用SSH隧道
         let stream = SshRpcStream::from_child_stdio(lsp_process.stdin, lsp_process.stdout);
-        let client = Arc::new(RpcClient::new(stream)?);
+
+        // Set up the unsolicited-message bridge: the RpcClient pushes raw
+        // server-initiated messages into a per-client tokio channel, and we
+        // spawn a small task that rewrites URIs to TRAMP form and forwards
+        // them to the Controller's result sink.
+        let (unsolicited_tx, mut unsolicited_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Message>();
+        let client = Arc::new(RpcClient::new(stream, Some(unsolicited_tx))?);
+
+        let sink_snapshot = self.result_sink.lock().clone();
+        match sink_snapshot {
+            Some(sink) => {
+                let ri = remote_info.clone();
+                tokio::spawn(async move {
+                    while let Some(mut msg) = unsolicited_rx.recv().await {
+                        rewrite_to_tramp(&mut msg, &ri);
+                        if sink.send(msg).is_err() {
+                            debug!("controller result channel closed; stopping bridge");
+                            break;
+                        }
+                    }
+                });
+            }
+            None => {
+                warn!(
+                    "no result sink set on RemoteConnectionManager; \
+                     server-initiated notifications for {} will be dropped",
+                    connection_key
+                );
+            }
+        }
 
         clients.insert(connection_key.clone(), client.clone());
         info!("Created new RPC client for {}", connection_key);
@@ -319,6 +362,81 @@ impl RemoteConnectionManager {
     }
 }
 
+/// Rewrite every `uri` field inside a server-originated Message so Emacs sees
+/// a TRAMP path (`file:///rpc:user@host:/abs/path`) instead of the bare local
+/// path the remote LSP uses internally (`file:///abs/path`).
+///
+/// Applies to both the top-level `Params.uri` and URIs nested anywhere inside
+/// `Params.params` JSON (LSP's position/range/textDocument/locationLink etc.).
+fn rewrite_to_tramp(msg: &mut Message, remote_info: &RemoteInfo) {
+    let params = match msg {
+        Message::Notification(n) => &mut n.params,
+        Message::Request(r) => &mut r.params,
+        Message::Response(_) => return,
+    };
+    if let Some(uri) = params.uri.as_deref() {
+        if let Some(new) = local_file_uri_to_tramp(uri, remote_info) {
+            params.uri = Some(new);
+        }
+    }
+    rewrite_uris_in_json(&mut params.params, remote_info);
+}
+
+fn rewrite_uris_in_json(value: &mut serde_json::Value, remote_info: &RemoteInfo) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                let is_uri_key = key == "uri" || key.ends_with("Uri");
+                if is_uri_key {
+                    if let Some(s) = val.as_str() {
+                        if let Some(new) = local_file_uri_to_tramp(s, remote_info) {
+                            *val = serde_json::Value::String(new);
+                        }
+                    } else {
+                        // Non-string uri field (rare, but defensively recurse).
+                        rewrite_uris_in_json(val, remote_info);
+                    }
+                } else {
+                    rewrite_uris_in_json(val, remote_info);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                rewrite_uris_in_json(item, remote_info);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// `file:///abs/path` → `file:///rpc:user@host:/abs/path` (or /ssh:, depending
+/// on remote_info). Returns None when the input isn't a `file://` URI, so the
+/// caller knows to leave it alone.
+fn local_file_uri_to_tramp(uri: &str, remote_info: &RemoteInfo) -> Option<String> {
+    let remote_path = uri.strip_prefix("file://")?;
+    let type_str = match remote_info.host.remote_type {
+        RemoteType::Ssh => "ssh",
+        RemoteType::Rpc => "rpc",
+    };
+    let user_part = if remote_info.host.user.is_empty() {
+        String::new()
+    } else {
+        format!("{}@", remote_info.host.user)
+    };
+    let tramp = match remote_info.host.port {
+        Some(port) => format!(
+            "/{}:{}{}#{}:{}",
+            type_str, user_part, remote_info.host.host, port, remote_path
+        ),
+        None => format!(
+            "/{}:{}{}:{}",
+            type_str, user_part, remote_info.host.host, remote_path
+        ),
+    };
+    Some(format!("file://{}", tramp))
+}
+
 /// SSH RPC 流适配器 — 把子进程的 stdin/stdout 组合成一个同时实现
 /// `futures::AsyncRead` 和 `futures::AsyncWrite` 的双向流。
 ///
@@ -466,6 +584,72 @@ mod tests {
         assert_eq!(
             transformed[1]["uri"],
             "file:///ssh:alice@box:/home/alice/b.py"
+        );
+    }
+
+    #[test]
+    fn unsolicited_notification_rewrites_nested_uris_to_tramp() {
+        // Simulate what arrives from the remote LSP: a publishDiagnostics
+        // notification referencing the on-remote absolute path. The bridge
+        // must rewrite it to the TRAMP form Emacs is visiting.
+        let remote_info = RemoteInfo {
+            host: super::super::RemoteHost {
+                remote_type: RemoteType::Rpc,
+                user: "jadestrong".to_string(),
+                host: "100.127.163.35".to_string(),
+                port: None,
+            },
+            remote_path: "/".to_string(),
+        };
+
+        let mut msg = crate::msg::Message::Notification(crate::msg::Notification {
+            method: "textDocument/publishDiagnostics".to_string(),
+            params: crate::msg::Params {
+                uri: Some("file:///Users/jadestrong/proj/file.ts".to_string()),
+                context: None,
+                virtual_doc: None,
+                params: serde_json::json!({
+                    "uri": "file:///Users/jadestrong/proj/file.ts",
+                    "diagnostics": [
+                        { "relatedInformation": [
+                            { "location": { "uri": "file:///Users/jadestrong/proj/other.ts" } }
+                        ]}
+                    ]
+                }),
+            },
+        });
+
+        rewrite_to_tramp(&mut msg, &remote_info);
+
+        let expected = "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/proj/file.ts";
+        let expected_other = "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/proj/other.ts";
+        match msg {
+            crate::msg::Message::Notification(n) => {
+                assert_eq!(n.params.uri.as_deref(), Some(expected));
+                assert_eq!(n.params.params["uri"], expected);
+                assert_eq!(
+                    n.params.params["diagnostics"][0]["relatedInformation"][0]["location"]["uri"],
+                    expected_other
+                );
+            }
+            _ => panic!("expected notification"),
+        }
+    }
+
+    #[test]
+    fn local_file_uri_to_tramp_for_ssh_alias_without_user() {
+        let info = RemoteInfo {
+            host: super::super::RemoteHost {
+                remote_type: RemoteType::Ssh,
+                user: "".to_string(),
+                host: "home".to_string(),
+                port: None,
+            },
+            remote_path: "/".to_string(),
+        };
+        assert_eq!(
+            local_file_uri_to_tramp("file:///Users/me/a.ts", &info).as_deref(),
+            Some("file:///ssh:home:/Users/me/a.ts"),
         );
     }
 

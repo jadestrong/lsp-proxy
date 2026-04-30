@@ -118,7 +118,7 @@ instead of sending LSP requests."
                    (resp (lsp-proxy--request
                           'textDocument/completion
                           (lsp-proxy--build-params
-                           (eglot--TextDocumentPositionParams)
+                           (lsp-proxy--TextDocumentPositionParams)
                            `(:context
                              (:line ,(buffer-substring-no-properties (line-beginning-position) (line-end-position))
                               :prefix ,prefix
