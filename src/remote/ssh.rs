@@ -1,13 +1,13 @@
-use anyhow::{Result, anyhow, Context};
+use anyhow::{anyhow, Context, Result};
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::process::{Child, Command};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::Mutex;
 use tempfile::TempDir;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
 
 use super::RemoteHost;
 
@@ -77,7 +77,11 @@ impl SshConnectionOptions {
     pub fn new(host: String, username: String) -> Self {
         // Empty username means "let ssh resolve via ~/.ssh/config", which is
         // the common case with SSH aliases like `Host home\n  User me`.
-        let username = if username.is_empty() { None } else { Some(username) };
+        let username = if username.is_empty() {
+            None
+        } else {
+            Some(username)
+        };
         Self {
             host: host.into(),
             username,
@@ -251,10 +255,7 @@ impl MasterProcess {
             if self.socket_path.exists()
                 && ssh_check_master(&self.socket_path, &self.destination).await?
             {
-                info!(
-                    "SSH master ready (socket {})",
-                    self.socket_path.display()
-                );
+                info!("SSH master ready (socket {})", self.socket_path.display());
                 return Ok(());
             }
 
@@ -290,10 +291,7 @@ impl MasterProcess {
 
         loop {
             if let Some(status) = self.process.try_wait()? {
-                return Err(anyhow!(
-                    "SSH master exited early with status {}",
-                    status
-                ));
+                return Err(anyhow!("SSH master exited early with status {}", status));
             }
 
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -337,10 +335,7 @@ impl MasterProcess {
 
 /// Verify the ssh master at `socket_path` is still responsive.
 #[cfg(not(target_os = "windows"))]
-async fn ssh_check_master(
-    socket_path: &std::path::Path,
-    destination: &str,
-) -> Result<bool> {
+async fn ssh_check_master(socket_path: &std::path::Path, destination: &str) -> Result<bool> {
     let output = Command::new("ssh")
         .arg("-o")
         .arg(format!("ControlPath={}", socket_path.display()))
@@ -444,13 +439,17 @@ impl SshConnection {
 
         if master_guard.is_none() {
             let destination = self.socket.connection_options.destination();
-            let additional_args = self.socket.connection_options.args
+            let additional_args = self
+                .socket
+                .connection_options
+                .args
                 .as_ref()
                 .cloned()
                 .unwrap_or_default();
 
             #[cfg(not(target_os = "windows"))]
-            let master = MasterProcess::new(&self.socket.socket_path, &destination, additional_args).await?;
+            let master =
+                MasterProcess::new(&self.socket.socket_path, &destination, additional_args).await?;
 
             #[cfg(target_os = "windows")]
             let master = MasterProcess::new(&destination, additional_args).await?;
@@ -509,11 +508,7 @@ impl SshConnection {
     /// Copy a local file to a remote path via `scp`, reusing the SSH
     /// ControlMaster socket for zero-handshake transfer. Caller should ensure
     /// the parent directory exists (use [`run_command`] with `mkdir -p`).
-    pub async fn scp_upload(
-        &self,
-        local_path: &std::path::Path,
-        remote_path: &str,
-    ) -> Result<()> {
+    pub async fn scp_upload(&self, local_path: &std::path::Path, remote_path: &str) -> Result<()> {
         self.ensure_master_connection().await?;
 
         let mut cmd = Command::new("scp");
@@ -558,7 +553,14 @@ impl SshConnection {
 
         // 构造启动远程LSP代理的命令。远程端必须使用 --remote-server 模式,
         // 这样 stdio 上走的是 Protobuf Envelope 协议,与本地 RpcClient 对齐。
-        let command = format!("{} --remote-server", remote_path);
+        // 把本地的 log-level 透传过去,远端才会写出有内容的 log
+        // (默认落在远端 binary 所在目录下的 `remote-server.log`)。
+        let log_level = crate::config::log_level();
+        let command = if log_level > 0 {
+            format!("{} --remote-server --log-level {}", remote_path, log_level)
+        } else {
+            format!("{} --remote-server", remote_path)
+        };
 
         let mut cmd = Command::new("ssh");
 
@@ -588,8 +590,14 @@ impl SshConnection {
         info!("Starting remote LSP proxy: {}", command);
         let mut process = cmd.spawn().context("Failed to spawn remote LSP proxy")?;
 
-        let stdin = process.stdin.take().ok_or_else(|| anyhow!("Failed to get stdin"))?;
-        let stdout = process.stdout.take().ok_or_else(|| anyhow!("Failed to get stdout"))?;
+        let stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdin"))?;
+        let stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to get stdout"))?;
 
         Ok(SshLspProcess {
             process,
@@ -612,11 +620,16 @@ pub struct SshLspProcess {
 
 impl SshLspProcess {
     pub async fn wait(&mut self) -> Result<std::process::ExitStatus> {
-        self.process.wait().await.context("SSH LSP process wait failed")
+        self.process
+            .wait()
+            .await
+            .context("SSH LSP process wait failed")
     }
 
     pub fn kill(&mut self) -> Result<()> {
-        self.process.start_kill().context("Failed to kill SSH LSP process")
+        self.process
+            .start_kill()
+            .context("Failed to kill SSH LSP process")
     }
 }
 
@@ -653,10 +666,7 @@ mod tests {
     async fn ssh_check_master_returns_false_for_missing_socket() {
         // Pointing at a socket that doesn't exist must surface as "not alive"
         // rather than panicking or hanging.
-        let tmp = std::env::temp_dir().join(format!(
-            "lsp-proxy-ssh-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp = std::env::temp_dir().join(format!("lsp-proxy-ssh-test-{}", uuid::Uuid::new_v4()));
         assert!(!tmp.exists());
         let alive = ssh_check_master(&tmp, "nobody@nowhere.invalid")
             .await
@@ -679,8 +689,8 @@ mod tests {
             .spawn()
             .expect("spawn test master");
 
-        let socket_path = std::env::temp_dir()
-            .join(format!("lsp-proxy-ssh-test-{}", uuid::Uuid::new_v4()));
+        let socket_path =
+            std::env::temp_dir().join(format!("lsp-proxy-ssh-test-{}", uuid::Uuid::new_v4()));
         let mut master = MasterProcess {
             process: child,
             socket_path,

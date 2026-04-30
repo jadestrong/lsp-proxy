@@ -75,6 +75,13 @@ fn try_main() -> Result<()> {
 
     let remote_server = args.remote_server;
 
+    // Tell `default_log_file` whether we're the remote side BEFORE we touch
+    // the LOG_FILE slot — otherwise the remote binary would fall back to
+    // `~/Library/Caches/lsp-proxy/default.log` even though the user has no
+    // reason to look there.
+    config::set_remote_server_mode(remote_server);
+    config::set_log_level(args.log_level);
+
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
     set_max_completion_items(args.max_item_num);
