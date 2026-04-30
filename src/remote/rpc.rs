@@ -95,6 +95,15 @@ impl RpcClient {
         })
     }
 
+    /// Returns true if the background communication loop has exited (usually
+    /// because the underlying transport died). Cached clients that report
+    /// `is_dead()` must be evicted and recreated before the next request —
+    /// otherwise every subsequent `send_request` fails instantly with
+    /// "channel closed".
+    pub fn is_dead(&self) -> bool {
+        self.sender.is_closed()
+    }
+
     pub async fn send_request(&self, request: Request) -> Result<Response> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender

@@ -85,7 +85,23 @@ impl RemoteConnectionManager {
         let mut clients = self.rpc_clients.lock().await;
 
         if let Some(client) = clients.get(&connection_key) {
-            return Ok(client.clone());
+            if !client.is_dead() {
+                return Ok(client.clone());
+            }
+            // The background communication loop exited — the SSH tunnel or
+            // remote process died. Evict the zombie so the code below spawns
+            // a fresh tunnel instead of handing back a guaranteed-to-fail
+            // client for the rest of the session.
+            warn!(
+                "RPC client for {} is dead; evicting and reconnecting",
+                connection_key
+            );
+            clients.remove(&connection_key);
+            // A dead RPC client typically means the SSH child exited; the
+            // master socket may also have gone stale. Force a fresh SSH
+            // connection too so we don't reuse a broken ControlPath.
+            let mut ssh = self.ssh_connections.lock().await;
+            ssh.remove(&connection_key);
         }
 
         // 通过SSH启动远程LSP代理并创建RPC客户端

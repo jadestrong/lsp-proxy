@@ -607,6 +607,28 @@ impl SshConnection {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("Failed to get stdout"))?;
+        // Surface the remote process's stderr into our log so that when ssh
+        // or the remote binary dies (bad arg, not-executable, gatekeeper,
+        // missing LD libs) we can see WHY instead of just "RPC channel closed".
+        if let Some(stderr) = process.stderr.take() {
+            tokio::spawn(async move {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => warn!("[remote stderr] {}", line),
+                        Ok(None) => {
+                            debug!("[remote stderr] EOF");
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("[remote stderr] read error: {}", e);
+                            break;
+                        }
+                    }
+                }
+            });
+        }
 
         Ok(SshLspProcess {
             process,
