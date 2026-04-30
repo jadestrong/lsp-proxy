@@ -141,14 +141,24 @@ impl MasterProcess {
     ) -> Result<Self> {
         let args = [
             "-N",
+            // ControlPersist=yes keeps the master alive in the background
+            // after startup. With `ControlPersist=no` the master would exit
+            // as soon as its "initial client" (which with -N doesn't exist)
+            // would have closed — effectively making it exit immediately.
             "-o",
-            "ControlPersist=no",
+            "ControlPersist=yes",
             "-o",
             "ControlMaster=yes",
+            // Don't prompt for host-key confirmation when running
+            // non-interactively; we treat the SSH config's trust of the host
+            // as sufficient. Callers wanting stricter policy can override via
+            // connection args.
             "-o",
-            "StrictHostKeyChecking=no",
+            "StrictHostKeyChecking=accept-new",
+            // Also silence the "Permanently added … to known hosts" warning
+            // that litters stderr and made earlier debugging noisy.
             "-o",
-            "UserKnownHostsFile=/dev/null",
+            "LogLevel=ERROR",
         ];
 
         let mut master_process = Command::new("ssh");
@@ -215,15 +225,27 @@ impl MasterProcess {
     #[cfg(not(target_os = "windows"))]
     pub async fn wait_connected(&mut self) -> Result<()> {
         let deadline = std::time::Instant::now() + MASTER_READY_TIMEOUT;
+        // With ControlPersist=yes, ssh forks a background daemon and the
+        // foreground process exits 0 almost immediately. That's expected —
+        // the real master lives on via the control socket. Treat exit 0 as
+        // "daemonised successfully" and keep polling; only non-zero exits
+        // are actual failures.
+        let mut foreground_reaped = false;
 
         loop {
-            if let Some(status) = self.process.try_wait()? {
-                let stderr_msg = self.drain_stderr().await;
-                return Err(anyhow!(
-                    "SSH master exited early with status {}: {}",
-                    status,
-                    stderr_msg.trim()
-                ));
+            if !foreground_reaped {
+                if let Some(status) = self.process.try_wait()? {
+                    if status.success() {
+                        foreground_reaped = true;
+                    } else {
+                        let stderr_msg = self.drain_stderr().await;
+                        return Err(anyhow!(
+                            "SSH master exited early with status {}: {}",
+                            status,
+                            stderr_msg.trim()
+                        ));
+                    }
+                }
             }
 
             if self.socket_path.exists()
@@ -237,10 +259,18 @@ impl MasterProcess {
             }
 
             if std::time::Instant::now() >= deadline {
+                let detail = if foreground_reaped {
+                    format!(
+                        "ssh daemonised but socket {} never responded",
+                        self.socket_path.display()
+                    )
+                } else {
+                    format!("socket {} never appeared", self.socket_path.display())
+                };
                 return Err(anyhow!(
-                    "SSH master not ready within {:?} (socket {} never responded)",
+                    "SSH master not ready within {:?} ({})",
                     MASTER_READY_TIMEOUT,
-                    self.socket_path.display()
+                    detail
                 ));
             }
 
@@ -330,8 +360,20 @@ impl SshSocket {
     pub fn new(connection_options: SshConnectionOptions) -> Result<Self> {
         #[cfg(not(target_os = "windows"))]
         let socket_path = {
-            let temp_dir = std::env::temp_dir();
-            temp_dir.join(format!("lsp-proxy-ssh-{}", uuid::Uuid::new_v4()))
+            // sockaddr_un.sun_path is capped at 104 bytes on macOS / BSD.
+            // Combined with macOS's default $TMPDIR (`/var/folders/…/T/`,
+            // ~50 chars) and the ~17-char internal suffix OpenSSH appends
+            // during atomic rename, a full UUID was busting the limit:
+            //   /var/folders/d_/…/T/lsp-proxy-ssh-<uuid>.<xxxxxxxxx>  → >104
+            // Anchor at /tmp and truncate the random id so the total path
+            // stays comfortably short.
+            let mut buf = std::path::PathBuf::from("/tmp");
+            let uuid = uuid::Uuid::new_v4();
+            // 16 hex chars of the UUID is 64 bits of entropy — more than
+            // enough for per-session uniqueness.
+            let short = format!("{:016x}", (uuid.as_u128() >> 64) as u64);
+            buf.push(format!("lspp-{}", short));
+            buf
         };
 
         let envs = HashMap::new();
@@ -353,6 +395,11 @@ impl SshSocket {
 
         cmd.arg("-o")
             .arg("ControlMaster=no")
+            .arg("-T")
+            .arg("-o")
+            .arg("LogLevel=ERROR")
+            .arg("-o")
+            .arg("RemoteCommand=none")
             .arg(self.connection_options.destination())
             .arg(command);
 
@@ -442,6 +489,11 @@ impl SshConnection {
             .arg(format!("ControlPath={}", self.socket.socket_path.display()));
         cmd.arg("-o")
             .arg("ControlMaster=no")
+            .arg("-T")
+            .arg("-o")
+            .arg("LogLevel=ERROR")
+            .arg("-o")
+            .arg("RemoteCommand=none")
             .arg(self.socket.connection_options.destination())
             .arg(command);
 
@@ -470,6 +522,12 @@ impl SshConnection {
             .arg(format!("ControlPath={}", self.socket.socket_path.display()));
         cmd.arg("-o")
             .arg("ControlMaster=no")
+            // scp auto-infers no-TTY, but LogLevel + RemoteCommand overrides
+            // still help suppress spurious host config behaviour.
+            .arg("-o")
+            .arg("LogLevel=ERROR")
+            .arg("-o")
+            .arg("RemoteCommand=none")
             .arg(local_path)
             .arg(format!(
                 "{}:{}",
@@ -510,6 +568,17 @@ impl SshConnection {
 
         cmd.arg("-o")
             .arg("ControlMaster=no")
+            // -T disables pseudo-terminal allocation. If the user's SSH
+            // config has `RequestTTY yes` for this host, any PTY in the pipe
+            // would CR/LF-mangle the raw Protobuf frames we're about to send.
+            .arg("-T")
+            // Silence "Permanently added … known hosts" noise on stderr.
+            .arg("-o")
+            .arg("LogLevel=ERROR")
+            // Don't let a host-wide RemoteCommand (like `RemoteCommand /bin/zsh`)
+            // override the binary we're trying to exec.
+            .arg("-o")
+            .arg("RemoteCommand=none")
             .arg(self.socket.connection_options.destination())
             .arg(&command)
             .stdin(std::process::Stdio::piped())

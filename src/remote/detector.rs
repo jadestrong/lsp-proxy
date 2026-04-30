@@ -263,6 +263,29 @@ mod tests {
     }
 
     #[test]
+    fn rpc_with_ip_user_and_realistic_path() {
+        // Exactly the URI emacs-tramp-rpc will hand us in production:
+        //   /rpc:<user>@<ip>:<absolute remote path>
+        // wrapped in file:// by our own path-to-uri.
+        let detector = RemoteDetector::new().unwrap();
+        let uri =
+            "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/Documents/Github/vtsls/packages/server/src/index.ts";
+        match detector.parse_path(uri) {
+            RemotePathInfo::Remote(info) => {
+                assert_eq!(info.host.remote_type, RemoteType::Rpc);
+                assert_eq!(info.host.user, "jadestrong");
+                assert_eq!(info.host.host, "100.127.163.35");
+                assert_eq!(info.host.port, None);
+                assert_eq!(
+                    info.remote_path,
+                    "/Users/jadestrong/Documents/Github/vtsls/packages/server/src/index.ts"
+                );
+            }
+            _ => panic!("expected remote, got {:?}", detector.parse_path(uri)),
+        }
+    }
+
+    #[test]
     fn remote_to_local_omits_at_when_user_empty() {
         let detector = RemoteDetector::new().unwrap();
         let info = RemoteInfo {
