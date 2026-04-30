@@ -4,14 +4,26 @@ use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
 use log::{debug, error, info, warn};
 use prost::Message as ProstMessage;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender as TokioUnboundedSender;
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
 use crate::lsp::jsonrpc;
-use crate::msg::{Message, Notification, Request, RequestId, Response};
+use crate::msg::{Message, Notification, Params, Request, RequestId, Response};
+
+/// Method name for application-level heartbeat pings. The remote side
+/// short-circuits this in its Controller and replies with an empty result
+/// without routing the request through Application.
+pub const PING_METHOD: &str = "$/lspProxy/ping";
+
+/// How often the heartbeat task emits a ping.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// How long a single ping is allowed to take before it counts as missed.
+const PING_TIMEOUT: Duration = Duration::from_secs(5);
+/// Consecutive misses that mark the client dead. 5 × 5s ≈ 25s detection.
+const MAX_MISSED_HEARTBEATS: u32 = 5;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/lsp_proxy.rpc.rs"));
@@ -71,6 +83,9 @@ enum OutgoingCommand {
 pub struct RpcClient {
     sender: UnboundedSender<OutgoingCommand>,
     next_id: Arc<AtomicU32>,
+    /// Set to true by the heartbeat task when it decides the far end is
+    /// unresponsive (N consecutive ping misses). Checked by `is_dead()`.
+    dead: Arc<AtomicBool>,
 }
 
 impl RpcClient {
@@ -89,19 +104,94 @@ impl RpcClient {
     {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         tokio::spawn(Self::run_communication_loop(stream, receiver, unsolicited));
+        let dead = Arc::new(AtomicBool::new(false));
+        tokio::spawn(Self::heartbeat_loop(sender.clone(), dead.clone()));
         Ok(Self {
             sender,
             next_id: Arc::new(AtomicU32::new(1)),
+            dead,
         })
     }
 
-    /// Returns true if the background communication loop has exited (usually
-    /// because the underlying transport died). Cached clients that report
-    /// `is_dead()` must be evicted and recreated before the next request —
-    /// otherwise every subsequent `send_request` fails instantly with
-    /// "channel closed".
+    /// Application-level heartbeat: send a tiny ping every few seconds and
+    /// count consecutive misses. When the miss count hits the threshold, flip
+    /// the `dead` flag so the next `get_or_create_rpc_client` call evicts
+    /// this zombie and rebuilds the tunnel. This catches "tunnel is alive,
+    /// but remote stopped responding" cases that pure stream-EOF detection
+    /// misses.
+    async fn heartbeat_loop(
+        sender: UnboundedSender<OutgoingCommand>,
+        dead: Arc<AtomicBool>,
+    ) {
+        let mut consecutive_misses: u32 = 0;
+        loop {
+            tokio::time::sleep(HEARTBEAT_INTERVAL).await;
+
+            if dead.load(Ordering::Relaxed) || sender.is_closed() {
+                debug!("heartbeat: client already dead, stopping");
+                return;
+            }
+
+            let (resp_tx, resp_rx) = oneshot::channel();
+            let ping_req = Request {
+                id: RequestId::from(-1),
+                method: PING_METHOD.to_string(),
+                params: Params {
+                    uri: None,
+                    context: None,
+                    virtual_doc: None,
+                    params: serde_json::Value::Null,
+                },
+            };
+            if sender
+                .unbounded_send(OutgoingCommand::Request {
+                    request: ping_req,
+                    response_tx: resp_tx,
+                })
+                .is_err()
+            {
+                debug!("heartbeat: outgoing channel closed");
+                dead.store(true, Ordering::Relaxed);
+                return;
+            }
+
+            let res = timeout(PING_TIMEOUT, resp_rx).await;
+            match res {
+                Ok(Ok(Ok(_))) => {
+                    if consecutive_misses > 0 {
+                        debug!("heartbeat: recovered after {} misses", consecutive_misses);
+                    }
+                    consecutive_misses = 0;
+                }
+                _ => {
+                    consecutive_misses += 1;
+                    warn!(
+                        "heartbeat: ping miss {}/{}",
+                        consecutive_misses, MAX_MISSED_HEARTBEATS
+                    );
+                    if consecutive_misses >= MAX_MISSED_HEARTBEATS {
+                        warn!(
+                            "heartbeat: {} consecutive misses, marking RPC client dead",
+                            MAX_MISSED_HEARTBEATS
+                        );
+                        dead.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Returns true if either:
+    /// - the background communication loop has exited (`sender.is_closed()`
+    ///   — underlying transport died), or
+    /// - the heartbeat task declared the far end unresponsive.
+    /// Cached clients that report `is_dead()` must be evicted and recreated
+    /// before the next request — otherwise every subsequent `send_request`
+    /// either fails instantly ("channel closed") or hangs until its 30s
+    /// timeout, repeatedly.
     pub fn is_dead(&self) -> bool {
-        self.sender.is_closed()
+        self.sender.is_closed() || self.dead.load(Ordering::Relaxed)
     }
 
     pub async fn send_request(&self, request: Request) -> Result<Response> {

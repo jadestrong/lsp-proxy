@@ -90,6 +90,24 @@ impl Controller {
     }
 
     fn handle_message(&mut self, msg: Message, now: Instant) -> Result<()> {
+        // RPC-layer heartbeat from the local RpcClient. Short-circuit before
+        // we even consider remote routing or local dispatch — the whole
+        // point of the ping is to stay fast even when Application is busy,
+        // so hitting it at the Controller boundary is ideal.
+        if let Message::Request(req) = &msg {
+            if req.method == crate::remote::rpc::PING_METHOD {
+                let resp = Response {
+                    id: req.id.clone(),
+                    result: Some(serde_json::Value::Null),
+                    error: None,
+                };
+                if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
+                    error!("failed to reply to rpc ping: {}", e);
+                }
+                return Ok(());
+            }
+        }
+
         // If the remote worker is up and the message targets a remote path,
         // register it and hand it off to the async worker instead of the local
         // LSP pipeline.
