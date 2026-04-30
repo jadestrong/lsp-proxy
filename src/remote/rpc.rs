@@ -106,6 +106,8 @@ impl RpcClient {
 
     pub async fn send_request(&self, request: Request) -> Result<Response> {
         let (response_tx, response_rx) = oneshot::channel();
+        let method = request.method.clone();
+        let orig_id = request.id.clone();
         self.sender
             .unbounded_send(OutgoingCommand::Request {
                 request,
@@ -113,11 +115,19 @@ impl RpcClient {
             })
             .map_err(|_| anyhow!("RPC client channel closed"))?;
 
-        let response = timeout(Duration::from_secs(30), response_rx)
-            .await
-            .map_err(|_| anyhow!("RPC request timeout"))?
-            .map_err(|_| anyhow!("Response channel closed"))??;
-        Ok(response)
+        match timeout(Duration::from_secs(30), response_rx).await {
+            Ok(inner) => {
+                let response = inner.map_err(|_| anyhow!("Response channel closed"))??;
+                Ok(response)
+            }
+            Err(_) => {
+                warn!(
+                    "RPC request timeout after 30s: method={} orig_id={:?}",
+                    method, orig_id
+                );
+                Err(anyhow!("RPC request timeout"))
+            }
+        }
     }
 
     pub fn send_notification(&self, notification: Notification) -> Result<()> {
@@ -156,6 +166,11 @@ impl RpcClient {
                                     continue;
                                 }
                             };
+                            let method_for_log = request.method.clone();
+                            debug!(
+                                "RPC send request env_id={} method={} orig_id={:?}",
+                                envelope_id, method_for_log, original_id
+                            );
                             let envelope = Envelope {
                                 id: Some(envelope_id),
                                 responding_to: None,

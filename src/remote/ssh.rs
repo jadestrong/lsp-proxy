@@ -153,6 +153,16 @@ impl MasterProcess {
             "ControlPersist=yes",
             "-o",
             "ControlMaster=yes",
+            // Keepalive: send an SSH-level probe every 15s; if 3 go
+            // unanswered (~45s of silence) ssh tears the tunnel down
+            // instead of letting it sit half-dead until the OS TCP
+            // keepalive eventually notices (which can be hours on macOS).
+            // This is what turns a silently-broken link into a fast
+            // EOF that our `is_dead()` path can react to.
+            "-o",
+            "ServerAliveInterval=15",
+            "-o",
+            "ServerAliveCountMax=3",
             // Don't prompt for host-key confirmation when running
             // non-interactively; we treat the SSH config's trust of the host
             // as sufficient. Callers wanting stricter policy can override via
@@ -590,6 +600,14 @@ impl SshConnection {
             // override the binary we're trying to exec.
             .arg("-o")
             .arg("RemoteCommand=none")
+            // Same keepalive as the master — applies to this session's ssh
+            // channel (the one our Protobuf frames actually travel through).
+            // Without this, a silently-dead link would just hang RPC requests
+            // until our 30s per-request timeout fires, repeatedly.
+            .arg("-o")
+            .arg("ServerAliveInterval=15")
+            .arg("-o")
+            .arg("ServerAliveCountMax=3")
             .arg(self.socket.connection_options.destination())
             .arg(&command)
             .stdin(std::process::Stdio::piped())
