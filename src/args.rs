@@ -68,6 +68,16 @@ impl Args {
                 _ => anyhow::bail!("unknown argument: {arg}"),
             }
         }
+        // `Args::default()` returns 0 for these; if the flag wasn't passed,
+        // substitute the documented defaults. Without this the remote-server
+        // (started with only --remote-server --log-level) silently truncates
+        // every completion response to 0 items.
+        if args.max_item_num == 0 {
+            args.max_item_num = 20;
+        }
+        if args.max_diagnostics_push == 0 {
+            args.max_diagnostics_push = 50;
+        }
         Ok(args)
     }
 

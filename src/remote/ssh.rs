@@ -556,11 +556,20 @@ impl SshConnection {
         // 把本地的 log-level 透传过去,远端才会写出有内容的 log
         // (默认落在远端 binary 所在目录下的 `remote-server.log`)。
         let log_level = crate::config::log_level();
-        let command = if log_level > 0 {
-            format!("{} --remote-server --log-level {}", remote_path, log_level)
-        } else {
-            format!("{} --remote-server", remote_path)
-        };
+        // Forward completion cap too. Remote defaults to 0 (the zero-valued
+        // `usize` from `Args::default()`); if it ever runs without this flag
+        // handle_completion slices every response to empty.
+        let max_items = crate::config::MAX_COMPLETION_ITEMS
+            .get()
+            .copied()
+            .unwrap_or(20);
+        let mut command = format!(
+            "{} --remote-server --max-item {}",
+            remote_path, max_items
+        );
+        if log_level > 0 {
+            command.push_str(&format!(" --log-level {}", log_level));
+        }
 
         let mut cmd = Command::new("ssh");
 
