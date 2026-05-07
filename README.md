@@ -361,6 +361,21 @@ roots = ["go.mod", "go.work"]
 language-servers = ["gopls"]
 ```
 
+### Remote Language Servers (Docker / TRAMP)
+
+Configure a language server with a `[language-server.*.connection]` table where `type = "docker-exec"` and `container` is set to the Docker container name or ID. The server binary path is resolved inside the container. Optional `workdir` maps to `docker exec -w`.
+
+```toml
+[language-server.ts-ls]
+command = "typescript-language-server"
+args = ["--stdio"]
+
+[language-server.ts-ls.connection]
+type = "docker-exec"
+container = "my-devcontainer"
+# workdir = "/workspaces/proj"
+```
+
 ### Built-in Language Servers
 
 LSP-Proxy includes default configurations for:
