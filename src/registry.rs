@@ -214,7 +214,8 @@ impl Registry {
         let id = self.counter;
         self.counter += 1;
 
-        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path, features)?;
+        let NewClient(client, incoming) =
+            start_client(id, name, ls_config, config, doc_path, features)?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -234,11 +235,15 @@ impl Registry {
             .iter()
             .filter_map(|features @ LanguageServerFeatures { name, .. }| {
                 if self.inner.contains_key(name) {
-                    let client =
-                        match self.start_client(name.clone(), language_config, doc_path.as_ref(), Some(features)) {
-                            Ok(client) => client,
-                            error => return Some(error),
-                        };
+                    let client = match self.start_client(
+                        name.clone(),
+                        language_config,
+                        doc_path.as_ref(),
+                        Some(features),
+                    ) {
+                        Ok(client) => client,
+                        error => return Some(error),
+                    };
 
                     self.inner
                         .entry(name.to_string())
@@ -303,6 +308,7 @@ fn start_client(
         ls_config.timeout,
         doc_path,
         ls_features,
+        &ls_config.connection,
     )?;
 
     let client = Arc::new(client);

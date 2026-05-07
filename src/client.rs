@@ -32,7 +32,7 @@ use crate::{
     },
     msg::RequestId,
     registry,
-    syntax::{LanguageServerFeature, LanguageServerFeatures, SupportWorkspace},
+    syntax::{self, Connection, LanguageServerFeature, LanguageServerFeatures, SupportWorkspace},
     utils::{defer, find_lsp_workspace, get_activate_time},
 };
 
@@ -176,6 +176,7 @@ impl Client {
         req_timeout: u64,
         doc_path: Option<&std::path::PathBuf>,
         features: Option<&LanguageServerFeatures>,
+        connection: &Connection,
     ) -> registry::Result<(Self, UnboundedReceiver<(usize, Call)>, Arc<Notify>)> {
         // find the closest root directory as the LSP workspace
         let default_workspace = SupportWorkspace::default();
@@ -197,20 +198,44 @@ impl Client {
             root_path
         );
 
-        // Resolve path to the binary
-        let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
-
-        let process = Command::new(cmd)
+        let mut command = match connection {
+            syntax::Connection::Stdio => {
+                let resolved = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
+                if let Some(features) = features {
+                    if !features.config_files.is_empty()
+                        && !features
+                            .config_files
+                            .iter()
+                            .any(|cf| root_path.join(cf).exists())
+                    {
+                        return Err(registry::Error::Other(anyhow::anyhow!(
+                            "No config file found for language server"
+                        )));
+                    }
+                }
+                let mut c = Command::new(resolved);
+                c.args(args).current_dir(&root_path);
+                c
+            }
+            syntax::Connection::DockerExec { container, workdir } => {
+                let docker = which::which("docker").map_err(|err| anyhow::anyhow!(err))?;
+                let mut c = Command::new(docker);
+                c.arg("exec").arg("-i");
+                let cwd = workdir.as_deref().unwrap_or(root_path.as_path());
+                c.arg("-w").arg(cwd);
+                c.arg(container).arg(cmd).args(args);
+                c
+            }
+        };
+        command
             .envs(server_envirment)
-            .args(args)
-            .current_dir(&root_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // make sure the process is reaped on drop
-            .kill_on_drop(true)
-            .spawn();
-        let mut process = process?;
+            .kill_on_drop(true);
+
+        let mut process = command.spawn()?;
 
         // TODO: do we need bufreader/writer here? or do we use async wrappers on unblock?
         let writer = BufWriter::new(process.stdin.take().expect("Failed to open stdin"));
@@ -219,20 +244,6 @@ impl Client {
 
         let (server_rx, server_tx, initialize_notify) =
             Transport::start(reader, writer, stderr, id, name.clone());
-
-        if let Some(features) = features {
-            if !features.config_files.is_empty()
-                && !features.config_files.iter().any(|config_file| {
-                    // "Check if the root + config file exists."
-                    let config_file_path = root_path.clone().join(config_file);
-                    config_file_path.exists()
-                })
-            {
-                return Err(registry::Error::Other(anyhow::anyhow!(
-                    "No config file found for language server"
-                )));
-            }
-        }
 
         let workspace_folders = root_uri
             .clone()
