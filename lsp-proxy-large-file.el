@@ -83,7 +83,7 @@
       (setq lsp-proxy--loading-timeout-timer nil))
     (remhash buffer-file-name lsp-proxy--loading-files)
     (lsp-proxy--notify 'emacs/largeFileLoadCancel
-                       (list :uri (concat "file://" buffer-file-name)))
+                       (list :uri (concat "file://" (file-local-name buffer-file-name))))
     (lsp-proxy--warn "Large file loading cancelled")))
 
 ;;; Timeout handling
@@ -118,7 +118,7 @@
                (lsp-proxy--large-file-p file-path))
 
       (message "[LSP-PROXY-CHUNK] 🚀 Starting large file loading: %s" (file-name-nondirectory file-path))
-      
+
       (puthash file-path buffer lsp-proxy--loading-files)
       (with-current-buffer buffer
         (setq lsp-proxy--large-file-loading-state 'pending
@@ -130,7 +130,7 @@
       (lsp-proxy--setup-loading-timeout buffer)
 
       (lsp-proxy--notify 'emacs/largeFileLoadStart
-                         (list :uri (concat "file://" file-path)
+                         (list :uri (concat "file://" (file-local-name file-path))
                                :totalSize (nth 7 (file-attributes file-path))
                                :chunkSize lsp-proxy-large-file-chunk-size))
 
@@ -171,7 +171,7 @@
               lsp-proxy--large-file-loading-progress progress))
 
       (lsp-proxy--notify 'emacs/largeFileChunk
-                         (list :uri (concat "file://" file-path)
+                         (list :uri (concat "file://" (file-local-name file-path))
                                :chunkIndex chunk-index
                                :chunkData chunk-data
                                :startPos start-pos
@@ -189,7 +189,7 @@
 (defun lsp-proxy--complete-large-file-loading (buffer file-path)
   "Complete large file loading process."
   (message "[LSP-PROXY-CHUNK] 🎉 Completing large file loading for: %s" (file-name-nondirectory file-path))
-  
+
   (when (buffer-live-p buffer)
     (with-current-buffer buffer
       (setq lsp-proxy--large-file-loading-state 'completed
