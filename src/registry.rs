@@ -6,8 +6,8 @@ use crate::{
     },
     lsp_ext,
     msg::RequestId,
-    syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
-    utils::{path, find_lsp_workspace},
+    syntax::{self, Connection, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
+    utils::{path, resolve_root_path},
 };
 use anyhow::anyhow;
 use futures_util::stream::SelectAll;
@@ -122,10 +122,18 @@ impl Registry {
                 } = feature;
                 if let Some(clients) = self.inner.get(name) {
                     // find the root path of the current file based on the support_workspace strategy
-                    let file_root = find_lsp_workspace(
+                    let default_connection = Connection::default();
+                    let connection = self
+                        .syn_loader
+                        .language_server_configs()
+                        .get(name)
+                        .map(|cfg| &cfg.connection)
+                        .unwrap_or(&default_connection);
+                    let file_root = resolve_root_path(
+                        connection,
                         doc_path.map(|p| p.as_path()),
                         &language_config.roots,
-                        support_workspace
+                        support_workspace,
                     );
                     
                     // try to find existing clients based on support_workspace

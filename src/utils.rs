@@ -242,6 +242,34 @@ pub fn find_lsp_workspace(
     lsp_workspace.unwrap_or(current_working_dir())
 }
 
+pub fn resolve_root_path(
+    connection: &crate::syntax::Connection,
+    doc_path: Option<&Path>,
+    root_markers: &[String],
+    support_workspace: &crate::syntax::SupportWorkspace,
+) -> PathBuf {
+    match connection {
+        crate::syntax::Connection::Stdio => {
+            find_lsp_workspace(doc_path, root_markers, support_workspace)
+        }
+        crate::syntax::Connection::DockerExec { workdir, .. } => {
+            if let Some(w) = workdir {
+                return w.clone();
+            }
+            let root = doc_path
+                .and_then(|p| p.parent())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("/"));
+            log::warn!(
+                "DockerExec: no `workdir` configured; falling back to document parent as LSP root: {:?} (doc_path={:?}). Set `workdir` in the language-server config to silence this.",
+                root,
+                doc_path
+            );
+            root
+        }
+    }
+}
+
 /// Find the closest root directory for a file.
 /// This function searches upward from the file path to find the most specific
 /// directory that contains any of the workspace root markers, but doesn't go beyond the git workspace.

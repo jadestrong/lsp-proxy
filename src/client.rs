@@ -33,7 +33,7 @@ use crate::{
     msg::RequestId,
     registry,
     syntax::{self, Connection, LanguageServerFeature, LanguageServerFeatures, SupportWorkspace},
-    utils::{defer, find_lsp_workspace, get_activate_time},
+    utils::{defer, find_lsp_workspace, get_activate_time, resolve_root_path},
 };
 
 fn workspace_for_uri(uri: lsp::Url) -> lsp::WorkspaceFolder {
@@ -183,10 +183,11 @@ impl Client {
         let support_workspace = features
             .map(|f| &f.support_workspace)
             .unwrap_or(&default_workspace);
-        let root_path = find_lsp_workspace(
+        let root_path = resolve_root_path(
+            connection,
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
@@ -267,6 +268,7 @@ impl Client {
             req_timeout,
             features: features.cloned(),
             activate_time: Arc::new(Mutex::new(get_activate_time())),
+            pid_visible_to_server: matches!(connection, syntax::Connection::Stdio),
         };
 
         Ok((client, server_rx, initialize_notify))
