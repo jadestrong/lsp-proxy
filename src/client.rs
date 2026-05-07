@@ -74,6 +74,10 @@ pub struct Client {
     req_timeout: u64,
     features: Option<LanguageServerFeatures>,
     pub(crate) activate_time: Arc<Mutex<u128>>,
+    /// Whether the proxy's pid is meaningful to the server. False for
+    /// transports that cross a PID namespace (e.g. docker exec): the server
+    /// would poll a host PID it cannot see, decide its parent died, and exit.
+    pid_visible_to_server: bool,
 }
 
 #[allow(dead_code)]
@@ -628,7 +632,11 @@ impl Client {
 
         #[allow(deprecated)]
         let params = lsp::InitializeParams {
-            process_id: Some(std::process::id()),
+            process_id: if self.pid_visible_to_server {
+                Some(std::process::id())
+            } else {
+                None
+            },
             root_path: self.root_path.to_str().map(|path| path.to_owned()),
             root_uri: self.root_uri.clone(),
             initialization_options: Some(self.config.clone().unwrap_or(json!({}))),
