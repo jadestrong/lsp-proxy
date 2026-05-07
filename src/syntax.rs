@@ -291,6 +291,18 @@ where
     serializer.end()
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Connection {
+    #[default]
+    Stdio,
+    DockerExec {
+        container: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workdir: Option<std::path::PathBuf>,
+    },
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct LanguageServerConfiguration {
@@ -306,6 +318,8 @@ pub struct LanguageServerConfiguration {
     pub timeout: u64,
     #[serde(default, skip_serializing, deserialize_with = "deserialize_lsp_config")]
     pub experimental: Option<serde_json::Value>,
+    #[serde(default)]
+    pub connection: Connection,
 }
 
 fn default_timeout() -> u64 {
