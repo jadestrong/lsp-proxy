@@ -477,6 +477,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
         (progn
           (unless (file-exists-p buffer-file-name)
             (save-buffer))
+          (ignore-errors (lsp-proxy--register-remote-root buffer-file-name))
           (let* ((is-large-file (and (boundp 'lsp-proxy--is-large-file) lsp-proxy--is-large-file))
                  (initial-content (if is-large-file
                                       (lsp-proxy--get-initial-content)

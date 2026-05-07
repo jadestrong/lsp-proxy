@@ -138,6 +138,38 @@ FORMAT and ARGS is the same as for `message'."
 (defvar-local lsp-proxy--current-project-root nil
   "Cached project root for current buffer.")
 
+(defvar lsp-proxy--remote-root-prefixes
+  (make-hash-table :test 'equal)
+  "Stripped workspace root string -> TRAMP prefix (e.g. `/docker:host:`).")
+
+(defun lsp-proxy--register-remote-root (buffer-file)
+  "If BUFFER-FILE is remote, map its stripped project root to the TRAMP prefix."
+  (when (and buffer-file (file-remote-p buffer-file))
+    (let ((prefix (file-remote-p buffer-file))
+          (local-root (file-local-name
+                       (directory-file-name (lsp-proxy-project-root)))))
+      (when (and prefix local-root (cl-plusp (length local-root)))
+        (unless (gethash local-root lsp-proxy--remote-root-prefixes)
+          (puthash local-root prefix lsp-proxy--remote-root-prefixes))))))
+
+(defun lsp-proxy--lookup-remote-prefix (path)
+  "Return the TRAMP prefix registered for the longest stripped root matching PATH."
+  (when (and path (cl-plusp (length path)))
+    (let ((best-len 0)
+          (best-prefix nil))
+      (maphash
+       (lambda (root prefix)
+         (when (and (cl-plusp (length root))
+                    (<= (length root) (length path))
+                    (string-prefix-p root path)
+                    (or (= (length root) (length path))
+                        (eq (aref path (length root)) ?/)))
+           (when (> (length root) best-len)
+             (setq best-len (length root)
+                   best-prefix prefix))))
+       lsp-proxy--remote-root-prefixes)
+      best-prefix)))
+
 (defun lsp-proxy-project-root ()
   "Return the project root of current project."
   (if lsp-proxy--current-project-root
@@ -187,13 +219,18 @@ If the system is not Windows, return the original path."
 (defun lsp-proxy--uri-to-path (uri)
   "Convert URI to file path."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-proxy--current-project-root (file-remote-p lsp-proxy--current-project-root)))
-         (url (url-generic-parse-url uri)))
+  (let* ((url (url-generic-parse-url uri))
+         (decoded (and (string= "file" (url-type url))
+                       (url-unhex-string (url-filename url))))
+         (remote-prefix
+          (or (and lsp-proxy--current-project-root
+                   (file-remote-p lsp-proxy--current-project-root))
+              (and decoded (lsp-proxy--lookup-remote-prefix decoded)))))
     ;; Only parse file:// URIs, leave other URI untouched as
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
-        (let* ((retval (url-unhex-string (url-filename url)))
+        (let* ((retval decoded)
                ;; Remove the leading "/" for local MS Windows-style paths.
                (normalized (if (and (not remote-prefix)
                                     (eq system-type 'windows-nt)
