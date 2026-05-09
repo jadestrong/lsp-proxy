@@ -168,6 +168,25 @@ impl Client {
             .unwrap();
     }
 
+    fn validate_config_files(
+        features: Option<&LanguageServerFeatures>,
+        root_path: &std::path::Path,
+    ) -> registry::Result<()> {
+        if let Some(features) = features {
+            if !features.config_files.is_empty()
+                && !features
+                    .config_files
+                    .iter()
+                    .any(|cf| root_path.join(cf).exists())
+            {
+                return Err(registry::Error::Other(anyhow::anyhow!(
+                    "No config file found for language server"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     pub fn start(
         cmd: &str,
         args: &[String],
@@ -203,52 +222,32 @@ impl Client {
             root_path
         );
 
+        Self::validate_config_files(features, &root_path)?;
+
         let mut command = match connection {
             syntax::Connection::Stdio => {
                 let resolved = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
-                if let Some(features) = features {
-                    if !features.config_files.is_empty()
-                        && !features
-                            .config_files
-                            .iter()
-                            .any(|cf| root_path.join(cf).exists())
-                    {
-                        return Err(registry::Error::Other(anyhow::anyhow!(
-                            "No config file found for language server"
-                        )));
-                    }
-                }
                 let mut c = Command::new(resolved);
-                c.args(args).current_dir(&root_path);
+                c.args(args)
+                    .current_dir(&root_path)
+                    .envs(server_envirment);
                 c
             }
             syntax::Connection::DockerExec { container, workdir } => {
                 let docker = which::which("docker").map_err(|err| anyhow::anyhow!(err))?;
-                if let Some(features) = features {
-                    if !features.config_files.is_empty()
-                        && !features
-                            .config_files
-                            .iter()
-                            .any(|cf| root_path.join(cf).exists())
-                    {
-                        return Err(registry::Error::Other(anyhow::anyhow!(
-                            "No config file found for language server"
-                        )));
-                    }
-                }
                 let mut c = Command::new(docker);
                 c.arg("exec").arg("-i");
                 for (key, value) in &server_envirment {
                     c.arg("-e").arg(format!("{key}={value}"));
                 }
-                let cwd = workdir.as_deref().unwrap_or(root_path.as_path());
-                c.arg("-w").arg(cwd);
+                if let Some(wd) = workdir.as_deref() {
+                    c.arg("-w").arg(wd);
+                }
                 c.arg(container).arg(cmd).args(args);
                 c
             }
         };
         command
-            .envs(server_envirment)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
