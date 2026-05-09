@@ -224,8 +224,23 @@ impl Client {
             }
             syntax::Connection::DockerExec { container, workdir } => {
                 let docker = which::which("docker").map_err(|err| anyhow::anyhow!(err))?;
+                if let Some(features) = features {
+                    if !features.config_files.is_empty()
+                        && !features
+                            .config_files
+                            .iter()
+                            .any(|cf| root_path.join(cf).exists())
+                    {
+                        return Err(registry::Error::Other(anyhow::anyhow!(
+                            "No config file found for language server"
+                        )));
+                    }
+                }
                 let mut c = Command::new(docker);
                 c.arg("exec").arg("-i");
+                for (key, value) in &server_envirment {
+                    c.arg("-e").arg(format!("{key}={value}"));
+                }
                 let cwd = workdir.as_deref().unwrap_or(root_path.as_path());
                 c.arg("-w").arg(cwd);
                 c.arg(container).arg(cmd).args(args);

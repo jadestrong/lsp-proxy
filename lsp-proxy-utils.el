@@ -223,9 +223,9 @@ If the system is not Windows, return the original path."
          (decoded (and (string= "file" (url-type url))
                        (url-unhex-string (url-filename url))))
          (remote-prefix
-          (or (and lsp-proxy--current-project-root
-                   (file-remote-p lsp-proxy--current-project-root))
-              (and decoded (lsp-proxy--lookup-remote-prefix decoded)))))
+          (or (and decoded (lsp-proxy--lookup-remote-prefix decoded))
+              (and lsp-proxy--current-project-root
+                   (file-remote-p lsp-proxy--current-project-root)))))
     ;; Only parse file:// URIs, leave other URI untouched as
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
