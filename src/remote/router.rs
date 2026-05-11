@@ -45,12 +45,16 @@ impl RemoteConnectionManager {
     }
 
     /// 检查是否为远程路径
+    #[allow(dead_code)]
     pub fn is_remote_path(&self, path: &str) -> bool {
         self.detector.is_remote_path(path)
     }
 
     /// 获取或创建SSH连接
-    async fn get_or_create_ssh_connection(&self, remote_info: &RemoteInfo) -> Result<Arc<SshConnection>> {
+    async fn get_or_create_ssh_connection(
+        &self,
+        remote_info: &RemoteInfo,
+    ) -> Result<Arc<SshConnection>> {
         let connection_key = remote_info.host.connection_key();
 
         let mut connections = self.ssh_connections.lock().await;
@@ -60,10 +64,8 @@ impl RemoteConnectionManager {
         }
 
         // 创建新的SSH连接
-        let options = SshConnectionOptions::new(
-            remote_info.host.host.clone(),
-            remote_info.host.user.clone(),
-        );
+        let options =
+            SshConnectionOptions::new(remote_info.host.host.clone(), remote_info.host.user.clone());
 
         let options = if let Some(port) = remote_info.host.port {
             options.with_port(port)
@@ -71,7 +73,7 @@ impl RemoteConnectionManager {
             options
         };
 
-        info!("Creating new SSH connection to {}", connection_key);
+        info!("Creating new SSH connection to {connection_key}");
         let connection = Arc::new(SshConnection::connect(options).await?);
         connections.insert(connection_key.clone(), connection.clone());
 
@@ -93,8 +95,7 @@ impl RemoteConnectionManager {
             // a fresh tunnel instead of handing back a guaranteed-to-fail
             // client for the rest of the session.
             warn!(
-                "RPC client for {} is dead; evicting and reconnecting",
-                connection_key
+                "RPC client for {connection_key} is dead; evicting and reconnecting"
             );
             clients.remove(&connection_key);
             // A dead RPC client typically means the SSH child exited; the
@@ -111,10 +112,12 @@ impl RemoteConnectionManager {
         let remote_lsp_path = DEFAULT_REMOTE_BINARY_PATH;
         deploy::ensure_remote_binary(ssh_connection.as_ref(), remote_lsp_path)
             .await
-            .map_err(|e| anyhow!("auto-deploy failed for {}: {}", connection_key, e))?;
+            .map_err(|e| anyhow!("auto-deploy failed for {connection_key}: {e}"))?;
 
         // 启动远程LSP代理进程
-        let lsp_process = ssh_connection.start_remote_lsp_proxy(remote_lsp_path).await?;
+        let lsp_process = ssh_connection
+            .start_remote_lsp_proxy(remote_lsp_path)
+            .await?;
 
         // 创建RPC客户端，使用SSH隧道
         let stream = SshRpcStream::from_child_stdio(lsp_process.stdin, lsp_process.stdout);
@@ -144,14 +147,13 @@ impl RemoteConnectionManager {
             None => {
                 warn!(
                     "no result sink set on RemoteConnectionManager; \
-                     server-initiated notifications for {} will be dropped",
-                    connection_key
+                     server-initiated notifications for {connection_key} will be dropped"
                 );
             }
         }
 
         clients.insert(connection_key.clone(), client.clone());
-        info!("Created new RPC client for {}", connection_key);
+        info!("Created new RPC client for {connection_key}");
 
         Ok(client)
     }
@@ -163,7 +165,10 @@ impl RemoteConnectionManager {
         if let Some(path_str) = path {
             match self.detector.parse_path(&path_str) {
                 RemotePathInfo::Remote(remote_info) => {
-                    debug!("Routing message to remote: {}", remote_info.host.connection_key());
+                    debug!(
+                        "Routing message to remote: {}",
+                        remote_info.host.connection_key()
+                    );
                     return self.handle_remote_message(message, remote_info).await;
                 }
                 RemotePathInfo::Local(_) => {
@@ -186,7 +191,8 @@ impl RemoteConnectionManager {
     ) -> Result<Option<Message>> {
         let _ = remote_info.host.remote_type; // variant kept for future diversification
         let client = self.get_or_create_rpc_client(&remote_info).await?;
-        self.handle_message_via_rpc(message, client, remote_info).await
+        self.handle_message_via_rpc(message, client, remote_info)
+            .await
     }
 
     /// 通过RPC处理消息
@@ -219,7 +225,8 @@ impl RemoteConnectionManager {
                     result_preview
                 );
                 // 转换响应中的路径：将远程路径转换回TRAMP路径
-                let transformed_response = self.transform_response_paths_from_remote(response, &remote_info)?;
+                let transformed_response =
+                    self.transform_response_paths_from_remote(response, &remote_info)?;
                 let after_preview = transformed_response
                     .result
                     .as_ref()
@@ -282,7 +289,11 @@ impl RemoteConnectionManager {
     }
 
     /// 转换消息中的路径以适应远程执行
-    fn transform_paths_for_remote(&self, message: Message, remote_info: &RemoteInfo) -> Result<Message> {
+    fn transform_paths_for_remote(
+        &self,
+        message: Message,
+        remote_info: &RemoteInfo,
+    ) -> Result<Message> {
         match message {
             Message::Request(mut req) => {
                 // 转换URI路径
@@ -293,12 +304,14 @@ impl RemoteConnectionManager {
                 }
 
                 // 转换params中的路径
-                req.params.params = self.transform_json_paths_for_remote(req.params.params, remote_info)?;
+                req.params.params =
+                    self.transform_json_paths_for_remote(req.params.params, remote_info)?;
 
                 Ok(Message::Request(req))
             }
             Message::Notification(mut notif) => {
-                notif.params.params = self.transform_json_paths_for_remote(notif.params.params, remote_info)?;
+                notif.params.params =
+                    self.transform_json_paths_for_remote(notif.params.params, remote_info)?;
                 Ok(Message::Notification(notif))
             }
             msg => Ok(msg),
@@ -306,7 +319,11 @@ impl RemoteConnectionManager {
     }
 
     /// 转换响应中的路径
-    fn transform_response_paths_from_remote(&self, mut response: Response, remote_info: &RemoteInfo) -> Result<Response> {
+    fn transform_response_paths_from_remote(
+        &self,
+        mut response: Response,
+        remote_info: &RemoteInfo,
+    ) -> Result<Response> {
         if let Some(result) = response.result {
             response.result = Some(self.transform_json_paths_from_remote(result, remote_info)?);
         }
@@ -314,13 +331,19 @@ impl RemoteConnectionManager {
     }
 
     /// 转换JSON中的路径（远程 -> 本地）
-    fn transform_json_paths_for_remote(&self, mut value: serde_json::Value, remote_info: &RemoteInfo) -> Result<serde_json::Value> {
+    fn transform_json_paths_for_remote(
+        &self,
+        mut value: serde_json::Value,
+        remote_info: &RemoteInfo,
+    ) -> Result<serde_json::Value> {
         match &mut value {
             serde_json::Value::Object(map) => {
                 for (key, val) in map.iter_mut() {
                     if key == "uri" || key.ends_with("Uri") {
                         if let Some(uri_str) = val.as_str() {
-                            if let Some(remote_uri) = self.convert_tramp_to_remote_uri(uri_str, remote_info) {
+                            if let Some(remote_uri) =
+                                self.convert_tramp_to_remote_uri(uri_str, remote_info)
+                            {
                                 *val = serde_json::Value::String(remote_uri);
                             }
                         }
@@ -340,13 +363,19 @@ impl RemoteConnectionManager {
     }
 
     /// 转换JSON中的路径（本地 -> 远程）
-    fn transform_json_paths_from_remote(&self, mut value: serde_json::Value, remote_info: &RemoteInfo) -> Result<serde_json::Value> {
+    fn transform_json_paths_from_remote(
+        &self,
+        mut value: serde_json::Value,
+        remote_info: &RemoteInfo,
+    ) -> Result<serde_json::Value> {
         match &mut value {
             serde_json::Value::Object(map) => {
                 for (key, val) in map.iter_mut() {
                     if key == "uri" || key.ends_with("Uri") {
                         if let Some(uri_str) = val.as_str() {
-                            if let Some(tramp_uri) = self.convert_remote_to_tramp_uri(uri_str, remote_info) {
+                            if let Some(tramp_uri) =
+                                self.convert_remote_to_tramp_uri(uri_str, remote_info)
+                            {
                                 *val = serde_json::Value::String(tramp_uri);
                             }
                         }
@@ -367,8 +396,8 @@ impl RemoteConnectionManager {
 
     /// 将TRAMP URI转换为远程URI
     fn convert_tramp_to_remote_uri(&self, uri: &str, remote_info: &RemoteInfo) -> Option<String> {
-        if uri.starts_with("file://") {
-            let path = &uri[7..]; // 移除 "file://" 前缀
+        if let Some(path) = uri.strip_prefix("file://") {
+            // 移除 "file://" 前缀
             if let Some(remote_info_from_path) = self.detector.extract_remote_info(path) {
                 if remote_info_from_path.host == remote_info.host {
                     // 转换为远程文件URI
@@ -381,18 +410,62 @@ impl RemoteConnectionManager {
 
     /// 将远程URI转换为TRAMP URI
     fn convert_remote_to_tramp_uri(&self, uri: &str, remote_info: &RemoteInfo) -> Option<String> {
-        if uri.starts_with("file://") {
-            let remote_path = &uri[7..]; // 移除 "file://" 前缀
+        if let Some(remote_path) = uri.strip_prefix("file://") {
+            // 移除 "file://" 前缀
             let tramp_path = self.detector.remote_to_local_path(&RemoteInfo {
                 host: remote_info.host.clone(),
                 remote_path: remote_path.to_string(),
             });
-            return Some(format!("file://{}", tramp_path));
+            return Some(format!("file://{tramp_path}"));
         }
         None
     }
 
+    /// Collect diagnostic status of all RPC clients for `emacs/getRemoteInfo`.
+    pub async fn get_remote_status(&self) -> crate::lsp_ext::RemoteConnectionStatus {
+        let clients = self.rpc_clients.lock().await;
+        let ssh_conns = self.ssh_connections.lock().await;
+        let mut infos = Vec::new();
+        for (key, client) in clients.iter() {
+            // Probe deployment status via the SSH connection for this key.
+            let remote_path = deploy::DEFAULT_REMOTE_BINARY_PATH;
+            let (deploy_status, remote_version) = match ssh_conns.get(key) {
+                Some(ssh) => match deploy::check_remote_binary(ssh, remote_path).await {
+                    Ok(deploy::RemoteBinaryStatus::VersionMatch) => {
+                        ("deployed".to_string(), Some(deploy::EXPECTED_VERSION.to_string()))
+                    }
+                    Ok(deploy::RemoteBinaryStatus::VersionMismatch { remote }) => {
+                        ("version_mismatch".to_string(), Some(remote))
+                    }
+                    Ok(deploy::RemoteBinaryStatus::Missing) => {
+                        ("missing".to_string(), None)
+                    }
+                    Err(e) => {
+                        warn!("failed to probe remote binary for {key}: {e}");
+                        ("unknown".to_string(), None)
+                    }
+                },
+                None => ("unknown".to_string(), None),
+            };
+
+            infos.push(crate::lsp_ext::RemoteClientInfo {
+                connection_key: key.clone(),
+                remote_type: "rpc".to_string(),
+                is_alive: !client.is_dead(),
+                binary_path: remote_path.to_string(),
+                local_version: deploy::EXPECTED_VERSION.to_string(),
+                remote_version,
+                deploy_status,
+            });
+        }
+        crate::lsp_ext::RemoteConnectionStatus {
+            enabled: true,
+            clients: infos,
+        }
+    }
+
     /// 清理资源
+    #[allow(dead_code)]
     pub async fn cleanup(&self) {
         // 清理SSH连接
         let mut connections = self.ssh_connections.lock().await;
@@ -478,7 +551,7 @@ fn local_file_uri_to_tramp(uri: &str, remote_info: &RemoteInfo) -> Option<String
             type_str, user_part, remote_info.host.host, remote_path
         ),
     };
-    Some(format!("file://{}", tramp))
+    Some(format!("file://{tramp}"))
 }
 
 /// SSH RPC 流适配器 — 把子进程的 stdin/stdout 组合成一个同时实现
@@ -572,9 +645,7 @@ mod tests {
         assert!(m
             .convert_tramp_to_remote_uri("file:///home/alice/local.py", &info)
             .is_none());
-        assert!(m
-            .convert_tramp_to_remote_uri("/not/a/uri", &info)
-            .is_none());
+        assert!(m.convert_tramp_to_remote_uri("/not/a/uri", &info).is_none());
     }
 
     #[test]
@@ -666,7 +737,8 @@ mod tests {
         rewrite_to_tramp(&mut msg, &remote_info);
 
         let expected = "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/proj/file.ts";
-        let expected_other = "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/proj/other.ts";
+        let expected_other =
+            "file:///rpc:jadestrong@100.127.163.35:/Users/jadestrong/proj/other.ts";
         match msg {
             crate::msg::Message::Notification(n) => {
                 assert_eq!(n.params.uri.as_deref(), Some(expected));
@@ -705,7 +777,10 @@ mod tests {
             "position": {"line": 0, "character": 0}
         });
         let extracted = m.extract_uri_from_params(&params);
-        assert_eq!(extracted.as_deref(), Some("/ssh:alice@box:/home/alice/x.py"));
+        assert_eq!(
+            extracted.as_deref(),
+            Some("/ssh:alice@box:/home/alice/x.py")
+        );
     }
 }
 

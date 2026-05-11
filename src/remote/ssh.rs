@@ -1,15 +1,13 @@
 use anyhow::{anyhow, Context, Result};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-use super::RemoteHost;
 
 /// Result of a remote command, preserving the exit code so callers can tell
 /// "binary not found" (non-zero exit) from "transport failure" (error on the
@@ -34,11 +32,11 @@ pub enum SshConnectionHost {
     Hostname(String),
 }
 
-impl SshConnectionHost {
-    pub fn to_string(&self) -> String {
+impl std::fmt::Display for SshConnectionHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::IpAddr(ip) => ip.to_string(),
-            Self::Hostname(hostname) => hostname.clone(),
+            Self::IpAddr(ip) => write!(f, "{}", ip),
+            Self::Hostname(hostname) => write!(f, "{}", hostname),
         }
     }
 }
@@ -99,11 +97,12 @@ impl SshConnectionOptions {
     pub fn destination(&self) -> String {
         let host_str = self.host.to_string();
         match &self.username {
-            Some(username) => format!("{}@{}", username, host_str),
+            Some(username) => format!("{username}@{host_str}"),
             None => host_str,
         }
     }
 
+    #[allow(dead_code)]
     pub fn connection_key(&self) -> String {
         match self.port {
             Some(port) => format!("{}:{}", self.destination(), port),
@@ -117,6 +116,7 @@ struct SshSocket {
     connection_options: SshConnectionOptions,
     #[cfg(not(target_os = "windows"))]
     socket_path: PathBuf,
+    #[allow(dead_code)]
     envs: HashMap<String, String>,
 }
 
@@ -181,13 +181,13 @@ impl MasterProcess {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .args(&args)
+            .args(args)
             .args(&additional_args)
             .arg("-o")
             .arg(format!("ControlPath={}", socket_path.display()))
             .arg(destination);
 
-        debug!("Starting SSH master process: ssh {}", destination);
+        debug!("Starting SSH master process: ssh {destination}");
         let process = master_process
             .spawn()
             .context("Failed to spawn SSH master process")?;
@@ -279,9 +279,7 @@ impl MasterProcess {
                     format!("socket {} never appeared", self.socket_path.display())
                 };
                 return Err(anyhow!(
-                    "SSH master not ready within {:?} ({})",
-                    MASTER_READY_TIMEOUT,
-                    detail
+                    "SSH master not ready within {MASTER_READY_TIMEOUT:?} ({detail})"
                 ));
             }
 
@@ -377,7 +375,7 @@ impl SshSocket {
             // 16 hex chars of the UUID is 64 bits of entropy — more than
             // enough for per-session uniqueness.
             let short = format!("{:016x}", (uuid.as_u128() >> 64) as u64);
-            buf.push(format!("lspp-{}", short));
+            buf.push(format!("lspp-{short}"));
             buf
         };
 
@@ -408,12 +406,12 @@ impl SshSocket {
             .arg(self.connection_options.destination())
             .arg(command);
 
-        debug!("Executing SSH command: {}", command);
+        debug!("Executing SSH command: {command}");
         let output = cmd.output().await?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("SSH command failed: {}", stderr));
+            return Err(anyhow!("SSH command failed: {stderr}"));
         }
 
         Ok(output.stdout)
@@ -506,7 +504,7 @@ impl SshConnection {
             .arg(self.socket.connection_options.destination())
             .arg(command);
 
-        debug!("Executing SSH command (with status): {}", command);
+        debug!("Executing SSH command (with status): {command}");
         let output = cmd.output().await.context("ssh command failed to launch")?;
         Ok(CommandOutput {
             exit_code: output.status.code(),
@@ -574,11 +572,10 @@ impl SshConnection {
             .copied()
             .unwrap_or(20);
         let mut command = format!(
-            "{} --remote-server --max-item {}",
-            remote_path, max_items
+            "{remote_path} --remote-server --max-item {max_items}"
         );
         if log_level > 0 {
-            command.push_str(&format!(" --log-level {}", log_level));
+            command.push_str(&format!(" --log-level {log_level}"));
         }
 
         let mut cmd = Command::new("ssh");
@@ -614,7 +611,7 @@ impl SshConnection {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        info!("Starting remote LSP proxy: {}", command);
+        info!("Starting remote LSP proxy: {command}");
         let mut process = cmd.spawn().context("Failed to spawn remote LSP proxy")?;
 
         let stdin = process
@@ -634,13 +631,13 @@ impl SshConnection {
                 let mut lines = BufReader::new(stderr).lines();
                 loop {
                     match lines.next_line().await {
-                        Ok(Some(line)) => warn!("[remote stderr] {}", line),
+                        Ok(Some(line)) => warn!("[remote stderr] {line}"),
                         Ok(None) => {
                             debug!("[remote stderr] EOF");
                             break;
                         }
                         Err(e) => {
-                            warn!("[remote stderr] read error: {}", e);
+                            warn!("[remote stderr] read error: {e}");
                             break;
                         }
                     }
@@ -655,12 +652,14 @@ impl SshConnection {
         })
     }
 
+    #[allow(dead_code)]
     pub fn connection_key(&self) -> String {
         self.socket.connection_options.connection_key()
     }
 }
 
 /// SSH LSP进程包装
+#[allow(dead_code)]
 pub struct SshLspProcess {
     process: Child,
     pub stdin: tokio::process::ChildStdin,
@@ -668,6 +667,7 @@ pub struct SshLspProcess {
 }
 
 impl SshLspProcess {
+    #[allow(dead_code)]
     pub async fn wait(&mut self) -> Result<std::process::ExitStatus> {
         self.process
             .wait()
@@ -675,6 +675,7 @@ impl SshLspProcess {
             .context("SSH LSP process wait failed")
     }
 
+    #[allow(dead_code)]
     pub fn kill(&mut self) -> Result<()> {
         self.process
             .start_kill()

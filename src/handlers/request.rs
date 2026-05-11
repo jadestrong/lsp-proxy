@@ -500,8 +500,7 @@ pub(crate) async fn handle_completion(
                     let slice_length = std::cmp::min(*max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
                     debug!(
-                        "completion return slice: max={} slice_len={}",
-                        max_items, slice_length
+                        "completion return slice: max={max_items} slice_len={slice_length}"
                     );
                     anyhow::Ok(slice_items.to_owned())
                 }

@@ -93,7 +93,7 @@ impl Application {
             log::debug!("Shutting down language server: {}", client.name());
             // Send shutdown to language servers if they're running
             if client.is_initialized() {
-                let _ = client.shutdown_and_exit();
+                drop(client.shutdown_and_exit());
             }
         }
 

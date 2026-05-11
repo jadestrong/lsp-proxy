@@ -66,7 +66,7 @@ impl Connection {
                 match Message::read(&mut stdin) {
                     Ok(Some(msg)) => {
                         if let Err(e) = reader_sender.send(msg) {
-                            error!("stdio reader: inbox receiver dropped: {}", e);
+                            error!("stdio reader: inbox receiver dropped: {e}");
                             return Ok(());
                         }
                     }
@@ -82,7 +82,7 @@ impl Connection {
                         force_stdin_blocking();
                     }
                     Err(e) => {
-                        error!("stdio reader: read error on stdin: {}", e);
+                        error!("stdio reader: read error on stdin: {e}");
                         return Err(e);
                     }
                 }

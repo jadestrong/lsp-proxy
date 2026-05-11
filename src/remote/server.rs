@@ -59,7 +59,7 @@ fn read_loop(sender: Sender<Message>) -> std::io::Result<()> {
         if len == 0 || len > MAX_MESSAGE_LEN {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("invalid envelope length: {}", len),
+                format!("invalid envelope length: {len}"),
             ));
         }
         body.resize(len as usize, 0);
@@ -68,7 +68,7 @@ fn read_loop(sender: Sender<Message>) -> std::io::Result<()> {
         let envelope = match Envelope::decode(body.as_slice()) {
             Ok(e) => e,
             Err(e) => {
-                error!("failed to decode envelope: {}", e);
+                error!("failed to decode envelope: {e}");
                 continue;
             }
         };
@@ -80,7 +80,7 @@ fn read_loop(sender: Sender<Message>) -> std::io::Result<()> {
                 }
             }
             Err(e) => {
-                debug!("ignoring undecodable envelope: {}", e);
+                debug!("ignoring undecodable envelope: {e}");
             }
         }
     }
@@ -110,7 +110,7 @@ fn write_loop(receiver: Receiver<Message>) -> std::io::Result<()> {
         let envelope = match message_to_envelope(msg) {
             Ok(e) => e,
             Err(e) => {
-                error!("failed to encode outgoing message as envelope: {}", e);
+                error!("failed to encode outgoing message as envelope: {e}");
                 continue;
             }
         };
@@ -120,7 +120,7 @@ fn write_loop(receiver: Receiver<Message>) -> std::io::Result<()> {
         buf.reserve(message_len as usize);
         envelope
             .encode(&mut buf)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            .map_err(std::io::Error::other)?;
         stdout.write_all(&buf)?;
         stdout.flush()?;
     }

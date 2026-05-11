@@ -130,15 +130,10 @@ fn is_separator_at_pos(value: &str, index: usize) -> bool {
     if index > value.chars().count() {
         return false;
     }
-    if let Some(ch) = value.chars().nth(index) {
-        match ch {
-            '_' | '-' | '.' | ' ' | '/' | '\\' | '\'' | '\"' | ':' | '$' | '<' | '>' | '('
-            | ')' | '[' | ']' | '{' | '}' => true,
-            _ => false,
-        }
-    } else {
-        false
-    }
+    matches!(
+        value.chars().nth(index),
+        Some('_' | '-' | '.' | ' ' | '/' | '\\' | '\'' | '\"' | ':' | '$' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}')
+    )
 }
 
 // Function to check if a character at a specific position is whitespace
@@ -146,14 +141,7 @@ fn is_whitespace_at_pos(value: &str, index: usize) -> bool {
     if index > value.chars().count() {
         return false;
     }
-    if let Some(ch) = value.chars().nth(index) {
-        match ch {
-            ' ' | '\t' => true,
-            _ => false,
-        }
-    } else {
-        false
-    }
+    matches!(value.chars().nth(index), Some(' ' | '\t'))
 }
 
 // Function to check if a character at a specific position in 'word' is uppercase

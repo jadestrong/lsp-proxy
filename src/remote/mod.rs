@@ -1,16 +1,12 @@
 pub mod deploy;
 pub mod detector;
-pub mod rpc;
 pub mod router;
+pub mod rpc;
 pub mod server;
 pub mod ssh;
 
-pub use detector::{RemoteDetector, RemoteInfo, RemotePathInfo};
 pub use router::RemoteConnectionManager;
-pub use rpc::{RpcClient, RpcServer};
-pub use ssh::{SshConnection, SshConnectionOptions};
 
-use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteType {

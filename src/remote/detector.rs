@@ -93,7 +93,8 @@ impl RemoteDetector {
     }
 
     /// 将本地路径转换为远程路径表示
-    pub fn local_to_remote_path(&self, local_path: &str, remote_info: &RemoteInfo) -> String {
+    #[allow(dead_code)]
+    pub fn local_to_remote_path(&self, local_path: &str, _remote_info: &RemoteInfo) -> String {
         // 简化实现：直接将本地路径作为远程路径
         // 实际应用中可能需要更复杂的路径映射逻辑
         local_path.to_string()
@@ -129,6 +130,7 @@ impl RemoteDetector {
     }
 
     /// 检查是否为远程路径
+    #[allow(dead_code)]
     pub fn is_remote_path(&self, path: &str) -> bool {
         matches!(self.parse_path(path), RemotePathInfo::Remote(_))
     }
@@ -142,6 +144,7 @@ impl RemoteDetector {
     }
 
     /// 检查路径是否使用指定的远程类型
+    #[allow(dead_code)]
     pub fn is_remote_type(&self, path: &str, remote_type: RemoteType) -> bool {
         if let Some(info) = self.extract_remote_info(path) {
             info.host.remote_type == remote_type

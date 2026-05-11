@@ -46,7 +46,7 @@ pub async fn read_envelope<S: AsyncRead + Unpin>(
     stream.read_exact(buffer).await?;
     let message_len = MessageLen::from_le_bytes(buffer.as_slice().try_into().unwrap());
     if message_len == 0 || message_len > MAX_MESSAGE_LEN {
-        return Err(anyhow!("Invalid envelope length: {}", message_len));
+        return Err(anyhow!("Invalid envelope length: {message_len}"));
     }
     buffer.resize(message_len as usize, 0);
     stream.read_exact(buffer).await?;
@@ -82,7 +82,7 @@ enum OutgoingCommand {
 /// RPC client that speaks Protobuf-framed Envelopes over a duplex byte stream.
 pub struct RpcClient {
     sender: UnboundedSender<OutgoingCommand>,
-    next_id: Arc<AtomicU32>,
+    _next_id: Arc<AtomicU32>,
     /// Set to true by the heartbeat task when it decides the far end is
     /// unresponsive (N consecutive ping misses). Checked by `is_dead()`.
     dead: Arc<AtomicBool>,
@@ -108,7 +108,7 @@ impl RpcClient {
         tokio::spawn(Self::heartbeat_loop(sender.clone(), dead.clone()));
         Ok(Self {
             sender,
-            next_id: Arc::new(AtomicU32::new(1)),
+            _next_id: Arc::new(AtomicU32::new(1)),
             dead,
         })
     }
@@ -159,20 +159,18 @@ impl RpcClient {
             match res {
                 Ok(Ok(Ok(_))) => {
                     if consecutive_misses > 0 {
-                        debug!("heartbeat: recovered after {} misses", consecutive_misses);
+                        debug!("heartbeat: recovered after {consecutive_misses} misses");
                     }
                     consecutive_misses = 0;
                 }
                 _ => {
                     consecutive_misses += 1;
                     warn!(
-                        "heartbeat: ping miss {}/{}",
-                        consecutive_misses, MAX_MISSED_HEARTBEATS
+                        "heartbeat: ping miss {consecutive_misses}/{MAX_MISSED_HEARTBEATS}"
                     );
                     if consecutive_misses >= MAX_MISSED_HEARTBEATS {
                         warn!(
-                            "heartbeat: {} consecutive misses, marking RPC client dead",
-                            MAX_MISSED_HEARTBEATS
+                            "heartbeat: {MAX_MISSED_HEARTBEATS} consecutive misses, marking RPC client dead"
                         );
                         dead.store(true, Ordering::Relaxed);
                         return;
@@ -186,10 +184,10 @@ impl RpcClient {
     /// - the background communication loop has exited (`sender.is_closed()`
     ///   — underlying transport died), or
     /// - the heartbeat task declared the far end unresponsive.
-    /// Cached clients that report `is_dead()` must be evicted and recreated
-    /// before the next request — otherwise every subsequent `send_request`
-    /// either fails instantly ("channel closed") or hangs until its 30s
-    /// timeout, repeatedly.
+    ///   Cached clients that report `is_dead()` must be evicted and recreated
+    ///   before the next request — otherwise every subsequent `send_request`
+    ///   either fails instantly ("channel closed") or hangs until its 30s
+    ///   timeout, repeatedly.
     pub fn is_dead(&self) -> bool {
         self.sender.is_closed() || self.dead.load(Ordering::Relaxed)
     }
@@ -212,8 +210,7 @@ impl RpcClient {
             }
             Err(_) => {
                 warn!(
-                    "RPC request timeout after 30s: method={} orig_id={:?}",
-                    method, orig_id
+                    "RPC request timeout after 30s: method={method} orig_id={orig_id:?}"
                 );
                 Err(anyhow!("RPC request timeout"))
             }
@@ -252,14 +249,13 @@ impl RpcClient {
                             let params_bytes = match serde_json::to_vec(&request.params) {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    let _ = response_tx.send(Err(anyhow!("encode params: {}", e)));
+                                    let _ = response_tx.send(Err(anyhow!("encode params: {e}")));
                                     continue;
                                 }
                             };
                             let method_for_log = request.method.clone();
                             debug!(
-                                "RPC send request env_id={} method={} orig_id={:?}",
-                                envelope_id, method_for_log, original_id
+                                "RPC send request env_id={envelope_id} method={method_for_log} orig_id={original_id:?}"
                             );
                             let envelope = Envelope {
                                 id: Some(envelope_id),
@@ -270,7 +266,7 @@ impl RpcClient {
                                 })),
                             };
                             if let Err(e) = write_envelope(&mut stream, &mut buffer, envelope).await {
-                                error!("Failed to write request envelope: {}", e);
+                                error!("Failed to write request envelope: {e}");
                                 let _ = response_tx.send(Err(e));
                                 break;
                             }
@@ -280,7 +276,7 @@ impl RpcClient {
                             let params_bytes = match serde_json::to_vec(&notif.params) {
                                 Ok(b) => b,
                                 Err(e) => {
-                                    warn!("Failed to encode notification params: {}", e);
+                                    warn!("Failed to encode notification params: {e}");
                                     continue;
                                 }
                             };
@@ -293,7 +289,7 @@ impl RpcClient {
                                 })),
                             };
                             if let Err(e) = write_envelope(&mut stream, &mut buffer, envelope).await {
-                                error!("Failed to write notification envelope: {}", e);
+                                error!("Failed to write notification envelope: {e}");
                                 break;
                             }
                         }
@@ -321,12 +317,12 @@ impl RpcClient {
                                                 &bytes[..bytes.len().min(512)],
                                             )
                                             .into_owned();
-                                            debug!("RPC recv result preview: {}", preview);
+                                            debug!("RPC recv result preview: {preview}");
                                         }
                                         let response = decode_response(orig_id, resp);
                                         let _ = tx.send(response);
                                     } else {
-                                        debug!("Unmatched response envelope id={}", env_id);
+                                        debug!("Unmatched response envelope id={env_id}");
                                     }
                                 } else {
                                     debug!("Response envelope missing responding_to");
@@ -335,13 +331,13 @@ impl RpcClient {
                             Some(envelope::Payload::Notification(notif)) => {
                                 match decode_notification(notif) {
                                     Ok(msg) => forward_unsolicited(&unsolicited, msg),
-                                    Err(e) => warn!("bad server notification: {}", e),
+                                    Err(e) => warn!("bad server notification: {e}"),
                                 }
                             }
                             Some(envelope::Payload::Request(req)) => {
                                 match decode_server_request(envelope.id, req) {
                                     Ok(msg) => forward_unsolicited(&unsolicited, msg),
-                                    Err(e) => warn!("bad server request: {}", e),
+                                    Err(e) => warn!("bad server request: {e}"),
                                 }
                             }
                             None => {
@@ -349,7 +345,7 @@ impl RpcClient {
                             }
                         },
                         Err(e) => {
-                            error!("RPC read error: {}", e);
+                            error!("RPC read error: {e}");
                             break;
                         }
                     }
@@ -362,8 +358,8 @@ impl RpcClient {
         }
     }
 
-    pub fn next_request_id(&self) -> u32 {
-        self.next_id.fetch_add(1, Ordering::Relaxed)
+    pub fn _next_request_id(&self) -> u32 {
+        self._next_id.fetch_add(1, Ordering::Relaxed)
     }
 }
 
@@ -392,7 +388,7 @@ fn forward_unsolicited(sink: &Option<TokioUnboundedSender<Message>>, msg: Messag
     match sink {
         Some(tx) => {
             if let Err(e) = tx.send(msg) {
-                debug!("unsolicited channel closed: {}", e);
+                debug!("unsolicited channel closed: {e}");
             }
         }
         None => {
@@ -422,11 +418,13 @@ fn decode_response(original_id: RequestId, resp: proto::Response) -> Result<Resp
 
 /// Server-side handler for decoded envelopes.
 #[async_trait::async_trait]
+#[allow(dead_code)]
 pub trait RpcHandler {
     async fn handle_message(&self, message: Message) -> Result<Option<Message>>;
 }
 
 /// RPC server that reads Envelopes from a byte stream and dispatches to a handler.
+#[allow(dead_code)]
 pub struct RpcServer {
     handler: Box<dyn RpcHandler + Send + Sync>,
 }
@@ -452,7 +450,7 @@ impl RpcServer {
                     let incoming_msg = match envelope_to_message(envelope) {
                         Ok(msg) => msg,
                         Err(e) => {
-                            warn!("Failed to decode envelope: {}", e);
+                            warn!("Failed to decode envelope: {e}");
                             continue;
                         }
                     };
@@ -463,20 +461,20 @@ impl RpcServer {
                                 match message_to_response_envelope(response_msg, envelope_id) {
                                     Ok(env) => env,
                                     Err(e) => {
-                                        warn!("Failed to encode response: {}", e);
+                                        warn!("Failed to encode response: {e}");
                                         continue;
                                     }
                                 };
                             if let Err(e) =
                                 write_envelope(&mut stream, &mut buffer, response_envelope).await
                             {
-                                error!("Failed to write response envelope: {}", e);
+                                error!("Failed to write response envelope: {e}");
                                 break;
                             }
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            warn!("Handler error: {}", e);
+                            warn!("Handler error: {e}");
                             if let Some(env_id) = envelope_id {
                                 let error_envelope = Envelope {
                                     id: None,
@@ -493,7 +491,7 @@ impl RpcServer {
                                 if let Err(we) =
                                     write_envelope(&mut stream, &mut buffer, error_envelope).await
                                 {
-                                    error!("Failed to write error envelope: {}", we);
+                                    error!("Failed to write error envelope: {we}");
                                     break;
                                 }
                             }
@@ -501,7 +499,7 @@ impl RpcServer {
                     }
                 }
                 Err(e) => {
-                    error!("RPC server read error: {}", e);
+                    error!("RPC server read error: {e}");
                     break;
                 }
             }
@@ -513,6 +511,7 @@ impl RpcServer {
 
 /// Translate an incoming Envelope into an internal Message. The caller is
 /// responsible for using `envelope.id` when producing a response.
+#[allow(dead_code)]
 fn envelope_to_message(envelope: Envelope) -> Result<Message> {
     let payload = envelope
         .payload
@@ -543,6 +542,7 @@ fn envelope_to_message(envelope: Envelope) -> Result<Message> {
 }
 
 /// Encode a server-produced Response Message into a correlated Envelope.
+#[allow(dead_code)]
 fn message_to_response_envelope(message: Message, responding_to: Option<u32>) -> Result<Envelope> {
     let response = match message {
         Message::Response(r) => r,

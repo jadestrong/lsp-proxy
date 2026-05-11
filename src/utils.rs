@@ -331,7 +331,7 @@ fn are_diagnostic_equal(d1: &Diagnostic, d2: &Diagnostic) -> bool {
         && d1.source == d2.source
 }
 
-pub fn is_diagnostic_vectors_equal(vec1: &Vec<&Diagnostic>, vec2: &Vec<Diagnostic>) -> bool {
+pub fn is_diagnostic_vectors_equal(vec1: &[&Diagnostic], vec2: &[Diagnostic]) -> bool {
     if vec1.len() != vec2.len() {
         return false;
     }

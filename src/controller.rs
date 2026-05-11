@@ -31,7 +31,7 @@ pub struct Controller {
     sender_to_emacs: Sender<Message>,
     req_queue: ReqQueue,
     processing_requests: HashMap<String, Request>,
-    remote_manager: Option<Arc<RemoteConnectionManager>>,
+    _remote_manager: Option<Arc<RemoteConnectionManager>>,
     /// Outbound channel into the remote worker thread. If `None`, remote
     /// routing is disabled and every message goes through the local path.
     remote_task_tx: Option<mpsc::UnboundedSender<RemoteTask>>,
@@ -61,8 +61,7 @@ impl Controller {
             }
             Err(e) => {
                 warn!(
-                    "Failed to initialize remote connection manager: {}. Running in local mode only.",
-                    e
+                    "Failed to initialize remote connection manager: {e}. Running in local mode only."
                 );
                 None
             }
@@ -87,7 +86,7 @@ impl Controller {
             sender_to_emacs: sender_for_emacs,
             req_queue: ReqQueue::default(),
             processing_requests: HashMap::new(),
-            remote_manager,
+            _remote_manager: remote_manager,
             remote_task_tx,
             remote_result_rx,
         }
@@ -106,7 +105,7 @@ impl Controller {
                     error: None,
                 };
                 if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
-                    error!("failed to reply to rpc ping: {}", e);
+                    error!("failed to reply to rpc ping: {e}");
                 }
                 return Ok(());
             }
@@ -121,7 +120,7 @@ impl Controller {
                     if let Err(e) = tx.send(RemoteTask::GetRemoteStatus {
                         request_id: req.id.clone(),
                     }) {
-                        error!("remote worker channel closed: {}", e);
+                        error!("remote worker channel closed: {e}");
                     }
                 } else {
                     // No remote manager — return a disabled status directly.
@@ -136,7 +135,7 @@ impl Controller {
                         error: None,
                     };
                     if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
-                        error!("failed to reply to getRemoteInfo: {}", e);
+                        error!("failed to reply to getRemoteInfo: {e}");
                     }
                 }
                 return Ok(());
@@ -152,7 +151,7 @@ impl Controller {
             }
             let tx = self.remote_task_tx.as_ref().unwrap();
             if let Err(e) = tx.send(RemoteTask::RouteMessage { message: msg }) {
-                error!("remote worker channel closed: {}", e);
+                error!("remote worker channel closed: {e}");
             }
             return Ok(());
         }
@@ -243,7 +242,7 @@ impl Controller {
                     let now = Instant::now();
                     if let Ok(msg) = msg {
                         if let Err(e) = self.handle_message(msg, now) {
-                            error!("Error handling message: {}", e);
+                            error!("Error handling message: {e}");
                         }
                     } else {
                         error!("inbox error");
@@ -303,7 +302,7 @@ impl Controller {
                             }
                         }
                         Err(err) => {
-                            warn!("remote worker result channel closed: {}", err);
+                            warn!("remote worker result channel closed: {err}");
                         }
                     }
                 }
@@ -459,7 +458,7 @@ fn spawn_remote_worker(
             {
                 Ok(rt) => rt,
                 Err(e) => {
-                    error!("failed to build tokio runtime for remote worker: {}", e);
+                    error!("failed to build tokio runtime for remote worker: {e}");
                     return;
                 }
             };
@@ -473,14 +472,14 @@ fn spawn_remote_worker(
                                 match manager.route_message(message).await {
                                     Ok(Some(response)) => {
                                         if let Err(e) = result_tx.send(response) {
-                                            warn!("remote result channel closed: {}", e);
+                                            warn!("remote result channel closed: {e}");
                                         }
                                     }
                                     Ok(None) => {
                                         debug!("remote worker: notification accepted, no response");
                                     }
                                     Err(e) => {
-                                        error!("remote routing failed: {}", e);
+                                        error!("remote routing failed: {e}");
                                     }
                                 }
                             }
@@ -492,7 +491,7 @@ fn spawn_remote_worker(
                                     error: None,
                                 });
                                 if let Err(e) = result_tx.send(resp) {
-                                    warn!("remote result channel closed: {}", e);
+                                    warn!("remote result channel closed: {e}");
                                 }
                             }
                         }

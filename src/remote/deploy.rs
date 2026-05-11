@@ -38,7 +38,10 @@ pub async fn check_remote_binary(
     remote_path: &str,
 ) -> Result<RemoteBinaryStatus> {
     // Wrap in a shell so `~` expands on the remote side.
-    let command = format!("sh -c '{} --version 2>/dev/null'", shell_escape(remote_path));
+    let command = format!(
+        "sh -c '{} --version 2>/dev/null'",
+        shell_escape(remote_path)
+    );
     let output = conn
         .run_command_with_status(&command)
         .await
@@ -78,7 +81,7 @@ pub async fn deploy_binary(
 ) -> Result<()> {
     let parent = remote_parent_dir(remote_path);
     let mkdir = format!("mkdir -p {}", shell_escape(&parent));
-    debug!("preparing remote dir: {}", mkdir);
+    debug!("preparing remote dir: {mkdir}");
     conn.run_command(&mkdir)
         .await
         .context("failed to create remote install directory")?;
@@ -108,16 +111,15 @@ pub async fn ensure_remote_binary(conn: &SshConnection, remote_path: &str) -> Re
     let status = check_remote_binary(conn, remote_path).await?;
     match &status {
         RemoteBinaryStatus::VersionMatch => {
-            debug!("remote binary at {} is up to date", remote_path);
+            debug!("remote binary at {remote_path} is up to date");
             return Ok(());
         }
         RemoteBinaryStatus::Missing => {
-            info!("remote binary {} missing, deploying", remote_path);
+            info!("remote binary {remote_path} missing, deploying");
         }
         RemoteBinaryStatus::VersionMismatch { remote } => {
             info!(
-                "remote binary {} version mismatch ({} vs local {}), redeploying",
-                remote_path, remote, EXPECTED_VERSION
+                "remote binary {remote_path} version mismatch ({remote} vs local {EXPECTED_VERSION}), redeploying"
             );
         }
     }
@@ -129,8 +131,7 @@ pub async fn ensure_remote_binary(conn: &SshConnection, remote_path: &str) -> Re
     match check_remote_binary(conn, remote_path).await? {
         RemoteBinaryStatus::VersionMatch => Ok(()),
         other => Err(anyhow!(
-            "after deploy, remote binary still not healthy: {:?}",
-            other
+            "after deploy, remote binary still not healthy: {other:?}"
         )),
     }
 }
@@ -172,7 +173,7 @@ fn shell_escape(s: &str) -> String {
     } else {
         // Wrap in single quotes and escape any internal quotes.
         let escaped = s.replace('\'', r#"'\''"#);
-        format!("'{}'", escaped)
+        format!("'{escaped}'")
     }
 }
 
@@ -190,10 +191,7 @@ mod tests {
             parse_version_output("emacs-lsp-proxy 0.7.2\n"),
             Some("0.7.2")
         );
-        assert_eq!(
-            parse_version_output("emacs-lsp-proxy 0.8.0"),
-            Some("0.8.0")
-        );
+        assert_eq!(parse_version_output("emacs-lsp-proxy 0.8.0"), Some("0.8.0"));
         // Subsequent lines are ignored.
         assert_eq!(
             parse_version_output("emacs-lsp-proxy 1.0.0\nextra info\n"),
@@ -218,8 +216,14 @@ mod tests {
 
     #[test]
     fn shell_escape_safe_strings_untouched() {
-        assert_eq!(shell_escape("~/.local/bin/emacs-lsp-proxy"), "~/.local/bin/emacs-lsp-proxy");
-        assert_eq!(shell_escape("/usr/local/bin/foo.sh"), "/usr/local/bin/foo.sh");
+        assert_eq!(
+            shell_escape("~/.local/bin/emacs-lsp-proxy"),
+            "~/.local/bin/emacs-lsp-proxy"
+        );
+        assert_eq!(
+            shell_escape("/usr/local/bin/foo.sh"),
+            "/usr/local/bin/foo.sh"
+        );
     }
 
     #[test]
@@ -227,10 +231,7 @@ mod tests {
         // Space must force quoting.
         assert_eq!(shell_escape("hello world"), "'hello world'");
         // Embedded single quote must be escaped.
-        assert_eq!(
-            shell_escape("it's"),
-            r#"'it'\''s'"#
-        );
+        assert_eq!(shell_escape("it's"), r#"'it'\''s'"#);
         // Shell metacharacters must force quoting.
         assert_eq!(shell_escape("foo;rm -rf"), "'foo;rm -rf'");
     }
@@ -241,9 +242,7 @@ mod tests {
         assert_eq!(RemoteBinaryStatus::Missing, RemoteBinaryStatus::Missing);
         assert_ne!(
             RemoteBinaryStatus::VersionMatch,
-            RemoteBinaryStatus::VersionMismatch {
-                remote: "x".into()
-            }
+            RemoteBinaryStatus::VersionMismatch { remote: "x".into() }
         );
     }
 }
