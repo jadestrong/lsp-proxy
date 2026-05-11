@@ -2,6 +2,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, select, Receiver, Sender};
 use log::{debug, error, info, warn};
 use lsp_types::notification::Notification;
+use lsp_types::request::Request as _;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
@@ -41,8 +42,11 @@ pub struct Controller {
 
 /// Unit of work queued to the remote worker thread.
 #[derive(Debug)]
-struct RemoteTask {
-    message: Message,
+enum RemoteTask {
+    /// Forward a message through `RemoteConnectionManager::route_message`.
+    RouteMessage { message: Message },
+    /// Query remote connection status and reply to the given request id.
+    GetRemoteStatus { request_id: msg::RequestId },
 }
 
 impl Controller {
@@ -108,6 +112,37 @@ impl Controller {
             }
         }
 
+        // Remote-info diagnostic query. Needs async access to the remote
+        // manager's tokio Mutexes, so route through the remote worker thread.
+        if let Message::Request(req) = &msg {
+            if req.method == lsp_ext::GetRemoteInfo::METHOD {
+                self.register_request(req, now);
+                if let Some(tx) = &self.remote_task_tx {
+                    if let Err(e) = tx.send(RemoteTask::GetRemoteStatus {
+                        request_id: req.id.clone(),
+                    }) {
+                        error!("remote worker channel closed: {}", e);
+                    }
+                } else {
+                    // No remote manager — return a disabled status directly.
+                    let resp = Response {
+                        id: req.id.clone(),
+                        result: Some(serde_json::to_value(
+                            crate::lsp_ext::RemoteConnectionStatus {
+                                enabled: false,
+                                clients: vec![],
+                            },
+                        ).unwrap()),
+                        error: None,
+                    };
+                    if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
+                        error!("failed to reply to getRemoteInfo: {}", e);
+                    }
+                }
+                return Ok(());
+            }
+        }
+
         // If the remote worker is up and the message targets a remote path,
         // register it and hand it off to the async worker instead of the local
         // LSP pipeline.
@@ -116,7 +151,7 @@ impl Controller {
                 self.register_request(req, now);
             }
             let tx = self.remote_task_tx.as_ref().unwrap();
-            if let Err(e) = tx.send(RemoteTask { message: msg }) {
+            if let Err(e) = tx.send(RemoteTask::RouteMessage { message: msg }) {
                 error!("remote worker channel closed: {}", e);
             }
             return Ok(());
@@ -433,17 +468,32 @@ fn spawn_remote_worker(
                     let manager = manager.clone();
                     let result_tx = result_tx.clone();
                     tokio::spawn(async move {
-                        match manager.route_message(task.message).await {
-                            Ok(Some(response)) => {
-                                if let Err(e) = result_tx.send(response) {
-                                    warn!("remote result channel closed: {}", e);
+                        match task {
+                            RemoteTask::RouteMessage { message } => {
+                                match manager.route_message(message).await {
+                                    Ok(Some(response)) => {
+                                        if let Err(e) = result_tx.send(response) {
+                                            warn!("remote result channel closed: {}", e);
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        debug!("remote worker: notification accepted, no response");
+                                    }
+                                    Err(e) => {
+                                        error!("remote routing failed: {}", e);
+                                    }
                                 }
                             }
-                            Ok(None) => {
-                                debug!("remote worker: notification accepted, no response");
-                            }
-                            Err(e) => {
-                                error!("remote routing failed: {}", e);
+                            RemoteTask::GetRemoteStatus { request_id } => {
+                                let status = manager.get_remote_status().await;
+                                let resp = Message::Response(Response {
+                                    id: request_id,
+                                    result: Some(serde_json::to_value(status).unwrap()),
+                                    error: None,
+                                });
+                                if let Err(e) = result_tx.send(resp) {
+                                    warn!("remote result channel closed: {}", e);
+                                }
                             }
                         }
                     });

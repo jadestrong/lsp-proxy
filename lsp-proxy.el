@@ -420,6 +420,38 @@ Skip reopening notifications for buffers not currently visible."
                                   (plist-get diag :message))))
               (insert "No diagnostics found\n")))))
 
+      ;; Remote connection status
+      (when (lsp-proxy--connection-alivep)
+        (lsp-proxy--async-request
+         'emacs/getRemoteInfo
+         (lsp-proxy--build-params nil)
+         :success-fn
+         (lambda (status)
+           (with-current-buffer debug-buffer
+             (insert "\n=== Remote Connection Status ===\n")
+             (let ((enabled (eq (plist-get status :enabled) t))
+                   (clients (plist-get status :clients)))
+               (insert (format "Remote Enabled: %s\n" (if enabled "Yes" "No")))
+               (if (and clients (> (length clients) 0))
+                   (progn
+                     (insert (format "Active Clients: %d\n\n" (length clients)))
+                     (seq-doseq (client clients)
+                       (let ((key (plist-get client :connectionKey))
+                             (rtype (plist-get client :remoteType))
+                             (alive (eq (plist-get client :isAlive) t))
+                             (binary-path (plist-get client :binaryPath))
+                             (local-ver (plist-get client :localVersion))
+                             (remote-ver (plist-get client :remoteVersion))
+                             (deploy (plist-get client :deployStatus)))
+                         (insert (format "  [%s] %s (%s)\n"
+                                         (if alive "ALIVE" "DEAD")
+                                         key rtype))
+                         (insert (format "    Binary Path:    %s\n" (or binary-path "N/A")))
+                         (insert (format "    Deploy Status:  %s\n" (or deploy "unknown")))
+                         (insert (format "    Local Version:  %s\n" (or local-ver "N/A")))
+                         (insert (format "    Remote Version: %s\n" (or remote-ver "N/A"))))))
+                 (insert "No remote clients connected\n")))))))
+
       ;; Languages configuration
       (when (lsp-proxy--connection-alivep)
         (lsp-proxy--async-request

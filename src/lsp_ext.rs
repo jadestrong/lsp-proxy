@@ -319,6 +319,39 @@ impl Request for RustAnalyzerExpandMacro {
     const METHOD: &'static str = "rust-analyzer/expandMacro";
 }
 
+// emacs/getRemoteInfo
+#[derive(Debug)]
+pub enum GetRemoteInfo {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteClientInfo {
+    pub connection_key: String,
+    pub remote_type: String,
+    pub is_alive: bool,
+    /// Absolute path where the remote binary is (or should be) installed.
+    pub binary_path: String,
+    /// Version of the locally-running lsp-proxy (compile-time).
+    pub local_version: String,
+    /// Version reported by the remote binary, if reachable.
+    pub remote_version: Option<String>,
+    /// One of: "deployed", "missing", "version_mismatch", "unknown".
+    pub deploy_status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteConnectionStatus {
+    pub enabled: bool,
+    pub clients: Vec<RemoteClientInfo>,
+}
+
+impl Request for GetRemoteInfo {
+    type Params = ();
+    type Result = RemoteConnectionStatus;
+    const METHOD: &'static str = "emacs/getRemoteInfo";
+}
+
 // emacs/forwardRequest
 #[derive(Debug)]
 pub enum ForwardRequest {}
