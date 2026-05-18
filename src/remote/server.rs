@@ -22,6 +22,66 @@ use crate::remote::rpc::{
     MessageLen, MESSAGE_LEN_SIZE,
 };
 
+/// Normalize a `file://~/path` URI sent by Emacs into a proper `file:///abs/path` URI.
+///
+/// The `url` crate parses `file://~/foo` with `~` as the hostname. On Unix,
+/// `Url::to_file_path()` rejects any non-empty host, so document lookup silently
+/// fails. We expand the tilde here, at the remote-server decode boundary, so the
+/// rest of the pipeline never sees the malformed form.
+fn normalize_tilde_uris(params: &mut Params) {
+    let home = std::env::var_os("HOME");
+    let home = home.as_deref();
+    normalize_uri_in_json_with_home(&mut params.params, home);
+    if let Some(ref mut uri) = params.uri {
+        *uri = normalize_tilde_uri_with_home(uri, home);
+    }
+}
+
+/// Accepts an explicit home dir so tests can be deterministic without touching env vars.
+fn normalize_tilde_uri_with_home(s: &str, home: Option<&std::ffi::OsStr>) -> String {
+    // Fast path: only consider file:// URIs that have ~ as host.
+    if !s.starts_with("file://~") {
+        return s.to_owned();
+    }
+    // file://~/rest  →  host = "~", path = "/rest"
+    // We want file:///home/user/rest
+    if let Ok(url) = lsp_types::Url::parse(s) {
+        if url.scheme() == "file" && url.host_str() == Some("~") {
+            if let Some(home) = home {
+                let mut abs = std::path::PathBuf::from(home);
+                // url.path() is "/rest" (starts with '/'), strip the leading '/'
+                abs.push(url.path().trim_start_matches('/'));
+                if let Ok(fixed) = lsp_types::Url::from_file_path(&abs) {
+                    return fixed.into();
+                }
+            }
+        }
+    }
+    s.to_owned()
+}
+
+fn normalize_uri_in_json_with_home(value: &mut serde_json::Value, home: Option<&std::ffi::OsStr>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, val) in map.iter_mut() {
+                if key == "uri" || key.ends_with("Uri") {
+                    if let serde_json::Value::String(s) = val {
+                        *s = normalize_tilde_uri_with_home(s, home);
+                    }
+                } else {
+                    normalize_uri_in_json_with_home(val, home);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for val in arr {
+                normalize_uri_in_json_with_home(val, home);
+            }
+        }
+        _ => {}
+    }
+}
+
 const MAX_MESSAGE_LEN: u32 = 10 * 1024 * 1024;
 
 /// Build a [`Connection`] that speaks Envelope frames on stdio.
@@ -133,7 +193,8 @@ fn envelope_to_message(envelope: Envelope) -> Result<Message> {
         .ok_or_else(|| anyhow::anyhow!("envelope missing payload"))?;
     match payload {
         envelope::Payload::Request(req) => {
-            let params: Params = serde_json::from_slice(&req.params)?;
+            let mut params: Params = serde_json::from_slice(&req.params)?;
+            normalize_tilde_uris(&mut params);
             let id_numeric = envelope
                 .id
                 .ok_or_else(|| anyhow::anyhow!("request envelope missing id"))?;
@@ -144,7 +205,8 @@ fn envelope_to_message(envelope: Envelope) -> Result<Message> {
             }))
         }
         envelope::Payload::Notification(notif) => {
-            let params: Params = serde_json::from_slice(&notif.params)?;
+            let mut params: Params = serde_json::from_slice(&notif.params)?;
+            normalize_tilde_uris(&mut params);
             Ok(Message::Notification(Notification {
                 method: notif.method,
                 params,
@@ -315,5 +377,159 @@ mod tests {
             request_id_to_u32(&RequestId::from("abc".to_string())),
             None
         );
+    }
+
+    const FAKE_HOME: &str = "/home/user";
+
+    fn home() -> Option<&'static std::ffi::OsStr> {
+        Some(std::ffi::OsStr::new(FAKE_HOME))
+    }
+
+    #[test]
+    fn tilde_uri_expands_to_absolute() {
+        assert_eq!(
+            normalize_tilde_uri_with_home("file://~/foo/bar.rs", home()),
+            "file:///home/user/foo/bar.rs"
+        );
+    }
+
+    #[test]
+    fn tilde_uri_nested_path() {
+        assert_eq!(
+            normalize_tilde_uri_with_home(
+                "file://~/Documents/JadeStrong/demos/decode/src/client.js",
+                home()
+            ),
+            "file:///home/user/Documents/JadeStrong/demos/decode/src/client.js"
+        );
+    }
+
+    #[test]
+    fn absolute_uri_unchanged() {
+        let uri = "file:///absolute/path/file.rs";
+        assert_eq!(normalize_tilde_uri_with_home(uri, home()), uri);
+    }
+
+    #[test]
+    fn non_file_uri_unchanged() {
+        let uri = "untitled:Untitled-1";
+        assert_eq!(normalize_tilde_uri_with_home(uri, home()), uri);
+    }
+
+    #[test]
+    fn tilde_uri_without_home_unchanged() {
+        let uri = "file://~/foo.rs";
+        assert_eq!(normalize_tilde_uri_with_home(uri, None), uri);
+    }
+
+    #[test]
+    fn normalize_uri_in_json_fixes_text_document_uri() {
+        let mut json = serde_json::json!({
+            "textDocument": { "uri": "file://~/src/main.rs" }
+        });
+        normalize_uri_in_json_with_home(&mut json, home());
+        assert_eq!(
+            json["textDocument"]["uri"],
+            "file:///home/user/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn normalize_uri_in_json_fixes_scope_uri() {
+        let mut json = serde_json::json!({ "scopeUri": "file://~/project" });
+        normalize_uri_in_json_with_home(&mut json, home());
+        assert_eq!(json["scopeUri"], "file:///home/user/project");
+    }
+
+    #[test]
+    fn normalize_uri_in_json_leaves_absolute_uris_unchanged() {
+        let mut json = serde_json::json!({
+            "textDocument": { "uri": "file:///already/absolute.rs" }
+        });
+        normalize_uri_in_json_with_home(&mut json, home());
+        assert_eq!(json["textDocument"]["uri"], "file:///already/absolute.rs");
+    }
+
+    #[test]
+    fn did_open_notification_envelope_normalizes_uri() {
+        let params = Params {
+            uri: Some("file://~/src/lib.rs".to_string()),
+            context: None,
+            virtual_doc: None,
+            params: serde_json::json!({
+                "textDocument": {
+                    "uri": "file://~/src/lib.rs",
+                    "languageId": "rust",
+                    "version": 0,
+                    "text": ""
+                }
+            }),
+        };
+        let envelope = Envelope {
+            id: None,
+            responding_to: None,
+            payload: Some(envelope::Payload::Notification(proto::Notification {
+                method: "textDocument/didOpen".into(),
+                params: serde_json::to_vec(&params).unwrap(),
+            })),
+        };
+
+        let msg = envelope_to_message(envelope).expect("decode");
+        match msg {
+            Message::Notification(n) => {
+                // top-level uri field is normalized
+                let uri = n.params.uri.as_deref().unwrap_or_default();
+                assert!(
+                    !uri.contains("//~"),
+                    "params.uri still contains tilde host: {uri}"
+                );
+                // textDocument.uri inside the JSON body is also normalized
+                let doc_uri = n.params.params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or_default();
+                assert!(
+                    !doc_uri.contains("//~"),
+                    "textDocument.uri still contains tilde host: {doc_uri}"
+                );
+            }
+            other => panic!("expected Notification, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn request_envelope_normalizes_uri() {
+        let params = Params {
+            uri: Some("file://~/project/main.rs".to_string()),
+            context: None,
+            virtual_doc: None,
+            params: serde_json::json!({
+                "textDocument": { "uri": "file://~/project/main.rs" },
+                "position": { "line": 10, "character": 5 }
+            }),
+        };
+        let envelope = Envelope {
+            id: Some(42),
+            responding_to: None,
+            payload: Some(envelope::Payload::Request(proto::Request {
+                method: "textDocument/definition".into(),
+                params: serde_json::to_vec(&params).unwrap(),
+            })),
+        };
+
+        let msg = envelope_to_message(envelope).expect("decode");
+        match msg {
+            Message::Request(req) => {
+                let uri = req.params.uri.as_deref().unwrap_or_default();
+                assert!(!uri.contains("//~"), "params.uri still has tilde: {uri}");
+                let doc_uri = req.params.params["textDocument"]["uri"]
+                    .as_str()
+                    .unwrap_or_default();
+                assert!(
+                    !doc_uri.contains("//~"),
+                    "textDocument.uri still has tilde: {doc_uri}"
+                );
+            }
+            other => panic!("expected Request, got {:?}", other),
+        }
     }
 }
