@@ -14,6 +14,7 @@ pub struct Args {
     pub max_diagnostics_push: usize,
     pub enable_bytecode: bool,
     pub copilot_server_name: String,
+    pub remote_binary_path: Option<String>,
 }
 
 impl Args {
@@ -53,6 +54,10 @@ impl Args {
                         }
                     }
                     None => args.copilot_server_name = "copilot".to_string(),
+                },
+                "--remote-binary-path" => match argv.next() {
+                    Some(path) => args.remote_binary_path = Some(path),
+                    None => anyhow::bail!("--remote-binary-path must specify a path"),
                 },
                 "--stdio" => args.stdio = true,
                 "--remote-server" => args.remote_server = true,
@@ -96,6 +101,7 @@ impl Args {
         println!("        --max-diagnostics-push <NUM>  Maximum diagnostics to push (default: 50)");
         println!("        --stdio               Enable stdio communication mode (required)");
         println!("        --remote-server       Run as a remote server (reads/writes Protobuf Envelopes on stdio)");
+        println!("        --remote-binary-path <PATH>  Remote host path for the deployed binary (default: ~/.cache/emacs/lsp-proxy/emacs-lsp-proxy)");
         println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");

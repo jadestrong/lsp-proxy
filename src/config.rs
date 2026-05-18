@@ -19,6 +19,9 @@ pub static ENABLE_BYTECODE: once_cell::sync::OnceCell<bool> = once_cell::sync::O
 pub static COPILOT_SERVER_NAME: once_cell::sync::OnceCell<String> =
     once_cell::sync::OnceCell::new();
 
+static REMOTE_BINARY_PATH: once_cell::sync::OnceCell<String> =
+    once_cell::sync::OnceCell::new();
+
 pub fn set_max_completion_items(max_items: usize) {
     MAX_COMPLETION_ITEMS.set(max_items).ok();
 }
@@ -38,6 +41,17 @@ pub fn set_copilot_server_name(name: String) {
     COPILOT_SERVER_NAME.set(name).ok();
 }
 
+pub fn set_remote_binary_path(path: String) {
+    REMOTE_BINARY_PATH.set(path).ok();
+}
+
+pub fn remote_binary_path() -> &'static str {
+    REMOTE_BINARY_PATH
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(crate::remote::deploy::DEFAULT_REMOTE_BINARY_PATH)
+}
+
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
     // check specified file exist and is file, then set CONFIG_FILE
     if let Some(file) = specified_file {
@@ -54,7 +68,7 @@ pub fn default_log_file() -> PathBuf {
     if is_remote_server_mode() {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
-                return dir.join("remote-server.log");
+                return dir.join(format!("remote-server-{}.log", timestamp_now()));
             }
         }
     }
@@ -141,4 +155,14 @@ pub fn default_syntax_loader() -> syntax::Configuration {
         }
     };
     config
+}
+
+/// Format the current local time as `YYYYMMDD-HHMMSS`, falling back to UTC.
+fn timestamp_now() -> String {
+    use time::macros::format_description;
+    let fmt = format_description!("[year][month][day]-[hour][minute][second]");
+    let now = time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    now.format(fmt)
+        .unwrap_or_else(|_| "00000000-000000".to_string())
 }

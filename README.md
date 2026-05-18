@@ -771,6 +771,87 @@ For specialized setups, you can extend the language mapping:
 | Wrong language server started | Check `lsp-proxy-org-babel-language-map` for correct mapping |
 | Edit buffer not getting LSP | Verify `lsp-proxy-org-edit-special-enable-lsp` is `t` |
 
+## Remote Development
+
+LSP-Proxy supports transparent remote development over SSH via Emacs TRAMP. When you open a TRAMP file, the local lsp-proxy process automatically deploys itself to the remote host, starts a remote server process, and routes all LSP traffic through the SSH tunnel — no manual setup required.
+
+### How It Works
+
+1. You open a file with a TRAMP path (e.g., `/ssh:myserver:/home/user/project/main.rs`)
+2. lsp-proxy detects the `/ssh:` prefix and establishes an SSH ControlMaster connection
+3. It checks whether a compatible binary exists on the remote at `lsp-proxy-remote-binary-path`
+4. If the binary is missing or the version doesn't match, it `scp`-uploads the currently-running local binary
+5. The remote binary is started with `--remote-server`; LSP traffic is forwarded through the tunnel
+6. From Emacs's perspective, everything works the same as a local buffer
+
+### Supported TRAMP Methods
+
+| TRAMP path form | Description |
+|---|---|
+| `/ssh:host:/path` | SSH config alias (user resolved via `~/.ssh/config`) |
+| `/ssh:user@host:/path` | Explicit username |
+| `/ssh:user@host#port:/path` | Custom SSH port |
+| `/rpc:user@host:/path` | RPC tunnel (alternative to ssh method) |
+
+### Prerequisites
+
+- SSH access to the remote host (password-less key auth recommended)
+- The local `emacs-lsp-proxy` binary must be compatible with the remote host's architecture (Linux x86-64 or ARM64)
+- The remote user needs write permission to the deploy directory (default: `~/.cache/emacs/lsp-proxy/`)
+
+### Basic Usage
+
+No special configuration is required. Enable `lsp-proxy-mode` normally, then open any TRAMP file:
+
+```elisp
+;; In your init file — same hook as local files
+(add-hook 'typescript-ts-mode-hook #'lsp-proxy-mode)
+```
+
+```elisp
+;; Open a remote file — lsp-proxy-mode activates automatically
+(find-file "/ssh:myserver:/home/user/project/main.rs")
+```
+
+lsp-proxy handles binary deployment and tunnel setup on first access. Subsequent files on the same host reuse the existing SSH connection.
+
+### Customization
+
+```elisp
+;; Change where the binary is deployed on the remote host
+;; Default: "~/.cache/emacs/lsp-proxy/emacs-lsp-proxy"
+(setq lsp-proxy-remote-binary-path "/opt/tools/emacs-lsp-proxy")
+```
+
+### Diagnostics
+
+Check the current remote connection status from `M-x lsp-proxy-doctor`. The **Remote Connection Status** section shows:
+
+| Field | Meaning |
+|---|---|
+| `Binary Path` | Path used on the remote host |
+| `Deploy Status` | `deployed`, `missing`, `version_mismatch`, or `unknown` |
+| `Local Version` | Version of your local lsp-proxy binary |
+| `Remote Version` | Version reported by the remote binary |
+
+For deeper debugging, increase the log level before opening the remote file:
+
+```elisp
+(setq lsp-proxy-log-level 2)
+```
+
+Then `M-x lsp-proxy-open-log-file` to inspect SSH connection and deploy steps.
+
+### Troubleshooting
+
+| Issue | Solution |
+|---|---|
+| Deploy fails with permission error | Ensure the remote directory is writable; set `lsp-proxy-remote-binary-path` to a writable path |
+| Binary architecture mismatch | Cross-platform deploy is not supported; the local binary must match the remote OS/arch |
+| SSH connection times out | Configure `ServerAliveInterval` / `ServerAliveCountMax` in `~/.ssh/config` |
+| Remote LSP not starting | Set `lsp-proxy-log-level` to `2`, reopen the file, check the log for SSH/deploy errors |
+| Features stop working after reconnect | Run `M-x lsp-proxy-restart` to re-establish the remote session |
+
 ## Acknowledgements
 Thanks to [Helix](https://github.com/helix-editor/helix), the architecture of Lsp-Proxy Server is entirely based on Helix's implementation. Language configuration and communication with different language servers are all dependent on Helix. As a Rust beginner, I've gained a lot from this approach during the implementation.
 

@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::{
-    deploy::{self, DEFAULT_REMOTE_BINARY_PATH},
+    deploy,
     detector::{RemoteDetector, RemoteInfo, RemotePathInfo},
     rpc::RpcClient,
     ssh::{SshConnection, SshConnectionOptions},
@@ -109,7 +109,7 @@ impl RemoteConnectionManager {
         let ssh_connection = self.get_or_create_ssh_connection(remote_info).await?;
 
         // 在启动远程进程前,先确保远端 binary 存在且版本匹配,否则 scp 过去
-        let remote_lsp_path = DEFAULT_REMOTE_BINARY_PATH;
+        let remote_lsp_path = crate::config::remote_binary_path();
         deploy::ensure_remote_binary(ssh_connection.as_ref(), remote_lsp_path)
             .await
             .map_err(|e| anyhow!("auto-deploy failed for {connection_key}: {e}"))?;
@@ -428,7 +428,7 @@ impl RemoteConnectionManager {
         let mut infos = Vec::new();
         for (key, client) in clients.iter() {
             // Probe deployment status via the SSH connection for this key.
-            let remote_path = deploy::DEFAULT_REMOTE_BINARY_PATH;
+            let remote_path = crate::config::remote_binary_path();
             let (deploy_status, remote_version) = match ssh_conns.get(key) {
                 Some(ssh) => match deploy::check_remote_binary(ssh, remote_path).await {
                     Ok(deploy::RemoteBinaryStatus::VersionMatch) => {

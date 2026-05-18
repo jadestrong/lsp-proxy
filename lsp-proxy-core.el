@@ -18,6 +18,7 @@
 (require 'jsonrpc)
 (require 'dash)
 (require 'lsp-proxy-utils)
+(require 'lsp-proxy-remote)
 
 (defcustom lsp-proxy-log-file-directory temporary-file-directory
   "The directory for `lsp-proxy' server to generate log file."
@@ -313,7 +314,8 @@ Only sends requests if servers are available."
                                                                 "--log" lsp-proxy--log-file
                                                                 "--max-item" (number-to-string lsp-proxy-max-completion-item)
                                                                 "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count)
-                                                                "--copilot-server-name" lsp-proxy-copilot-server-name)
+                                                                "--copilot-server-name" lsp-proxy-copilot-server-name
+                                                                "--remote-binary-path" lsp-proxy-remote-binary-path)
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
