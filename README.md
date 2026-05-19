@@ -773,14 +773,14 @@ For specialized setups, you can extend the language mapping:
 
 ## Remote Development
 
-LSP-Proxy supports transparent remote development over SSH via Emacs TRAMP. When you open a TRAMP file, the local lsp-proxy process automatically deploys itself to the remote host, starts a remote server process, and routes all LSP traffic through the SSH tunnel — no manual setup required.
+LSP-Proxy supports transparent remote development over SSH via Emacs TRAMP. When you open a TRAMP file, the local lsp-proxy process checks whether a compatible binary exists on the remote host, starts a remote server process, and routes all LSP traffic through the SSH tunnel. Binary deployment is controlled by `lsp-proxy-remote-deploy-mode` — either manually on demand or automatically in the background.
 
 ### How It Works
 
 1. You open a file with a TRAMP path (e.g., `/ssh:myserver:/home/user/project/main.rs`)
 2. lsp-proxy detects the `/ssh:` prefix and establishes an SSH ControlMaster connection
-3. It checks whether a compatible binary exists on the remote at `lsp-proxy-remote-binary-path`
-4. If the binary is missing or the version doesn't match, it `scp`-uploads the currently-running local binary
+3. It checks whether `emacs-lsp-proxy` is available in the remote PATH; if the version matches, it is used directly without uploading any file
+4. If the global command is absent or has a version mismatch, lsp-proxy checks the fixed deploy path (`lsp-proxy-remote-binary-path`). If neither location has a matching binary, deployment is triggered according to `lsp-proxy-remote-deploy-mode` (see [Binary Deployment](#binary-deployment))
 5. The remote binary is started with `--remote-server`; LSP traffic is forwarded through the tunnel
 6. From Emacs's perspective, everything works the same as a local buffer
 
@@ -821,31 +821,110 @@ lsp-proxy handles binary deployment and tunnel setup on first access. Subsequent
 ;; Change where the binary is deployed on the remote host
 ;; Default: "~/.cache/emacs/lsp-proxy/emacs-lsp-proxy"
 (setq lsp-proxy-remote-binary-path "/opt/tools/emacs-lsp-proxy")
+
+;; Deploy mode: 'manual (default) or 'auto
+(setq lsp-proxy-remote-deploy-mode 'manual)
 ```
+
+### Binary Deployment
+
+When the binary check fails (missing or version mismatch on both the global command and the deploy path), lsp-proxy behaves according to `lsp-proxy-remote-deploy-mode`.
+
+#### `manual` (default)
+
+lsp-proxy prints a hint in the minibuffer and waits for you to act:
+
+```
+[lsp-proxy] Remote binary unavailable on myserver (…). Run M-x lsp-proxy-remote-deploy to deploy v0.7.2 to ~/.cache/…
+```
+
+Run `M-x lsp-proxy-remote-deploy` to open the `*lsp-proxy-deploy*` buffer. It shows the check result for both locations, then asks for confirmation before uploading:
+
+```
+Deploy log — myserver  [manual]  (started 2026-05-19 10:30:00)
+------------------------------------------------------------
+
+[10:30:00] Checking remote binary...
+
+[10:30:01] Local version : 0.7.2
+[10:30:01] Deploy path   : ~/.cache/emacs/lsp-proxy/emacs-lsp-proxy
+
+[10:30:01] Global command (emacs-lsp-proxy): ✗ not found in PATH
+[10:30:01] Deploy path   (~/.cache/…):       ✗ not found
+
+[10:30:01] Binary not available or outdated. Deploy required.
+```
+
+Confirm the `[lsp-proxy] Deploy v0.7.2 to myserver?` prompt and the upload begins, with each step appended to the same buffer. Re-open the remote file once the deploy succeeds.
+
+#### `auto`
+
+lsp-proxy starts the upload immediately as soon as the check fails, streaming each step to the `*lsp-proxy-deploy*` buffer so you can follow along without doing anything:
+
+```
+Deploy log — myserver  [auto]  (started 2026-05-19 10:30:00)
+------------------------------------------------------------
+
+[10:30:00] Binary unavailable (…). Starting automatic deploy of v0.7.2...
+[10:30:00] Target path: ~/.cache/emacs/lsp-proxy/emacs-lsp-proxy
+[10:30:00] Starting upload...
+[10:30:01] Checking global emacs-lsp-proxy on remote (need v0.7.2)...
+[10:30:01] Global emacs-lsp-proxy not found in remote PATH.
+[10:30:01] Checking ~/.cache/emacs/lsp-proxy/emacs-lsp-proxy...
+[10:30:01] Uploading /usr/local/bin/emacs-lsp-proxy (8388608 bytes)...
+[10:30:04] Upload complete, verifying...
+[10:30:04] ✓ Deploy succeeded. Binary: ~/.cache/emacs/lsp-proxy/emacs-lsp-proxy
+```
+
+Re-open the remote file once the deploy completes.
+
+#### `M-x lsp-proxy-remote-deploy`
+
+This command is always available regardless of the deploy mode. It runs the full check-and-deploy flow interactively, defaulting to the host that most recently requested a deploy. Use it to re-deploy after a version upgrade or to recover from a failed auto-deploy.
 
 ### Diagnostics
 
-Check the current remote connection status from `M-x lsp-proxy-doctor`. The **Remote Connection Status** section shows:
+**Connection status** — run `M-x lsp-proxy-doctor` and check the **Remote Connection Status** section:
 
 | Field | Meaning |
 |---|---|
-| `Binary Path` | Path used on the remote host |
+| `Binary Path` | Command or path actually used (`emacs-lsp-proxy` if the global command was selected, otherwise the deploy path) |
 | `Deploy Status` | `deployed`, `missing`, `version_mismatch`, or `unknown` |
 | `Local Version` | Version of your local lsp-proxy binary |
 | `Remote Version` | Version reported by the remote binary |
 
-For deeper debugging, increase the log level before opening the remote file:
+**Check the remote binary manually** — verify which binary is in use and its version:
+
+```bash
+# Global command (preferred when available)
+ssh myserver 'emacs-lsp-proxy --version'
+
+# Deployed binary at the default path
+ssh myserver '~/.cache/emacs/lsp-proxy/emacs-lsp-proxy --version'
+```
+
+**View the remote log** — each server start creates a new timestamped log file next to the binary (`~/.cache/emacs/lsp-proxy/remote-server-YYYYMMDD-HHMMSS.log`). First set the log level so output is written, then open the remote file to trigger a fresh start:
 
 ```elisp
 (setq lsp-proxy-log-level 2)
 ```
 
-Then `M-x lsp-proxy-open-log-file` to inspect SSH connection and deploy steps.
+```bash
+# Print the latest log
+ssh myserver 'ls -t ~/.cache/emacs/lsp-proxy/remote-server-*.log | head -1 | xargs cat'
+
+# Follow in real time while reproducing the issue
+ssh myserver 'ls -t ~/.cache/emacs/lsp-proxy/remote-server-*.log | head -1 | xargs tail -f'
+
+# Clean up old logs, keeping the 5 most recent
+ssh myserver 'ls -t ~/.cache/emacs/lsp-proxy/remote-server-*.log | tail -n +6 | xargs rm -f'
+```
 
 ### Troubleshooting
 
 | Issue | Solution |
 |---|---|
+| Remote binary missing, no prompt shown | Check `lsp-proxy-remote-deploy-mode`; in `manual` mode the hint appears in the minibuffer — run `M-x lsp-proxy-remote-deploy` |
 | Deploy fails with permission error | Ensure the remote directory is writable; set `lsp-proxy-remote-binary-path` to a writable path |
 | Binary architecture mismatch | Cross-platform deploy is not supported; the local binary must match the remote OS/arch |
 | SSH connection times out | Configure `ServerAliveInterval` / `ServerAliveCountMax` in `~/.ssh/config` |

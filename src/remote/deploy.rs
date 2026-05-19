@@ -1,10 +1,10 @@
-//! Auto-deploy: make sure a compatible `emacs-lsp-proxy` binary lives at the
-//! expected path on the remote host before we try to start it.
+//! Remote binary management: check whether a compatible `emacs-lsp-proxy`
+//! exists on the remote host, and deploy it on demand.
 //!
-//! The check runs `<remote_path> --version` over the SSH ControlMaster. If the
-//! binary is missing or reports a different version than the local one, we
-//! upload the currently-running executable via `scp` (reusing the same socket,
-//! so it's a single round trip).
+//! The check runs `<remote_path> --version` over the SSH ControlMaster.
+//! Deployment (upload + chmod) is always user-initiated — this module never
+//! auto-deploys; callers that need deployment should invoke
+//! `deploy_with_progress` explicitly.
 
 use anyhow::{anyhow, Context, Result};
 use log::{debug, info, warn};
@@ -104,34 +104,111 @@ pub async fn deploy_binary(
     Ok(())
 }
 
-/// Make sure the remote binary is present at the right version, deploying
-/// the local binary if needed. Returns the final path the caller should use
-/// when launching the remote server.
-pub async fn ensure_remote_binary(conn: &SshConnection, remote_path: &str) -> Result<()> {
-    let status = check_remote_binary(conn, remote_path).await?;
-    match &status {
+/// Check whether a compatible binary is already available on the remote host.
+///
+/// Priority: global `emacs-lsp-proxy` in PATH first, then `remote_path`.
+/// Returns the command/path to use, or `Err` if neither location has a
+/// matching binary — the caller should then ask the user to run a deploy.
+pub async fn check_binary_available(
+    conn: &SshConnection,
+    remote_path: &str,
+) -> Result<String> {
+    match check_remote_binary(conn, "emacs-lsp-proxy").await? {
         RemoteBinaryStatus::VersionMatch => {
-            debug!("remote binary at {remote_path} is up to date");
-            return Ok(());
+            info!("using global emacs-lsp-proxy on remote (v{EXPECTED_VERSION})");
+            return Ok("emacs-lsp-proxy".to_string());
         }
         RemoteBinaryStatus::Missing => {
-            info!("remote binary {remote_path} missing, deploying");
+            debug!("emacs-lsp-proxy not found in remote PATH, checking {remote_path}");
         }
         RemoteBinaryStatus::VersionMismatch { remote } => {
             info!(
-                "remote binary {remote_path} version mismatch ({remote} vs local {EXPECTED_VERSION}), redeploying"
+                "global emacs-lsp-proxy on remote is v{remote} (need v{EXPECTED_VERSION}), \
+                 checking {remote_path}"
             );
         }
     }
 
+    match check_remote_binary(conn, remote_path).await? {
+        RemoteBinaryStatus::VersionMatch => {
+            debug!("remote binary at {remote_path} is up to date");
+            Ok(remote_path.to_string())
+        }
+        RemoteBinaryStatus::Missing => Err(anyhow!(
+            "emacs-lsp-proxy not found (checked global PATH and {remote_path})"
+        )),
+        RemoteBinaryStatus::VersionMismatch { remote } => Err(anyhow!(
+            "emacs-lsp-proxy version mismatch: remote has v{remote}, need v{EXPECTED_VERSION} \
+             (checked global PATH and {remote_path})"
+        )),
+    }
+}
+
+/// Deploy the local binary to `remote_path`, reporting progress via `on_progress`.
+///
+/// Checks the global command and `remote_path` first; if either is already
+/// up-to-date the upload is skipped.  Returns the command/path to use.
+pub async fn deploy_with_progress(
+    conn: &SshConnection,
+    remote_path: &str,
+    on_progress: &(impl Fn(String) + Send + Sync),
+) -> Result<String> {
+    on_progress(format!(
+        "Checking global emacs-lsp-proxy on remote (need v{EXPECTED_VERSION})..."
+    ));
+    match check_remote_binary(conn, "emacs-lsp-proxy").await? {
+        RemoteBinaryStatus::VersionMatch => {
+            on_progress(format!(
+                "Global emacs-lsp-proxy v{EXPECTED_VERSION} found — no upload needed."
+            ));
+            return Ok("emacs-lsp-proxy".to_string());
+        }
+        RemoteBinaryStatus::Missing => {
+            on_progress("Global emacs-lsp-proxy not found in remote PATH.".to_string());
+        }
+        RemoteBinaryStatus::VersionMismatch { remote } => {
+            on_progress(format!(
+                "Global emacs-lsp-proxy is v{remote}, need v{EXPECTED_VERSION}."
+            ));
+        }
+    }
+
+    on_progress(format!("Checking {remote_path}..."));
+    match check_remote_binary(conn, remote_path).await? {
+        RemoteBinaryStatus::VersionMatch => {
+            on_progress(format!(
+                "{remote_path} is already v{EXPECTED_VERSION} — no upload needed."
+            ));
+            return Ok(remote_path.to_string());
+        }
+        RemoteBinaryStatus::Missing => {
+            on_progress(format!("{remote_path} not found, uploading..."));
+        }
+        RemoteBinaryStatus::VersionMismatch { remote } => {
+            on_progress(format!(
+                "{remote_path} is v{remote}, re-uploading v{EXPECTED_VERSION}..."
+            ));
+        }
+    }
+
     let local_path = current_binary_path().context("locating local lsp-proxy binary")?;
+    on_progress(format!(
+        "Uploading {} ({} bytes)...",
+        local_path.display(),
+        std::fs::metadata(&local_path)
+            .map(|m| m.len().to_string())
+            .unwrap_or_else(|_| "?".to_string()),
+    ));
     deploy_binary(conn, &local_path, remote_path).await?;
 
-    // Post-deploy sanity: the new binary should now report the expected version.
+    on_progress("Upload complete, verifying...".to_string());
     match check_remote_binary(conn, remote_path).await? {
-        RemoteBinaryStatus::VersionMatch => Ok(()),
+        RemoteBinaryStatus::VersionMatch => {
+            on_progress(format!("Deploy successful: {remote_path} v{EXPECTED_VERSION}."));
+            Ok(remote_path.to_string())
+        }
         other => Err(anyhow!(
-            "after deploy, remote binary still not healthy: {other:?}"
+            "remote binary still not healthy after deploy: {other:?}"
         )),
     }
 }

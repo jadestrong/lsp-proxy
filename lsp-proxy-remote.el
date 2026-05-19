@@ -10,10 +10,12 @@
 ;;; Commentary:
 
 ;; Remote development configuration for lsp-proxy.
-;; Provides customization options for connecting to and deploying the
-;; lsp-proxy server on remote hosts via SSH.
+;; Provides customization options, notification handlers and an interactive
+;; deploy command for working with remote hosts via TRAMP/SSH.
 
 ;;; Code:
+
+(require 'lsp-proxy-utils)
 
 (defgroup lsp-proxy-remote nil
   "Remote development settings for lsp-proxy."
@@ -22,13 +24,196 @@
 
 (defcustom lsp-proxy-remote-binary-path "~/.cache/emacs/lsp-proxy/emacs-lsp-proxy"
   "Path on the remote host where the emacs-lsp-proxy binary is installed.
-When lsp-proxy opens a TRAMP buffer, it auto-deploys its own binary to
-this path on the remote host if the binary is absent or outdated.
 The path is interpreted by the remote shell, so `~' is expanded on the
 remote side.  Change this if your remote home directory is not writable
 or you prefer a different installation location."
   :type 'string
   :group 'lsp-proxy-remote)
+
+(defcustom lsp-proxy-remote-deploy-mode 'manual
+  "How lsp-proxy handles a missing or outdated remote binary.
+
+`manual' (default) — when the binary check fails, lsp-proxy prints a
+  message and waits.  Run `M-x lsp-proxy-remote-deploy' to open the
+  deploy buffer, review check results, confirm, and start the upload.
+
+`auto' — lsp-proxy automatically starts the deploy as soon as the check
+  fails, streaming progress to the `*lsp-proxy-deploy*' buffer so you
+  can follow along.  No confirmation prompt is shown."
+  :type '(choice (const :tag "Manual (prompt before deploying)" manual)
+                 (const :tag "Auto (deploy immediately, show progress)" auto))
+  :group 'lsp-proxy-remote)
+
+;;; Internal state
+
+(defvar lsp-proxy-remote--deploy-buffer-name "*lsp-proxy-deploy*"
+  "Name of the buffer used to display remote deploy progress.")
+
+(defvar lsp-proxy-remote--pending-connection-key nil
+  "Connection key of the most recent host that requested a deploy.")
+
+;;; Deploy buffer helpers
+
+(defun lsp-proxy-remote--deploy-buffer ()
+  "Return the deploy progress buffer, creating it if necessary."
+  (get-buffer-create lsp-proxy-remote--deploy-buffer-name))
+
+(defun lsp-proxy-remote--log (msg)
+  "Append MSG with a timestamp to the deploy progress buffer."
+  (with-current-buffer (lsp-proxy-remote--deploy-buffer)
+    (goto-char (point-max))
+    (insert (format-time-string "[%H:%M:%S] ") msg "\n")))
+
+(defun lsp-proxy-remote--show-deploy-buffer ()
+  "Pop up the deploy progress buffer without switching focus."
+  (display-buffer (lsp-proxy-remote--deploy-buffer)
+                  '((display-buffer-at-bottom)
+                    (window-height . 12))))
+
+(defun lsp-proxy-remote--reset-deploy-buffer (connection-key mode-label)
+  "Clear the deploy buffer and write an opening header for CONNECTION-KEY.
+MODE-LABEL is a short string describing the current deploy mode (e.g.
+\"auto\" or \"manual\") shown in the header."
+  (with-current-buffer (lsp-proxy-remote--deploy-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert (format "Deploy log — %s  [%s]  (started %s)\n%s\n\n"
+                      connection-key
+                      mode-label
+                      (format-time-string "%Y-%m-%d %H:%M:%S")
+                      (make-string 60 ?-)))))
+  (lsp-proxy-remote--show-deploy-buffer))
+
+;;; Internal: run the actual upload
+
+(defun lsp-proxy-remote--do-deploy (connection-key)
+  "Send the deploy request for CONNECTION-KEY and stream progress to the buffer."
+  (lsp-proxy-remote--log "")
+  (lsp-proxy-remote--log "Starting upload...")
+  (lsp-proxy--async-request
+   'emacs/deployRemoteBinary
+   (lsp-proxy--build-params (list :connectionKey connection-key))
+   :success-fn
+   (lambda (result)
+     (let ((ok   (eq (plist-get result :success) t))
+           (msg  (plist-get result :message))
+           (path (plist-get result :binaryPath)))
+       (lsp-proxy-remote--log "")
+       (lsp-proxy-remote--log
+        (if ok
+            (format "✓ Deploy succeeded. Binary: %s" (or path ""))
+          (format "✗ Deploy failed: %s" msg)))
+       (lsp-proxy-remote--show-deploy-buffer)
+       (if ok
+           (message "[lsp-proxy] Deploy succeeded. Re-open the remote file to connect.")
+         (message "[lsp-proxy] Deploy failed — see %s for details."
+                  lsp-proxy-remote--deploy-buffer-name))))
+   :error-fn
+   (lambda (err)
+     (lsp-proxy-remote--log (format "✗ Error: %s" err))
+     (lsp-proxy-remote--show-deploy-buffer)
+     (message "[lsp-proxy] Deploy error — see %s for details."
+              lsp-proxy-remote--deploy-buffer-name))))
+
+;;; Notification handlers (called from lsp-proxy-core notification dispatcher)
+
+(defun lsp-proxy-remote--handle-deploy-needed (params)
+  "Handle `emacs/remoteDeployNeeded' notification with PARAMS.
+Behaviour depends on `lsp-proxy-remote-deploy-mode':
+- `manual': show a minibuffer hint pointing to `lsp-proxy-remote-deploy'.
+- `auto':   start the deploy immediately, streaming progress to the buffer."
+  (let* ((key        (plist-get params :connectionKey))
+         (reason     (plist-get params :reason))
+         (local-ver  (plist-get params :localVersion))
+         (deploy-path (plist-get params :deployPath)))
+    (setq lsp-proxy-remote--pending-connection-key key)
+    (pcase lsp-proxy-remote-deploy-mode
+      ('manual
+       (message
+        (concat "[lsp-proxy] Remote binary unavailable on %s (%s). "
+                "Run M-x lsp-proxy-remote-deploy to deploy v%s to %s.")
+        key reason local-ver deploy-path))
+      ('auto
+       (lsp-proxy-remote--reset-deploy-buffer key "auto")
+       (lsp-proxy-remote--log
+        (format "Binary unavailable (%s). Starting automatic deploy of v%s..."
+                reason local-ver))
+       (lsp-proxy-remote--log (format "Target path: %s" deploy-path))
+       (lsp-proxy-remote--do-deploy key)))))
+
+(defun lsp-proxy-remote--handle-deploy-progress (params)
+  "Handle `emacs/remoteDeployProgress' notification with PARAMS."
+  (lsp-proxy-remote--log (plist-get params :message)))
+
+;;; Interactive deploy command
+
+;;;###autoload
+(defun lsp-proxy-remote-deploy (connection-key)
+  "Check and optionally deploy emacs-lsp-proxy to the remote host CONNECTION-KEY.
+
+Opens `*lsp-proxy-deploy*' showing the check result for both the global
+command and the deploy path.  If a matching binary is already available
+the command stops there.  Otherwise the user is asked to confirm before
+the upload begins.
+
+When called interactively, defaults to the host that last requested a deploy."
+  (interactive
+   (list (read-string
+          "Remote host (connection key): "
+          lsp-proxy-remote--pending-connection-key)))
+  (unless (and connection-key (not (string-empty-p connection-key)))
+    (user-error "No connection key specified"))
+  (lsp-proxy-remote--reset-deploy-buffer connection-key "manual")
+  (lsp-proxy-remote--log "Checking remote binary...")
+  (lsp-proxy--async-request
+   'emacs/checkRemoteBinary
+   (lsp-proxy--build-params (list :connectionKey connection-key))
+   :success-fn
+   (lambda (result)
+     (let* ((local-ver   (plist-get result :localVersion))
+            (deploy-path (plist-get result :deployPath))
+            (available   (plist-get result :availableBinary))
+            (global      (plist-get result :global))
+            (path-info   (plist-get result :path))
+            (g-status    (plist-get global    :status))
+            (g-version   (plist-get global    :version))
+            (p-status    (plist-get path-info :status))
+            (p-version   (plist-get path-info :version)))
+       (lsp-proxy-remote--log "")
+       (lsp-proxy-remote--log (format "Local version : %s" local-ver))
+       (lsp-proxy-remote--log (format "Deploy path   : %s" deploy-path))
+       (lsp-proxy-remote--log "")
+       (lsp-proxy-remote--log
+        (format "Global command (emacs-lsp-proxy): %s"
+                (pcase g-status
+                  ("match"            (format "✓ v%s — up to date" g-version))
+                  ("version_mismatch" (format "✗ v%s — version mismatch" g-version))
+                  (_                  "✗ not found in PATH"))))
+       (lsp-proxy-remote--log
+        (format "Deploy path   (%s): %s"
+                deploy-path
+                (pcase p-status
+                  ("match"            (format "✓ v%s — up to date" p-version))
+                  ("version_mismatch" (format "✗ v%s — version mismatch" p-version))
+                  (_                  "✗ not found"))))
+       (lsp-proxy-remote--log "")
+       (if available
+           (progn
+             (lsp-proxy-remote--log
+              (format "✓ Binary available at %s — no deploy needed." available))
+             (lsp-proxy-remote--show-deploy-buffer)
+             (message "[lsp-proxy] Remote binary is up to date on %s." connection-key))
+         (lsp-proxy-remote--log "Binary not available or outdated. Deploy required.")
+         (lsp-proxy-remote--show-deploy-buffer)
+         (when (yes-or-no-p
+                (format "[lsp-proxy] Deploy v%s to %s? " local-ver connection-key))
+           (lsp-proxy-remote--do-deploy connection-key)))))
+   :error-fn
+   (lambda (err)
+     (lsp-proxy-remote--log (format "✗ Check failed: %s" err))
+     (lsp-proxy-remote--show-deploy-buffer)
+     (message "[lsp-proxy] Binary check failed — see %s."
+              lsp-proxy-remote--deploy-buffer-name))))
 
 (provide 'lsp-proxy-remote)
 ;;; lsp-proxy-remote.el ends here

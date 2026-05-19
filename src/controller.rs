@@ -47,6 +47,16 @@ enum RemoteTask {
     RouteMessage { message: Message },
     /// Query remote connection status and reply to the given request id.
     GetRemoteStatus { request_id: msg::RequestId },
+    /// Probe the remote binary locations and return a check result without deploying.
+    CheckBinary {
+        request_id: msg::RequestId,
+        connection_key: String,
+    },
+    /// User-initiated deploy: upload the local binary to the remote host.
+    DeployBinary {
+        request_id: msg::RequestId,
+        connection_key: String,
+    },
 }
 
 impl Controller {
@@ -137,6 +147,73 @@ impl Controller {
                     if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
                         error!("failed to reply to getRemoteInfo: {e}");
                     }
+                }
+                return Ok(());
+            }
+        }
+
+        // Remote binary check (no upload).
+        if let Message::Request(req) = &msg {
+            if req.method == lsp_ext::CheckRemoteBinary::METHOD {
+                self.register_request(req, now);
+                let connection_key = serde_json::from_value::<
+                    lsp_ext::DeployRemoteBinaryParams,
+                >(req.params.params.clone())
+                .map(|p| p.connection_key)
+                .unwrap_or_default();
+                if let Some(tx) = &self.remote_task_tx {
+                    if let Err(e) = tx.send(RemoteTask::CheckBinary {
+                        request_id: req.id.clone(),
+                        connection_key,
+                    }) {
+                        error!("remote worker channel closed: {e}");
+                    }
+                } else {
+                    let resp = Response {
+                        id: req.id.clone(),
+                        result: None,
+                        error: Some(crate::lsp::jsonrpc::Error {
+                            code: crate::lsp::jsonrpc::ErrorCode::InternalError,
+                            message: "remote manager not available".to_string(),
+                            data: None,
+                        }),
+                    };
+                    self.sender_to_emacs.send(Message::Response(resp)).ok();
+                }
+                return Ok(());
+            }
+        }
+
+        // User-initiated remote binary deploy.
+        if let Message::Request(req) = &msg {
+            if req.method == lsp_ext::DeployRemoteBinary::METHOD {
+                self.register_request(req, now);
+                let connection_key = serde_json::from_value::<
+                    lsp_ext::DeployRemoteBinaryParams,
+                >(req.params.params.clone())
+                .map(|p| p.connection_key)
+                .unwrap_or_default();
+                if let Some(tx) = &self.remote_task_tx {
+                    if let Err(e) = tx.send(RemoteTask::DeployBinary {
+                        request_id: req.id.clone(),
+                        connection_key,
+                    }) {
+                        error!("remote worker channel closed: {e}");
+                    }
+                } else {
+                    let resp = Response {
+                        id: req.id.clone(),
+                        result: Some(
+                            serde_json::to_value(lsp_ext::DeployRemoteBinaryResult {
+                                success: false,
+                                binary_path: None,
+                                message: "remote manager not available".to_string(),
+                            })
+                            .unwrap(),
+                        ),
+                        error: None,
+                    };
+                    self.sender_to_emacs.send(Message::Response(resp)).ok();
                 }
                 return Ok(());
             }
@@ -488,6 +565,59 @@ fn spawn_remote_worker(
                                 let resp = Message::Response(Response {
                                     id: request_id,
                                     result: Some(serde_json::to_value(status).unwrap()),
+                                    error: None,
+                                });
+                                if let Err(e) = result_tx.send(resp) {
+                                    warn!("remote result channel closed: {e}");
+                                }
+                            }
+                            RemoteTask::CheckBinary {
+                                request_id,
+                                connection_key,
+                            } => {
+                                let resp = match manager
+                                    .check_binary_status(&connection_key)
+                                    .await
+                                {
+                                    Ok(result) => Response {
+                                        id: request_id,
+                                        result: Some(serde_json::to_value(result).unwrap()),
+                                        error: None,
+                                    },
+                                    Err(e) => Response {
+                                        id: request_id,
+                                        result: None,
+                                        error: Some(crate::lsp::jsonrpc::Error {
+                                            code: crate::lsp::jsonrpc::ErrorCode::InternalError,
+                                            message: format!("check failed: {e}"),
+                                            data: None,
+                                        }),
+                                    },
+                                };
+                                if let Err(e) = result_tx.send(Message::Response(resp)) {
+                                    warn!("remote result channel closed: {e}");
+                                }
+                            }
+                            RemoteTask::DeployBinary {
+                                request_id,
+                                connection_key,
+                            } => {
+                                let result = manager.deploy_for_key(&connection_key).await;
+                                let reply = match result {
+                                    Ok(binary_path) => lsp_ext::DeployRemoteBinaryResult {
+                                        success: true,
+                                        binary_path: Some(binary_path),
+                                        message: "Deploy succeeded.".to_string(),
+                                    },
+                                    Err(e) => lsp_ext::DeployRemoteBinaryResult {
+                                        success: false,
+                                        binary_path: None,
+                                        message: format!("Deploy failed: {e}"),
+                                    },
+                                };
+                                let resp = Message::Response(Response {
+                                    id: request_id,
+                                    result: Some(serde_json::to_value(reply).unwrap()),
                                     error: None,
                                 });
                                 if let Err(e) = result_tx.send(resp) {

@@ -14,9 +14,10 @@ use super::{
     ssh::{SshConnection, SshConnectionOptions},
     RemoteType,
 };
+use crate::msg::Notification;
 use crate::msg::{Message, Response};
 
-/// 远程连接管理器
+/// Manages SSH connections and RPC clients for remote LSP development.
 pub struct RemoteConnectionManager {
     detector: RemoteDetector,
     ssh_connections: Arc<Mutex<HashMap<String, Arc<SshConnection>>>>,
@@ -44,13 +45,13 @@ impl RemoteConnectionManager {
         *self.result_sink.lock() = Some(sink);
     }
 
-    /// 检查是否为远程路径
+    /// Returns `true` if `path` is a recognised remote (TRAMP) path.
     #[allow(dead_code)]
     pub fn is_remote_path(&self, path: &str) -> bool {
         self.detector.is_remote_path(path)
     }
 
-    /// 获取或创建SSH连接
+    /// Returns an existing SSH connection for `remote_info` or opens a new one.
     async fn get_or_create_ssh_connection(
         &self,
         remote_info: &RemoteInfo,
@@ -63,7 +64,6 @@ impl RemoteConnectionManager {
             return Ok(connection.clone());
         }
 
-        // 创建新的SSH连接
         let options =
             SshConnectionOptions::new(remote_info.host.host.clone(), remote_info.host.user.clone());
 
@@ -80,7 +80,7 @@ impl RemoteConnectionManager {
         Ok(connection)
     }
 
-    /// 获取或创建RPC客户端
+    /// Returns an existing RPC client for `remote_info` or creates a new one.
     async fn get_or_create_rpc_client(&self, remote_info: &RemoteInfo) -> Result<Arc<RpcClient>> {
         let connection_key = remote_info.host.connection_key();
 
@@ -105,21 +105,36 @@ impl RemoteConnectionManager {
             ssh.remove(&connection_key);
         }
 
-        // 通过SSH启动远程LSP代理并创建RPC客户端
         let ssh_connection = self.get_or_create_ssh_connection(remote_info).await?;
 
-        // 在启动远程进程前,先确保远端 binary 存在且版本匹配,否则 scp 过去
-        let remote_lsp_path = crate::config::remote_binary_path();
-        deploy::ensure_remote_binary(ssh_connection.as_ref(), remote_lsp_path)
-            .await
-            .map_err(|e| anyhow!("auto-deploy failed for {connection_key}: {e}"))?;
+        // Before launching the remote process, verify that a compatible binary
+        // is available.  If not, notify Emacs so the user can trigger a manual
+        // deploy and abort this connection attempt.
+        let fallback_path = crate::config::remote_binary_path();
+        let binary_cmd = match deploy::check_binary_available(
+            ssh_connection.as_ref(),
+            fallback_path,
+        )
+        .await
+        {
+            Ok(cmd) => cmd,
+            Err(e) => {
+                warn!("remote binary unavailable for {connection_key}: {e}");
+                self.send_deploy_needed_notification(
+                    &connection_key,
+                    &e.to_string(),
+                    fallback_path,
+                );
+                return Err(anyhow!(
+                    "remote binary unavailable for {connection_key}: {e}"
+                ));
+            }
+        };
 
-        // 启动远程LSP代理进程
         let lsp_process = ssh_connection
-            .start_remote_lsp_proxy(remote_lsp_path)
+            .start_remote_lsp_proxy(&binary_cmd)
             .await?;
 
-        // 创建RPC客户端，使用SSH隧道
         let stream = SshRpcStream::from_child_stdio(lsp_process.stdin, lsp_process.stdout);
 
         // Set up the unsolicited-message bridge: the RpcClient pushes raw
@@ -158,7 +173,8 @@ impl RemoteConnectionManager {
         Ok(client)
     }
 
-    /// 路由消息到适当的后端
+    /// Route `message` to the remote backend when its URI is a TRAMP path,
+    /// or return `None` to indicate that local handling should apply.
     pub async fn route_message(&self, message: Message) -> Result<Option<Message>> {
         let path = self.extract_path_from_message(&message);
 
@@ -172,18 +188,19 @@ impl RemoteConnectionManager {
                     return self.handle_remote_message(message, remote_info).await;
                 }
                 RemotePathInfo::Local(_) => {
-                    // 本地路径，返回None表示由本地处理
                     return Ok(None);
                 }
             }
         }
 
-        // 没有路径信息或无法解析，本地处理
         Ok(None)
     }
 
-    /// 处理远程消息。`/ssh:` 和 `/rpc:` 前缀都走同一套 SSH 传输 — TRAMP
-    /// 方法名只是 Emacs 侧的约定,对我们而言底层都是 `ssh <host> …`。
+    /// Dispatch `message` to the appropriate remote transport.
+    ///
+    /// Both `/ssh:` and `/rpc:` TRAMP methods use the same SSH tunnel — the
+    /// method prefix is purely an Emacs convention; the transport is always
+    /// `ssh <host> …`.
     async fn handle_remote_message(
         &self,
         message: Message,
@@ -195,14 +212,13 @@ impl RemoteConnectionManager {
             .await
     }
 
-    /// 通过RPC处理消息
+    /// Forward `message` through `client`, rewriting paths in both directions.
     async fn handle_message_via_rpc(
         &self,
         message: Message,
         client: Arc<RpcClient>,
         remote_info: RemoteInfo,
     ) -> Result<Option<Message>> {
-        // 转换路径：将TRAMP路径转换为远程路径
         let transformed_message = self.transform_paths_for_remote(message, &remote_info)?;
 
         match transformed_message {
@@ -224,7 +240,7 @@ impl RemoteConnectionManager {
                     response.error.as_ref().map(|e| &e.message),
                     result_preview
                 );
-                // 转换响应中的路径：将远程路径转换回TRAMP路径
+                // Rewrite remote paths in the response back to TRAMP form.
                 let transformed_response =
                     self.transform_response_paths_from_remote(response, &remote_info)?;
                 let after_preview = transformed_response
@@ -243,7 +259,7 @@ impl RemoteConnectionManager {
             }
             Message::Notification(notification) => {
                 client.send_notification(notification)?;
-                Ok(None) // 通知不需要响应
+                Ok(None) // Notifications have no response.
             }
             Message::Response(_) => {
                 warn!("Received response message for routing, this should not happen");
@@ -252,29 +268,25 @@ impl RemoteConnectionManager {
         }
     }
 
-    /// 从消息中提取文件路径
+    /// Extract the primary URI from `message`, if present.
     fn extract_path_from_message(&self, message: &Message) -> Option<String> {
         match message {
             Message::Request(req) => {
-                // 从请求参数中提取URI
                 if let Some(uri) = &req.params.uri {
                     Some(uri.clone())
                 } else {
-                    // 尝试从params中提取textDocument.uri
                     self.extract_uri_from_params(&req.params.params)
                 }
             }
             Message::Notification(notif) => {
-                // 从通知参数中提取URI
                 self.extract_uri_from_params(&notif.params.params)
             }
             _ => None,
         }
     }
 
-    /// 从JSON参数中提取URI
+    /// Extract a URI from raw LSP JSON params, checking `textDocument.uri` then `uri`.
     fn extract_uri_from_params(&self, params: &serde_json::Value) -> Option<String> {
-        // 尝试多种路径提取方式
         if let Some(text_doc) = params.get("textDocument") {
             if let Some(uri) = text_doc.get("uri") {
                 return uri.as_str().map(|s| s.to_string());
@@ -288,7 +300,7 @@ impl RemoteConnectionManager {
         None
     }
 
-    /// 转换消息中的路径以适应远程执行
+    /// Rewrite TRAMP URIs in `message` to bare remote paths for the remote LSP.
     fn transform_paths_for_remote(
         &self,
         message: Message,
@@ -296,14 +308,12 @@ impl RemoteConnectionManager {
     ) -> Result<Message> {
         match message {
             Message::Request(mut req) => {
-                // 转换URI路径
                 if let Some(uri) = &req.params.uri {
                     if let Some(remote_uri) = self.convert_tramp_to_remote_uri(uri, remote_info) {
                         req.params.uri = Some(remote_uri);
                     }
                 }
 
-                // 转换params中的路径
                 req.params.params =
                     self.transform_json_paths_for_remote(req.params.params, remote_info)?;
 
@@ -318,7 +328,7 @@ impl RemoteConnectionManager {
         }
     }
 
-    /// 转换响应中的路径
+    /// Rewrite remote paths in `response` back to TRAMP form for Emacs.
     fn transform_response_paths_from_remote(
         &self,
         mut response: Response,
@@ -330,7 +340,7 @@ impl RemoteConnectionManager {
         Ok(response)
     }
 
-    /// 转换JSON中的路径（远程 -> 本地）
+    /// Recursively rewrite TRAMP URIs in `value` to bare remote paths (outgoing).
     fn transform_json_paths_for_remote(
         &self,
         mut value: serde_json::Value,
@@ -362,7 +372,7 @@ impl RemoteConnectionManager {
         Ok(value)
     }
 
-    /// 转换JSON中的路径（本地 -> 远程）
+    /// Recursively rewrite bare remote paths in `value` to TRAMP URIs (incoming).
     fn transform_json_paths_from_remote(
         &self,
         mut value: serde_json::Value,
@@ -394,13 +404,12 @@ impl RemoteConnectionManager {
         Ok(value)
     }
 
-    /// 将TRAMP URI转换为远程URI
+    /// Convert a TRAMP `file://` URI to a bare remote path URI, or return `None`
+    /// if the URI does not belong to `remote_info`'s host.
     fn convert_tramp_to_remote_uri(&self, uri: &str, remote_info: &RemoteInfo) -> Option<String> {
         if let Some(path) = uri.strip_prefix("file://") {
-            // 移除 "file://" 前缀
             if let Some(remote_info_from_path) = self.detector.extract_remote_info(path) {
                 if remote_info_from_path.host == remote_info.host {
-                    // 转换为远程文件URI
                     return Some(format!("file://{}", remote_info_from_path.remote_path));
                 }
             }
@@ -408,10 +417,9 @@ impl RemoteConnectionManager {
         None
     }
 
-    /// 将远程URI转换为TRAMP URI
+    /// Convert a bare remote path `file://` URI back to a TRAMP URI, or return `None`.
     fn convert_remote_to_tramp_uri(&self, uri: &str, remote_info: &RemoteInfo) -> Option<String> {
         if let Some(remote_path) = uri.strip_prefix("file://") {
-            // 移除 "file://" 前缀
             let tramp_path = self.detector.remote_to_local_path(&RemoteInfo {
                 host: remote_info.host.clone(),
                 remote_path: remote_path.to_string(),
@@ -427,32 +435,49 @@ impl RemoteConnectionManager {
         let ssh_conns = self.ssh_connections.lock().await;
         let mut infos = Vec::new();
         for (key, client) in clients.iter() {
-            // Probe deployment status via the SSH connection for this key.
-            let remote_path = crate::config::remote_binary_path();
-            let (deploy_status, remote_version) = match ssh_conns.get(key) {
-                Some(ssh) => match deploy::check_remote_binary(ssh, remote_path).await {
-                    Ok(deploy::RemoteBinaryStatus::VersionMatch) => {
-                        ("deployed".to_string(), Some(deploy::EXPECTED_VERSION.to_string()))
+            // Probe deployment status — apply the same global-first priority.
+            let fallback_path = crate::config::remote_binary_path();
+            let (binary_path, deploy_status, remote_version) = match ssh_conns.get(key) {
+                Some(ssh) => {
+                    // Check global command first.
+                    match deploy::check_remote_binary(ssh, "emacs-lsp-proxy").await {
+                        Ok(deploy::RemoteBinaryStatus::VersionMatch) => (
+                            "emacs-lsp-proxy".to_string(),
+                            "deployed".to_string(),
+                            Some(deploy::EXPECTED_VERSION.to_string()),
+                        ),
+                        _ => {
+                            // Fall back to fixed path.
+                            match deploy::check_remote_binary(ssh, fallback_path).await {
+                                Ok(deploy::RemoteBinaryStatus::VersionMatch) => (
+                                    fallback_path.to_string(),
+                                    "deployed".to_string(),
+                                    Some(deploy::EXPECTED_VERSION.to_string()),
+                                ),
+                                Ok(deploy::RemoteBinaryStatus::VersionMismatch { remote }) => (
+                                    fallback_path.to_string(),
+                                    "version_mismatch".to_string(),
+                                    Some(remote),
+                                ),
+                                Ok(deploy::RemoteBinaryStatus::Missing) => {
+                                    (fallback_path.to_string(), "missing".to_string(), None)
+                                }
+                                Err(e) => {
+                                    warn!("failed to probe remote binary for {key}: {e}");
+                                    (fallback_path.to_string(), "unknown".to_string(), None)
+                                }
+                            }
+                        }
                     }
-                    Ok(deploy::RemoteBinaryStatus::VersionMismatch { remote }) => {
-                        ("version_mismatch".to_string(), Some(remote))
-                    }
-                    Ok(deploy::RemoteBinaryStatus::Missing) => {
-                        ("missing".to_string(), None)
-                    }
-                    Err(e) => {
-                        warn!("failed to probe remote binary for {key}: {e}");
-                        ("unknown".to_string(), None)
-                    }
-                },
-                None => ("unknown".to_string(), None),
+                }
+                None => (fallback_path.to_string(), "unknown".to_string(), None),
             };
 
             infos.push(crate::lsp_ext::RemoteClientInfo {
                 connection_key: key.clone(),
                 remote_type: "rpc".to_string(),
                 is_alive: !client.is_dead(),
-                binary_path: remote_path.to_string(),
+                binary_path,
                 local_version: deploy::EXPECTED_VERSION.to_string(),
                 remote_version,
                 deploy_status,
@@ -464,14 +489,123 @@ impl RemoteConnectionManager {
         }
     }
 
-    /// 清理资源
+    /// Probe the global command and deploy path on the remote host without
+    /// uploading anything.  Returns a structured result for Emacs to display.
+    pub async fn check_binary_status(
+        &self,
+        connection_key: &str,
+    ) -> Result<crate::lsp_ext::CheckRemoteBinaryResult> {
+        use deploy::{check_remote_binary, RemoteBinaryStatus, EXPECTED_VERSION};
+
+        let fallback_path = crate::config::remote_binary_path();
+
+        let ssh_connections = self.ssh_connections.lock().await;
+        let conn = ssh_connections
+            .get(connection_key)
+            .ok_or_else(|| anyhow!("no SSH connection for {connection_key}"))?
+            .clone();
+        drop(ssh_connections);
+
+        let to_status = |s: RemoteBinaryStatus| match s {
+            RemoteBinaryStatus::VersionMatch => crate::lsp_ext::RemoteBinaryLocationStatus {
+                status: "match".to_string(),
+                version: Some(EXPECTED_VERSION.to_string()),
+            },
+            RemoteBinaryStatus::VersionMismatch { remote } => {
+                crate::lsp_ext::RemoteBinaryLocationStatus {
+                    status: "version_mismatch".to_string(),
+                    version: Some(remote),
+                }
+            }
+            RemoteBinaryStatus::Missing => crate::lsp_ext::RemoteBinaryLocationStatus {
+                status: "missing".to_string(),
+                version: None,
+            },
+        };
+
+        let global_raw = check_remote_binary(conn.as_ref(), "emacs-lsp-proxy").await?;
+        let path_raw = check_remote_binary(conn.as_ref(), fallback_path).await?;
+
+        let available_binary = match (&global_raw, &path_raw) {
+            (RemoteBinaryStatus::VersionMatch, _) => Some("emacs-lsp-proxy".to_string()),
+            (_, RemoteBinaryStatus::VersionMatch) => Some(fallback_path.to_string()),
+            _ => None,
+        };
+
+        Ok(crate::lsp_ext::CheckRemoteBinaryResult {
+            global: to_status(global_raw),
+            path: to_status(path_raw),
+            available_binary,
+            local_version: EXPECTED_VERSION.to_string(),
+            deploy_path: fallback_path.to_string(),
+        })
+    }
+
+    /// Send an `emacs/remoteDeployNeeded` notification to Emacs via the result
+    /// sink, informing the user that they must run a manual deploy.
+    fn send_deploy_needed_notification(
+        &self,
+        connection_key: &str,
+        reason: &str,
+        deploy_path: &str,
+    ) {
+        let params = crate::lsp_ext::RemoteDeployNeededParams {
+            connection_key: connection_key.to_string(),
+            reason: reason.to_string(),
+            remote_version: None,
+            local_version: deploy::EXPECTED_VERSION.to_string(),
+            deploy_path: deploy_path.to_string(),
+        };
+        use lsp_types::notification::Notification as _;
+        let notif = Message::Notification(Notification::new(
+            crate::lsp_ext::RemoteDeployNeeded::METHOD.to_string(),
+            params,
+        ));
+        if let Some(sink) = self.result_sink.lock().as_ref() {
+            sink.send(notif).ok();
+        }
+    }
+
+    /// Deploy the local binary to the remote host identified by `connection_key`,
+    /// streaming progress back to Emacs via `emacs/remoteDeployProgress`
+    /// notifications.  Returns the binary command/path to use on success.
+    pub async fn deploy_for_key(&self, connection_key: &str) -> Result<String> {
+        let fallback_path = crate::config::remote_binary_path();
+
+        let ssh_connections = self.ssh_connections.lock().await;
+        let conn = ssh_connections
+            .get(connection_key)
+            .ok_or_else(|| anyhow!("no SSH connection for {connection_key}"))?
+            .clone();
+        drop(ssh_connections);
+
+        let sink = self.result_sink.lock().clone();
+        let key = connection_key.to_string();
+
+        let send_progress = move |msg: String| {
+            let params = crate::lsp_ext::RemoteDeployProgressParams {
+                connection_key: key.clone(),
+                message: msg,
+            };
+            use lsp_types::notification::Notification as _;
+            let notif = Message::Notification(Notification::new(
+                crate::lsp_ext::RemoteDeployProgress::METHOD.to_string(),
+                params,
+            ));
+            if let Some(s) = sink.as_ref() {
+                s.send(notif).ok();
+            }
+        };
+
+        deploy::deploy_with_progress(conn.as_ref(), fallback_path, &send_progress).await
+    }
+
+    /// Close all active SSH connections and RPC clients.
     #[allow(dead_code)]
     pub async fn cleanup(&self) {
-        // 清理SSH连接
         let mut connections = self.ssh_connections.lock().await;
         connections.clear();
 
-        // 清理RPC客户端
         let mut clients = self.rpc_clients.lock().await;
         clients.clear();
 
@@ -554,11 +688,12 @@ fn local_file_uri_to_tramp(uri: &str, remote_info: &RemoteInfo) -> Option<String
     Some(format!("file://{tramp}"))
 }
 
-/// SSH RPC 流适配器 — 把子进程的 stdin/stdout 组合成一个同时实现
-/// `futures::AsyncRead` 和 `futures::AsyncWrite` 的双向流。
+/// Bidirectional stream adapter wrapping a child process's stdin/stdout.
 ///
-/// 内部通过 `tokio_util::compat::Compat` 把 tokio 的 AsyncRead/AsyncWrite
-/// 转换成 futures 版本,避免自己手写 `poll_*` 里的 ReadBuf / wake 细节。
+/// Combines the two halves into a single type that implements both
+/// `futures::AsyncRead` and `futures::AsyncWrite`, using
+/// `tokio_util::compat::Compat` to bridge tokio's async I/O traits to the
+/// futures versions expected by the RPC framing layer.
 pub struct SshRpcStream {
     reader: Compat<tokio::process::ChildStdout>,
     writer: Compat<tokio::process::ChildStdin>,
