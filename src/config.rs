@@ -53,10 +53,29 @@ pub fn remote_binary_path() -> &'static str {
 }
 
 pub fn initialize_config_file(specified_file: Option<PathBuf>) {
-    // check specified file exist and is file, then set CONFIG_FILE
+    // Explicit --config flag takes priority.
     if let Some(file) = specified_file {
         if file.exists() && file.is_file() {
             CONFIG_FILE.set(file).unwrap();
+        }
+        return;
+    }
+
+    // In --remote-server mode, fall back to `languages.toml` beside the binary
+    // so operators can drop a config file next to the deployed binary without
+    // having to pass --config explicitly.
+    if is_remote_server_mode() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join("languages.toml");
+                if candidate.is_file() {
+                    debug!(
+                        "remote-server: using languages.toml beside binary: {}",
+                        candidate.display()
+                    );
+                    CONFIG_FILE.set(candidate).ok();
+                }
+            }
         }
     }
 }
