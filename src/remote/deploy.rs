@@ -2,13 +2,13 @@
 //! exists on the remote host, and deploy it on demand.
 //!
 //! The check runs `<remote_path> --version` over the SSH ControlMaster.
-//! Deployment (upload + chmod) is always user-initiated — this module never
-//! auto-deploys; callers that need deployment should invoke
-//! `deploy_with_progress` explicitly.
+//! Deployment downloads the correct release archive from GitHub based on the
+//! remote platform — the local binary is never uploaded directly, avoiding
+//! cross-architecture issues.  Deployment is always user-initiated; callers
+//! that need it should invoke `deploy_with_progress` explicitly.
 
 use anyhow::{anyhow, Context, Result};
 use log::{debug, info, warn};
-use std::path::{Path, PathBuf};
 
 use super::ssh::SshConnection;
 
@@ -72,35 +72,97 @@ pub async fn check_remote_binary(
     }
 }
 
-/// Upload the local running binary to `remote_path`. Creates the parent
-/// directory and chmods +x afterwards.
-pub async fn deploy_binary(
+/// Detect the remote host's OS and CPU architecture.
+///
+/// Returns `(os, arch)` where `os` is lowercase `"linux"` or `"darwin"` and
+/// `arch` is `"x86_64"` or `"aarch64"`.
+async fn detect_remote_platform(conn: &SshConnection) -> Result<(String, String)> {
+    let output = conn
+        .run_command("uname -sm")
+        .await
+        .context("failed to detect remote platform")?;
+    let parts: Vec<&str> = output.trim().splitn(2, ' ').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("unexpected `uname -sm` output: {:?}", output.trim());
+    }
+    let os = parts[0].to_lowercase();
+    let arch = parts[1].to_lowercase();
+    Ok((os, arch))
+}
+
+/// Map `(os, arch)` to the GitHub release archive filename.
+///
+/// Archive naming from CI:
+///   lsp-proxy-linux-x86_64.tar.gz
+///   lsp-proxy-linux-arm64.tar.gz
+///   lsp-proxy-macos-x86_64.tar.gz
+///   lsp-proxy-macos-arm64.tar.gz
+fn release_archive_name(os: &str, arch: &str) -> Result<String> {
+    let os_label = match os {
+        "linux" => "linux",
+        "darwin" => "macos",
+        other => anyhow::bail!("unsupported remote OS: {other}"),
+    };
+    let arch_label = match arch {
+        "x86_64" => "x86_64",
+        "aarch64" | "arm64" => "arm64",
+        other => anyhow::bail!("unsupported remote architecture: {other}"),
+    };
+    Ok(format!("lsp-proxy-{os_label}-{arch_label}.tar.gz"))
+}
+
+/// Download the correct GitHub release binary onto the remote host.
+///
+/// Uses `curl` when available, falls back to `wget`.  The archive is
+/// downloaded to a temporary directory, the binary extracted, moved to
+/// `remote_path`, and the temp directory cleaned up.
+async fn download_release_on_remote(
     conn: &SshConnection,
-    local_path: &Path,
     remote_path: &str,
+    archive_name: &str,
+    on_progress: &(impl Fn(String) + Send + Sync),
 ) -> Result<()> {
+    let url = format!(
+        "https://github.com/jadestrong/lsp-proxy/releases/download/v{EXPECTED_VERSION}/{archive_name}"
+    );
     let parent = remote_parent_dir(remote_path);
-    let mkdir = format!("mkdir -p {}", shell_escape(&parent));
-    debug!("preparing remote dir: {mkdir}");
-    conn.run_command(&mkdir)
+
+    on_progress(format!("Creating remote directory {parent}..."));
+    conn.run_command(&format!("mkdir -p {}", shell_escape(&parent)))
         .await
         .context("failed to create remote install directory")?;
 
-    info!(
-        "uploading {} -> {} (v{})",
-        local_path.display(),
-        remote_path,
-        EXPECTED_VERSION
+    on_progress(format!("Downloading {url}..."));
+    // Try curl first, fall back to wget.  A temp dir holds the archive so the
+    // final path is only written once the download and extraction succeed.
+    let download_cmd = format!(
+        "TMPDIR=$(mktemp -d) && \
+         {{ command -v curl >/dev/null 2>&1 && \
+            curl -fSL {url} -o \"$TMPDIR/archive.tar.gz\" || \
+            wget -q -O \"$TMPDIR/archive.tar.gz\" {url}; }} && \
+         tar -xzf \"$TMPDIR/archive.tar.gz\" -C \"$TMPDIR\" emacs-lsp-proxy && \
+         mv \"$TMPDIR/emacs-lsp-proxy\" {dest} && \
+         chmod +x {dest}; \
+         STATUS=$?; rm -rf \"$TMPDIR\"; exit $STATUS",
+        url = shell_escape(&url),
+        dest = shell_escape(remote_path),
     );
-    conn.scp_upload(local_path, remote_path)
-        .await
-        .context("scp upload failed")?;
 
-    let chmod = format!("chmod +x {}", shell_escape(remote_path));
-    conn.run_command(&chmod)
+    let output = conn
+        .run_command_with_status(&download_cmd)
         .await
-        .context("failed to chmod remote binary")?;
+        .context("download command failed to launch")?;
 
+    if !output.is_success() {
+        anyhow::bail!(
+            "download failed (exit {:?}):\n{}",
+            output.exit_code,
+            output.stderr.trim()
+        );
+    }
+
+    on_progress("Download and extraction complete.".to_string());
+    info!("installed {remote_path} v{EXPECTED_VERSION} from {archive_name}");
     Ok(())
 }
 
@@ -144,10 +206,13 @@ pub async fn check_binary_available(
     }
 }
 
-/// Deploy the local binary to `remote_path`, reporting progress via `on_progress`.
+/// Deploy the correct release binary to `remote_path`, reporting progress via
+/// `on_progress`.
 ///
-/// Checks the global command and `remote_path` first; if either is already
-/// up-to-date the upload is skipped.  Returns the command/path to use.
+/// Checks the global command and `remote_path` first; if either already has a
+/// matching version no download is performed.  When a download is needed the
+/// remote platform is detected automatically and the appropriate release
+/// archive is fetched from GitHub.  Returns the command/path to use.
 pub async fn deploy_with_progress(
     conn: &SshConnection,
     remote_path: &str,
@@ -159,7 +224,7 @@ pub async fn deploy_with_progress(
     match check_remote_binary(conn, "emacs-lsp-proxy").await? {
         RemoteBinaryStatus::VersionMatch => {
             on_progress(format!(
-                "Global emacs-lsp-proxy v{EXPECTED_VERSION} found — no upload needed."
+                "Global emacs-lsp-proxy v{EXPECTED_VERSION} found — no download needed."
             ));
             return Ok("emacs-lsp-proxy".to_string());
         }
@@ -177,45 +242,39 @@ pub async fn deploy_with_progress(
     match check_remote_binary(conn, remote_path).await? {
         RemoteBinaryStatus::VersionMatch => {
             on_progress(format!(
-                "{remote_path} is already v{EXPECTED_VERSION} — no upload needed."
+                "{remote_path} is already v{EXPECTED_VERSION} — no download needed."
             ));
             return Ok(remote_path.to_string());
         }
         RemoteBinaryStatus::Missing => {
-            on_progress(format!("{remote_path} not found, uploading..."));
+            on_progress(format!("{remote_path} not found, downloading..."));
         }
         RemoteBinaryStatus::VersionMismatch { remote } => {
             on_progress(format!(
-                "{remote_path} is v{remote}, re-uploading v{EXPECTED_VERSION}..."
+                "{remote_path} is v{remote}, downloading v{EXPECTED_VERSION}..."
             ));
         }
     }
 
-    let local_path = current_binary_path().context("locating local lsp-proxy binary")?;
-    on_progress(format!(
-        "Uploading {} ({} bytes)...",
-        local_path.display(),
-        std::fs::metadata(&local_path)
-            .map(|m| m.len().to_string())
-            .unwrap_or_else(|_| "?".to_string()),
-    ));
-    deploy_binary(conn, &local_path, remote_path).await?;
+    on_progress("Detecting remote platform...".to_string());
+    let (os, arch) = detect_remote_platform(conn).await?;
+    on_progress(format!("Remote platform: {os} / {arch}"));
 
-    on_progress("Upload complete, verifying...".to_string());
+    let archive = release_archive_name(&os, &arch)?;
+    on_progress(format!("Release archive: {archive}"));
+
+    download_release_on_remote(conn, remote_path, &archive, on_progress).await?;
+
+    on_progress("Verifying installed binary...".to_string());
     match check_remote_binary(conn, remote_path).await? {
         RemoteBinaryStatus::VersionMatch => {
-            on_progress(format!("Deploy successful: {remote_path} v{EXPECTED_VERSION}."));
+            on_progress(format!("✓ Deploy successful: {remote_path} v{EXPECTED_VERSION}."));
             Ok(remote_path.to_string())
         }
         other => Err(anyhow!(
             "remote binary still not healthy after deploy: {other:?}"
         )),
     }
-}
-
-/// Best-guess path to the currently-running executable, for `scp`-ing.
-fn current_binary_path() -> Result<PathBuf> {
-    std::env::current_exe().context("std::env::current_exe() failed")
 }
 
 /// Parent directory component of a remote path string. We do string-level
