@@ -122,46 +122,103 @@ async fn download_release_on_remote(
     archive_name: &str,
     on_progress: &(impl Fn(String) + Send + Sync),
 ) -> Result<()> {
+    // All commands that need POSIX syntax are wrapped in `sh -c '...'` so
+    // they run under a POSIX shell regardless of the remote user's login
+    // shell (fish, nushell, etc. do not support POSIX variable syntax).
     let url = format!(
         "https://github.com/jadestrong/lsp-proxy/releases/download/v{EXPECTED_VERSION}/{archive_name}"
     );
     let parent = remote_parent_dir(remote_path);
 
-    on_progress(format!("Creating remote directory {parent}..."));
-    conn.run_command(&format!("mkdir -p {}", shell_escape(&parent)))
+    // 1. Create a temp directory and capture its path.
+    on_progress("Preparing temporary directory...".to_string());
+    let tmpdir = conn
+        .run_command("sh -c 'mktemp -d'")
         .await
-        .context("failed to create remote install directory")?;
+        .context("failed to create remote temp directory")?
+        .trim()
+        .to_string();
+    if tmpdir.is_empty() {
+        anyhow::bail!("mktemp -d returned an empty path");
+    }
+    let archive  = format!("{tmpdir}/archive.tar.gz");
+    let extracted = format!("{tmpdir}/emacs-lsp-proxy");
+    let cleanup  = format!("rm -rf {}", shell_escape(&tmpdir));
 
+    // 2. Ensure the destination directory exists.
+    on_progress(format!("Creating remote directory {parent}..."));
+    if let Err(e) = conn
+        .run_command(&format!("mkdir -p {}", shell_escape(&parent)))
+        .await
+    {
+        conn.run_command(&cleanup).await.ok();
+        return Err(e).context("failed to create remote install directory");
+    }
+
+    // 3. Download the archive (curl preferred, wget as fallback).
     on_progress(format!("Downloading {url}..."));
-    // Try curl first, fall back to wget.  A temp dir holds the archive so the
-    // final path is only written once the download and extraction succeed.
-    let download_cmd = format!(
-        "TMPDIR=$(mktemp -d) && \
-         {{ command -v curl >/dev/null 2>&1 && \
-            curl -fSL {url} -o \"$TMPDIR/archive.tar.gz\" || \
-            wget -q -O \"$TMPDIR/archive.tar.gz\" {url}; }} && \
-         tar -xzf \"$TMPDIR/archive.tar.gz\" -C \"$TMPDIR\" emacs-lsp-proxy && \
-         mv \"$TMPDIR/emacs-lsp-proxy\" {dest} && \
-         chmod +x {dest}; \
-         STATUS=$?; rm -rf \"$TMPDIR\"; exit $STATUS",
-        url = shell_escape(&url),
-        dest = shell_escape(remote_path),
+    let dl_script = format!(
+        "command -v curl >/dev/null 2>&1 && \
+         curl -fSL {url} -o {archive} || \
+         wget -q -O {archive} {url}",
+        url     = shell_escape(&url),
+        archive = shell_escape(&archive),
     );
-
     let output = conn
-        .run_command_with_status(&download_cmd)
+        .run_command_with_status(&format!("sh -c {}", shell_escape(&dl_script)))
         .await
         .context("download command failed to launch")?;
-
     if !output.is_success() {
+        conn.run_command(&cleanup).await.ok();
         anyhow::bail!(
             "download failed (exit {:?}):\n{}",
             output.exit_code,
             output.stderr.trim()
         );
     }
+    on_progress("Download complete.".to_string());
 
-    on_progress("Download and extraction complete.".to_string());
+    // 4. Extract the binary from the archive.
+    on_progress("Extracting binary from archive...".to_string());
+    let output = conn
+        .run_command_with_status(&format!(
+            "tar -xzf {} -C {} emacs-lsp-proxy",
+            shell_escape(&archive),
+            shell_escape(&tmpdir),
+        ))
+        .await
+        .context("extraction command failed to launch")?;
+    if !output.is_success() {
+        conn.run_command(&cleanup).await.ok();
+        anyhow::bail!(
+            "extraction failed (exit {:?}):\n{}",
+            output.exit_code,
+            output.stderr.trim()
+        );
+    }
+    on_progress("Extraction complete.".to_string());
+
+    // 5. Move the binary into place and make it executable.
+    on_progress(format!("Installing to {remote_path}..."));
+    let install_script = format!(
+        "mv {src} {dest} && chmod +x {dest}",
+        src  = shell_escape(&extracted),
+        dest = shell_escape(remote_path),
+    );
+    let output = conn
+        .run_command_with_status(&format!("sh -c {}", shell_escape(&install_script)))
+        .await
+        .context("install command failed to launch")?;
+    conn.run_command(&cleanup).await.ok();
+    if !output.is_success() {
+        anyhow::bail!(
+            "install failed (exit {:?}):\n{}",
+            output.exit_code,
+            output.stderr.trim()
+        );
+    }
+
+    on_progress(format!("Installed {remote_path} v{EXPECTED_VERSION}."));
     info!("installed {remote_path} v{EXPECTED_VERSION} from {archive_name}");
     Ok(())
 }

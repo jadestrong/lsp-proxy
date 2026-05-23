@@ -498,13 +498,7 @@ impl RemoteConnectionManager {
         use deploy::{check_remote_binary, RemoteBinaryStatus, EXPECTED_VERSION};
 
         let fallback_path = crate::config::remote_binary_path();
-
-        let ssh_connections = self.ssh_connections.lock().await;
-        let conn = ssh_connections
-            .get(connection_key)
-            .ok_or_else(|| anyhow!("no SSH connection for {connection_key}"))?
-            .clone();
-        drop(ssh_connections);
+        let conn = self.ssh_for_key(connection_key).await?;
 
         let to_status = |s: RemoteBinaryStatus| match s {
             RemoteBinaryStatus::VersionMatch => crate::lsp_ext::RemoteBinaryLocationStatus {
@@ -571,13 +565,7 @@ impl RemoteConnectionManager {
     /// notifications.  Returns the binary command/path to use on success.
     pub async fn deploy_for_key(&self, connection_key: &str) -> Result<String> {
         let fallback_path = crate::config::remote_binary_path();
-
-        let ssh_connections = self.ssh_connections.lock().await;
-        let conn = ssh_connections
-            .get(connection_key)
-            .ok_or_else(|| anyhow!("no SSH connection for {connection_key}"))?
-            .clone();
-        drop(ssh_connections);
+        let conn = self.ssh_for_key(connection_key).await?;
 
         let sink = self.result_sink.lock().clone();
         let key = connection_key.to_string();
@@ -598,6 +586,52 @@ impl RemoteConnectionManager {
         };
 
         deploy::deploy_with_progress(conn.as_ref(), fallback_path, &send_progress).await
+    }
+
+    /// Return the SSH connection for `connection_key`, establishing a new one
+    /// if none exists yet.
+    ///
+    /// `connection_key` has the form `[user@]host[:port]` produced by
+    /// [`RemoteHost::connection_key`].  We parse it back to a [`RemoteHost`]
+    /// and delegate to [`get_or_create_ssh_connection`].
+    async fn ssh_for_key(&self, connection_key: &str) -> Result<Arc<SshConnection>> {
+        // Fast path: connection already exists.
+        {
+            let connections = self.ssh_connections.lock().await;
+            if let Some(conn) = connections.get(connection_key) {
+                return Ok(conn.clone());
+            }
+        }
+
+        // Parse "[user@]host[:port]" back into a RemoteHost.
+        let (user_host, port) = match connection_key.rsplit_once(':') {
+            Some((uh, p)) => {
+                if let Ok(port) = p.parse::<u16>() {
+                    (uh, Some(port))
+                } else {
+                    // The colon was part of an IPv6 address or similar; treat
+                    // the whole string as host with no port.
+                    (connection_key, None)
+                }
+            }
+            None => (connection_key, None),
+        };
+        let (user, host) = match user_host.split_once('@') {
+            Some((u, h)) => (u.to_string(), h.to_string()),
+            None => (String::new(), user_host.to_string()),
+        };
+
+        let remote_info = RemoteInfo {
+            host: super::RemoteHost {
+                remote_type: RemoteType::Ssh,
+                user,
+                host,
+                port,
+            },
+            remote_path: String::new(),
+        };
+
+        self.get_or_create_ssh_connection(&remote_info).await
     }
 
     /// Close all active SSH connections and RPC clients.
