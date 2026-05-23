@@ -136,7 +136,6 @@ This is used to determine if LSP requests should be sent.")
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
 (declare-function eglot--widening "ext:eglot")
-(declare-function eglot--apply-workspace-edit "ext:eglot")
 (declare-function lsp-proxy-org-babel-send-src-block-to-lsp-server "lsp-proxy-org")
 (declare-function lsp-proxy-org-babel-monitor-after-change "lsp-proxy-org")
 
@@ -399,7 +398,7 @@ Only sends requests if servers are available."
   "Handle MSG of type METHOD."
   (when (eql method 'workspace/applyEdit)
     (lsp-proxy--dbind (:edit edit) msg
-      (eglot--apply-workspace-edit edit last-command)))
+      (lsp-proxy--apply-workspace-edit edit last-command)))
   (when (eql method 'eslint/openDoc)
     (lsp-proxy--dbind (:url url) msg
       (browse-url url))))

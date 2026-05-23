@@ -581,7 +581,7 @@ Skip reopening notifications for buffers not currently visible."
          (command (plist-get item :command))
          (edit (plist-get item :edit)))
     (when edit
-      (eglot--apply-workspace-edit edit this-command))
+      (lsp-proxy--apply-workspace-edit edit this-command))
     (when command
       (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
 
@@ -634,7 +634,7 @@ Request codeAction/resolve for more info if server supports."
     (append (lsp-proxy--TextDocumentPositionParams) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
-                     (eglot--apply-workspace-edit edits this-command)
+                     (lsp-proxy--apply-workspace-edit edits this-command)
                    (lsp-proxy--warn "%s" "Server does not support rename.")))))
 
 ;;; Document formatting
