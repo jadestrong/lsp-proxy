@@ -145,6 +145,35 @@ Behaviour depends on `lsp-proxy-remote-deploy-mode':
   "Handle `emacs/remoteDeployProgress' notification with PARAMS."
   (lsp-proxy-remote--log (plist-get params :message)))
 
+;;; TRAMP host candidates
+
+(defun lsp-proxy-remote--tramp-ssh-keys ()
+  "Return a deduplicated list of SSH host candidates for deploy completion.
+Candidates are collected by calling every completion function registered
+for the `ssh' method via `tramp-get-completion-function', which covers:
+ - historical connections (`tramp-parse-connection-properties')
+ - ~/.ssh/config  (`tramp-parse-sconfig')
+ - ~/.ssh/known_hosts (`tramp-parse-shosts')
+ - /etc/hosts.equiv, auth-sources, etc.
+Each entry has the form `[user@]host' matching lsp-proxy's connection key."
+  (when (fboundp 'tramp-get-completion-function)
+    (let (keys)
+      (dolist (spec (tramp-get-completion-function "ssh"))
+        (let* ((fn  (car spec))
+               (arg (cadr spec))
+               (pairs (ignore-errors
+                        (if arg (funcall fn arg) (funcall fn)))))
+          (dolist (pair pairs)
+            (let ((user (car pair))
+                  (host (cadr pair)))
+              (when (and host (not (string-empty-p host)))
+                (cl-pushnew
+                 (if (and user (not (string-empty-p user)))
+                     (concat user "@" host)
+                   host)
+                 keys :test #'equal))))))
+      (nreverse keys))))
+
 ;;; Interactive deploy command
 
 ;;;###autoload
@@ -158,8 +187,10 @@ the upload begins.
 
 When called interactively, defaults to the host that last requested a deploy."
   (interactive
-   (list (read-string
+   (list (completing-read
           "Remote host (connection key): "
+          (lsp-proxy-remote--tramp-ssh-keys)
+          nil nil
           lsp-proxy-remote--pending-connection-key)))
   (unless (and connection-key (not (string-empty-p connection-key)))
     (user-error "No connection key specified"))
