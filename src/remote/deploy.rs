@@ -155,8 +155,34 @@ async fn download_release_on_remote(
         return Err(e).context("failed to create remote install directory");
     }
 
-    // 3. Download the archive (curl preferred, wget as fallback).
-    on_progress(format!("Downloading {url}..."));
+    // 3. Get total file size for percentage display (best-effort, not fatal).
+    let total_bytes: u64 = {
+        // `-IL` follows redirects (GitHub releases → CDN 302) so the final
+        // response contains the actual Content-Length.
+        let head_script = format!(
+            "command -v curl >/dev/null 2>&1 && \
+             curl -sIL {url} | grep -i '^content-length:' | tail -1 | \
+             tr -d '\\r' | awk '{{print $2}}' || echo 0",
+            url = shell_escape(&url),
+        );
+        conn.run_command(&format!("sh -c {}", shell_escape(&head_script)))
+            .await
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    };
+
+    // 4. Download the archive with concurrent progress polling.
+    on_progress(format!(
+        "Downloading {url}{}...",
+        if total_bytes > 0 {
+            format!(" ({:.1} MB)", total_bytes as f64 / 1_048_576.0)
+        } else {
+            String::new()
+        }
+    ));
+
     let dl_script = format!(
         "command -v curl >/dev/null 2>&1 && \
          curl -fSL {url} -o {archive} || \
@@ -164,10 +190,49 @@ async fn download_release_on_remote(
         url     = shell_escape(&url),
         archive = shell_escape(&archive),
     );
-    let output = conn
-        .run_command_with_status(&format!("sh -c {}", shell_escape(&dl_script)))
-        .await
-        .context("download command failed to launch")?;
+    let dl_cmd = format!("sh -c {}", shell_escape(&dl_script));
+
+    // `stat -f%z` is macOS; `stat -c%s` is Linux.  Try both.
+    let size_cmd = format!(
+        "sh -c {}",
+        shell_escape(&format!(
+            "stat -f%z {a} 2>/dev/null || stat -c%s {a} 2>/dev/null || echo 0",
+            a = shell_escape(&archive),
+        )),
+    );
+
+    // Run download and size-polling concurrently.  `select!` cancels the
+    // polling branch as soon as the download future resolves.
+    let output = tokio::select! {
+        result = conn.run_command_with_status(&dl_cmd) => {
+            result.context("download command failed to launch")?
+        }
+        _ = async {
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_millis(500));
+            loop {
+                interval.tick().await;
+                if let Ok(s) = conn.run_command(&size_cmd).await {
+                    let current: u64 = s.trim().parse().unwrap_or(0);
+                    if current == 0 { continue; }
+                    if total_bytes > 0 {
+                        let pct = (current * 100 / total_bytes).min(99);
+                        on_progress(format!(
+                            "Downloading... {pct}% ({:.1} / {:.1} MB)",
+                            current as f64 / 1_048_576.0,
+                            total_bytes as f64 / 1_048_576.0,
+                        ));
+                    } else {
+                        on_progress(format!(
+                            "Downloading... {:.1} MB",
+                            current as f64 / 1_048_576.0,
+                        ));
+                    }
+                }
+            }
+        } => { unreachable!() }
+    };
+
     if !output.is_success() {
         conn.run_command(&cleanup).await.ok();
         anyhow::bail!(
