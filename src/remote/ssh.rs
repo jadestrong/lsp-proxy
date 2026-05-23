@@ -571,12 +571,19 @@ impl SshConnection {
             .get()
             .copied()
             .unwrap_or(20);
-        let mut command = format!(
+        let mut inner = format!(
             "{remote_path} --remote-server --max-item {max_items}"
         );
         if log_level > 0 {
-            command.push_str(&format!(" --log-level {log_level}"));
+            inner.push_str(&format!(" --log-level {log_level}"));
         }
+
+        // Execute the remote binary directly.  The binary itself calls
+        // `load_login_shell_env()` at startup to capture and apply the login
+        // shell's environment (PATH, nvm, Homebrew, etc.), so we do not need
+        // any shell wrapper here.  Avoiding a wrapper removes all shell syntax
+        // compatibility issues (bash vs fish vs zsh) and stdout-pollution risk.
+        let command = inner;
 
         let mut cmd = Command::new("ssh");
 

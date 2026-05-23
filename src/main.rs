@@ -149,10 +149,61 @@ fn run_server() -> Result<()> {
 }
 
 fn run_remote_server() -> Result<()> {
+    // Load the login-shell environment before anything else so that language
+    // servers (node, python, …) can be found on PATH regardless of how the
+    // binary was launched via SSH.
+    load_login_shell_env();
+
     let (connect, io_threads) = remote::server::envelope_stdio();
     let syn_loader_config = config::default_syntax_loader();
     main_loop(connect, syn_loader_config).unwrap();
     info!("Remote server started successfully.");
     io_threads.join()?;
     Ok(())
+}
+
+/// Capture the login-shell environment and apply it to the current process.
+///
+/// Runs `$SHELL -l -i -c env`, parses the output as `KEY=VALUE` lines, and
+/// calls `std::env::set_var` for every variable except `SHLVL` (which would
+/// confuse nested-shell detection).  Errors are logged but never fatal —
+/// if the capture fails the server still starts with its inherited env.
+fn load_login_shell_env() {
+    use std::process::{Command, Stdio};
+
+    let shell = match std::env::var("SHELL") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            info!("load_login_shell_env: $SHELL not set, skipping");
+            return;
+        }
+    };
+
+    let output = Command::new(&shell)
+        .args(["-l", "-i", "-c", "env"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null()) // discard interactive-mode noise (greeting, PS1, etc.)
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            info!("load_login_shell_env: failed to run `{shell} -l -i -c env`: {e}");
+            return;
+        }
+    };
+
+    let mut applied = 0usize;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            if key == "SHLVL" {
+                continue;
+            }
+            // SAFETY: single-threaded at this point; no other threads have
+            // been spawned yet so there is no risk of concurrent reads.
+            unsafe { std::env::set_var(key, value) };
+            applied += 1;
+        }
+    }
+    info!("load_login_shell_env: applied {applied} variables from `{shell} -l -i -c env`");
 }
