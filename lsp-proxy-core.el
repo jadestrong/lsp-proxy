@@ -392,7 +392,7 @@ Only sends requests if servers are available."
   (when (eql method 'emacs/remoteDeployNeeded)
     (lsp-proxy-remote--handle-deploy-needed msg))
   (when (eql method 'emacs/remoteDeployProgress)
-    (lsp-proxy-remote--handle-deploy-progress msg))))
+    (lsp-proxy-remote--handle-deploy-progress msg)))
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
