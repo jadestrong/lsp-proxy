@@ -422,10 +422,7 @@ Skip reopening notifications for buffers not currently visible."
 
       ;; Remote connection status
       (when (lsp-proxy--connection-alivep)
-        (lsp-proxy--async-request
-         'emacs/getRemoteInfo
-         (lsp-proxy--build-params nil)
-         :success-fn
+        (lsp-proxy-remote-get-info
          (lambda (status)
            (with-current-buffer debug-buffer
              (insert "\n=== Remote Connection Status ===\n")

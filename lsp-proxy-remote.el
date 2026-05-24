@@ -17,6 +17,29 @@
 
 (require 'lsp-proxy-utils)
 
+;;; Low-level request helper
+;;
+;; `lsp-proxy--async-request' gates every send behind `lsp-proxy--has-any-servers',
+;; which is only set after a file is opened with lsp-proxy-mode active.
+;; Remote-management requests (check, deploy) are not document-scoped and must
+;; reach the server regardless, so we bypass that guard and call
+;; `jsonrpc-async-request' directly.
+(cl-defun lsp-proxy-remote--async-request (method params &rest args
+                                           &key
+                                           (success-fn #'ignore)
+                                           (error-fn   (lambda (err)
+                                                         (message "[lsp-proxy] %s" err)))
+                                           &allow-other-keys)
+  "Send a server-management async request without the has-any-servers guard."
+  (apply #'jsonrpc-async-request
+         lsp-proxy--connection
+         method params
+         :success-fn success-fn
+         :error-fn   error-fn
+         (cl-loop for (k v) on args by #'cddr
+                  unless (memq k '(:success-fn :error-fn))
+                  append (list k v))))
+
 (defgroup lsp-proxy-remote nil
   "Remote development settings for lsp-proxy."
   :prefix "lsp-proxy-remote-"
@@ -90,9 +113,9 @@ MODE-LABEL is a short string describing the current deploy mode (e.g.
   "Send the deploy request for CONNECTION-KEY and stream progress to the buffer."
   (lsp-proxy-remote--log "")
   (lsp-proxy-remote--log "Starting upload...")
-  (lsp-proxy--async-request
+  (lsp-proxy-remote--async-request
    'emacs/deployRemoteBinary
-   (lsp-proxy--build-params (list :connectionKey connection-key))
+   (list :params (list :connectionKey connection-key))
    :success-fn
    (lambda (result)
      (let ((ok   (eq (plist-get result :success) t))
@@ -145,6 +168,18 @@ Behaviour depends on `lsp-proxy-remote-deploy-mode':
   "Handle `emacs/remoteDeployProgress' notification with PARAMS."
   (lsp-proxy-remote--log (plist-get params :message)))
 
+;;; Remote info query
+
+;;;###autoload
+(defun lsp-proxy-remote-get-info (success-fn)
+  "Query the server for remote connection status and call SUCCESS-FN with the result.
+Bypasses the `lsp-proxy--has-any-servers' guard so it works even when no
+buffer has `lsp-proxy-mode' active."
+  (lsp-proxy-remote--async-request
+   'emacs/getRemoteInfo
+   (list :params nil)
+   :success-fn success-fn))
+
 ;;; TRAMP host candidates
 
 (defun lsp-proxy-remote--tramp-ssh-keys ()
@@ -194,11 +229,17 @@ When called interactively, defaults to the host that last requested a deploy."
           lsp-proxy-remote--pending-connection-key)))
   (unless (and connection-key (not (string-empty-p connection-key)))
     (user-error "No connection key specified"))
+  ;; Ensure the local lsp-proxy server is running — the deploy requests are
+  ;; sent through it regardless of whether lsp-proxy-mode is active in any
+  ;; buffer.
+  (lsp-proxy--ensure-connection)
   (lsp-proxy-remote--reset-deploy-buffer connection-key "manual")
-  (lsp-proxy-remote--log "Checking remote binary...")
-  (lsp-proxy--async-request
+  (lsp-proxy-remote--log
+   (concat "Checking remote binary on " connection-key
+           "  (may take a moment while establishing SSH connection)..."))
+  (lsp-proxy-remote--async-request
    'emacs/checkRemoteBinary
-   (lsp-proxy--build-params (list :connectionKey connection-key))
+   (list :params (list :connectionKey connection-key))
    :success-fn
    (lambda (result)
      (let* ((local-ver   (plist-get result :localVersion))
