@@ -136,6 +136,24 @@ struct MasterProcess {
     destination: String,
 }
 
+impl Drop for MasterProcess {
+    fn drop(&mut self) {
+        // Dropping a tokio Child does NOT kill the process; we must do it
+        // explicitly so that all muxed sessions (including remote
+        // `emacs-lsp-proxy --remote-server` processes) receive SIGHUP and
+        // exit when lsp-proxy restarts or a connection is evicted.
+        //
+        // `start_kill()` is synchronous (SIGKILL, no await needed) and safe
+        // to call from any context, including outside the tokio runtime.
+        // We intentionally avoid `tokio::spawn` here — Drop can be invoked
+        // after the runtime has shut down, and spawn would panic in that case.
+        let _ = self.process.start_kill();
+
+        #[cfg(not(target_os = "windows"))]
+        let _ = std::fs::remove_file(&self.socket_path);
+    }
+}
+
 impl MasterProcess {
     #[cfg(not(target_os = "windows"))]
     pub async fn new(
@@ -616,7 +634,12 @@ impl SshConnection {
             .arg(&command)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // When the Child is dropped (together with SshRpcStream / RpcClient),
+            // automatically send SIGKILL to the local SSH slave so the remote
+            // process loses its connection and exits before the ControlMaster
+            // is torn down.
+            .kill_on_drop(true);
 
         info!("Starting remote LSP proxy: {command}");
         let mut process = cmd.spawn().context("Failed to spawn remote LSP proxy")?;
@@ -668,7 +691,7 @@ impl SshConnection {
 /// SSH LSP进程包装
 #[allow(dead_code)]
 pub struct SshLspProcess {
-    process: Child,
+    pub process: Child,
     pub stdin: tokio::process::ChildStdin,
     pub stdout: tokio::process::ChildStdout,
 }

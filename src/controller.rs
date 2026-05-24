@@ -542,6 +542,7 @@ fn spawn_remote_worker(
             rt.block_on(async move {
                 while let Some(task) = task_rx.recv().await {
                     let manager = manager.clone();
+
                     let result_tx = result_tx.clone();
                     tokio::spawn(async move {
                         match task {
@@ -627,6 +628,11 @@ fn spawn_remote_worker(
                         }
                     });
                 }
+                // task_rx exhausted: the controller has been dropped (server
+                // shutdown or restart).  Clean up in the correct order so that
+                // remote processes receive graceful EOF before the ControlMaster
+                // is killed.
+                manager.cleanup().await;
             });
         })
         .expect("failed to spawn remote worker thread");

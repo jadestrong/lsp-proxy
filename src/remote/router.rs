@@ -20,8 +20,13 @@ use crate::msg::{Message, Response};
 /// Manages SSH connections and RPC clients for remote LSP development.
 pub struct RemoteConnectionManager {
     detector: RemoteDetector,
-    ssh_connections: Arc<Mutex<HashMap<String, Arc<SshConnection>>>>,
+    // *** Drop order matters — Rust drops fields in declaration order. ***
+    // RPC clients must be dropped BEFORE SSH connections so that the remote
+    // process receives EOF on its stdin (graceful close via SshRpcStream /
+    // kill_on_drop) before the ControlMaster is torn down.  Reversing the
+    // order would kill the master first, leaving the child sessions in limbo.
     rpc_clients: Arc<Mutex<HashMap<String, Arc<RpcClient>>>>,
+    ssh_connections: Arc<Mutex<HashMap<String, Arc<SshConnection>>>>,
     /// Where path-corrected server-initiated messages get pushed. Set once
     /// by the Controller during startup; each new RpcClient spawns a bridge
     /// task that drains its unsolicited channel into this sink.
@@ -32,8 +37,8 @@ impl RemoteConnectionManager {
     pub fn new() -> Result<Self> {
         Ok(Self {
             detector: RemoteDetector::new()?,
-            ssh_connections: Arc::new(Mutex::new(HashMap::new())),
             rpc_clients: Arc::new(Mutex::new(HashMap::new())),
+            ssh_connections: Arc::new(Mutex::new(HashMap::new())),
             result_sink: Arc::new(parking_lot::Mutex::new(None)),
         })
     }
@@ -135,7 +140,11 @@ impl RemoteConnectionManager {
             .start_remote_lsp_proxy(&binary_cmd)
             .await?;
 
-        let stream = SshRpcStream::from_child_stdio(lsp_process.stdin, lsp_process.stdout);
+        let stream = SshRpcStream::from_child_stdio(
+            lsp_process.stdin,
+            lsp_process.stdout,
+            lsp_process.process,
+        );
 
         // Set up the unsolicited-message bridge: the RpcClient pushes raw
         // server-initiated messages into a per-client tokio channel, and we
@@ -634,14 +643,17 @@ impl RemoteConnectionManager {
         self.get_or_create_ssh_connection(&remote_info).await
     }
 
-    /// Close all active SSH connections and RPC clients.
-    #[allow(dead_code)]
+    /// Close all active connections in the correct order:
+    /// RPC clients first (EOF to remote process), then SSH connections (ControlMaster).
     pub async fn cleanup(&self) {
-        let mut connections = self.ssh_connections.lock().await;
-        connections.clear();
+        // 1. Drop RPC clients — this drops SshRpcStream which kill_on_drop's
+        //    the local SSH slave process, sending EOF/SIGHUP to the remote
+        //    `emacs-lsp-proxy --remote-server`.
+        self.rpc_clients.lock().await.clear();
 
-        let mut clients = self.rpc_clients.lock().await;
-        clients.clear();
+        // 2. Drop SSH connections — kills the ControlMaster after children
+        //    have already been signalled.
+        self.ssh_connections.lock().await.clear();
 
         info!("Remote connections cleaned up");
     }
@@ -731,16 +743,24 @@ fn local_file_uri_to_tramp(uri: &str, remote_info: &RemoteInfo) -> Option<String
 pub struct SshRpcStream {
     reader: Compat<tokio::process::ChildStdout>,
     writer: Compat<tokio::process::ChildStdin>,
+    /// The local SSH slave process that carries the tunnel.  Kept here so its
+    /// lifetime matches the stream: when `SshRpcStream` is dropped (i.e. when
+    /// the `RpcClient` is dropped), the process is automatically killed via
+    /// `kill_on_drop`.  This ensures the remote `emacs-lsp-proxy --remote-server`
+    /// loses its connection and exits before the SSH ControlMaster is torn down.
+    _process: tokio::process::Child,
 }
 
 impl SshRpcStream {
     pub fn from_child_stdio(
         stdin: tokio::process::ChildStdin,
         stdout: tokio::process::ChildStdout,
+        process: tokio::process::Child,
     ) -> Self {
         Self {
             reader: stdout.compat(),
             writer: stdin.compat_write(),
+            _process: process,
         }
     }
 }
