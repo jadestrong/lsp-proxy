@@ -41,8 +41,15 @@ pub fn set_copilot_server_name(name: String) {
     COPILOT_SERVER_NAME.set(name).ok();
 }
 
-pub fn set_remote_binary_path(path: String) {
-    REMOTE_BINARY_PATH.set(path).ok();
+/// Initialise the remote binary path from the `LSP_PROXY_REMOTE_BINARY_PATH`
+/// environment variable.  Call once at startup, before the remote manager is
+/// used.  If the variable is absent or empty the built-in default is used.
+pub fn initialize_remote_binary_path() {
+    if let Ok(val) = std::env::var("LSP_PROXY_REMOTE_BINARY_PATH") {
+        if !val.is_empty() {
+            REMOTE_BINARY_PATH.set(val).ok();
+        }
+    }
 }
 
 pub fn remote_binary_path() -> &'static str {

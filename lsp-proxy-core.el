@@ -304,7 +304,11 @@ Only sends requests if servers are available."
                   :name "lsp proxy"
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
-                  :process (make-process :name "lsp proxy agent"
+                  :process (let ((process-environment
+                                  (cons (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
+                                                lsp-proxy-remote-binary-path)
+                                        process-environment)))
+                              (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file
                                                                 "--stdio"
@@ -313,12 +317,11 @@ Only sends requests if servers are available."
                                                                 "--log" lsp-proxy--log-file
                                                                 "--max-item" (number-to-string lsp-proxy-max-completion-item)
                                                                 "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count)
-                                                                "--copilot-server-name" lsp-proxy-copilot-server-name
-                                                                "--remote-binary-path" lsp-proxy-remote-binary-path)
+                                                                "--copilot-server-name" lsp-proxy-copilot-server-name)
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
-                                         :noquery t))))
+                                         :noquery t)))))
     (condition-case nil
         (funcall make-fn :events-buffer-config `(:size ,lsp-proxy-log-max))
       (invalid-slot-name

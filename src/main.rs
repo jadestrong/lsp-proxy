@@ -37,7 +37,7 @@ use log::{error, info};
 use logging::init_tracing;
 
 use crate::{
-    config::{set_copilot_server_name, set_remote_binary_path},
+    config::{initialize_remote_binary_path, set_copilot_server_name},
     connection::Connection,
     main_loop::main_loop,
 };
@@ -92,9 +92,7 @@ fn try_main() -> Result<()> {
     set_max_diagnostics_push(args.max_diagnostics_push);
     set_enable_bytecode(args.enable_bytecode);
     set_copilot_server_name(args.copilot_server_name);
-    if let Some(path) = args.remote_binary_path {
-        set_remote_binary_path(path);
-    }
+    initialize_remote_binary_path();
 
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {e}");
