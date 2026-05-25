@@ -163,12 +163,17 @@ impl MasterProcess {
     ) -> Result<Self> {
         let args = [
             "-N",
-            // ControlPersist=yes keeps the master alive in the background
-            // after startup. With `ControlPersist=no` the master would exit
-            // as soon as its "initial client" (which with -N doesn't exist)
-            // would have closed — effectively making it exit immediately.
+            // ControlPersist=600 keeps the master alive for up to 600 seconds
+            // (10 minutes) after the last mux client disconnects.  This serves
+            // as an automatic cleanup fallback: when lsp-proxy is killed without
+            // running its exit hook (e.g. SIGKILL from the OS), the ControlMaster
+            // will eventually idle out, close its TCP connection with a proper
+            // FIN, and the remote sshd will cleanly EOF the remote process's
+            // stdin — causing emacs-lsp-proxy --remote-server to exit on its own.
+            // "yes" would keep it alive indefinitely, which leaks the remote
+            // process forever in that scenario.
             "-o",
-            "ControlPersist=yes",
+            "ControlPersist=600",
             "-o",
             "ControlMaster=yes",
             // Keepalive: send an SSH-level probe every 15s; if 3 go
@@ -257,7 +262,7 @@ impl MasterProcess {
     #[cfg(not(target_os = "windows"))]
     pub async fn wait_connected(&mut self) -> Result<()> {
         let deadline = std::time::Instant::now() + MASTER_READY_TIMEOUT;
-        // With ControlPersist=yes, ssh forks a background daemon and the
+        // With ControlPersist=<seconds>, ssh forks a background daemon and the
         // foreground process exits 0 almost immediately. That's expected —
         // the real master lives on via the control socket. Treat exit 0 as
         // "daemonised successfully" and keep polling; only non-zero exits
