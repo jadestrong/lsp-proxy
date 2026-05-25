@@ -8,6 +8,24 @@ use crate::{
 use crossbeam_channel::Sender;
 use std::{sync::Arc, sync::Mutex, time::Instant};
 
+/// A hook registered by the Controller to kill remote processes synchronously
+/// before `process::exit()`.  Stored as a global so it is reachable from the
+/// Application thread without requiring a shared Arc between the two threads.
+static EXIT_HOOK: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Register the exit hook.  Called once during Controller initialisation.
+pub fn register_exit_hook(f: impl Fn() + Send + Sync + 'static) {
+    EXIT_HOOK.set(Box::new(f)).ok();
+}
+
+/// Run the exit hook if one was registered.
+pub fn run_exit_hook() {
+    if let Some(hook) = EXIT_HOOK.get() {
+        hook();
+    }
+}
+
 pub(crate) type ReqHandler = fn(&mut Application, Response);
 type ReqQueue = req_queue::ReqQueue<(String, Instant), ReqHandler>;
 

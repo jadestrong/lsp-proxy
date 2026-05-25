@@ -86,6 +86,7 @@ pub struct RpcClient {
     /// Set to true by the heartbeat task when it decides the far end is
     /// unresponsive (N consecutive ping misses). Checked by `is_dead()`.
     dead: Arc<AtomicBool>,
+    transport_killer: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RpcClient {
@@ -102,6 +103,17 @@ impl RpcClient {
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
+        Self::new_with_transport_killer(stream, unsolicited, None)
+    }
+
+    pub fn new_with_transport_killer<S>(
+        stream: S,
+        unsolicited: Option<TokioUnboundedSender<Message>>,
+        transport_killer: Option<Arc<dyn Fn() + Send + Sync>>,
+    ) -> Result<Self>
+    where
+        S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    {
         let (sender, receiver) = futures::channel::mpsc::unbounded();
         tokio::spawn(Self::run_communication_loop(stream, receiver, unsolicited));
         let dead = Arc::new(AtomicBool::new(false));
@@ -110,6 +122,7 @@ impl RpcClient {
             sender,
             _next_id: Arc::new(AtomicU32::new(1)),
             dead,
+            transport_killer,
         })
     }
 
@@ -190,6 +203,21 @@ impl RpcClient {
     ///   timeout, repeatedly.
     pub fn is_dead(&self) -> bool {
         self.sender.is_closed() || self.dead.load(Ordering::Relaxed)
+    }
+
+    /// Synchronously tear down the underlying transport.
+    ///
+    /// This is used from the `process::exit()` path, where async Drop handlers
+    /// will not run. Closing the command channel alone is insufficient because
+    /// background tasks may still hold sender clones; the transport-specific
+    /// killer must explicitly terminate the child process that carries the
+    /// remote RPC stream.
+    pub fn kill_transport_sync(&self) {
+        self.dead.store(true, Ordering::Relaxed);
+        self.sender.close_channel();
+        if let Some(kill) = &self.transport_killer {
+            kill();
+        }
     }
 
     pub async fn send_request(&self, request: Request) -> Result<Response> {
@@ -685,6 +713,26 @@ mod tests {
         let result = resp.result.expect("result should be present");
         assert_eq!(result["method"], "textDocument/hover");
         assert_eq!(result["echoed_uri"], "file:///tmp/foo.rs");
+    }
+
+    #[tokio::test]
+    async fn kill_transport_sync_invokes_registered_killer() {
+        let (client_side, _server_side) = tokio::io::duplex(1 << 16);
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let killed_for_hook = killed.clone();
+        let client = RpcClient::new_with_transport_killer(
+            client_side.compat(),
+            None,
+            Some(Arc::new(move || {
+                killed_for_hook.store(true, Ordering::Relaxed);
+            })),
+        )
+        .expect("build RpcClient");
+
+        client.kill_transport_sync();
+
+        assert!(killed.load(Ordering::Relaxed));
+        assert!(client.is_dead());
     }
 
     #[tokio::test]

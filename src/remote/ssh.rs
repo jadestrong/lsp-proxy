@@ -444,6 +444,76 @@ pub struct SshConnection {
 }
 
 impl SshConnection {
+    /// Kill the SSH ControlMaster process synchronously without async/await.
+    ///
+    /// Called from `kill_all_sync` (a synchronous shutdown path) just before
+    /// `process::exit()`.  Killing the master causes all muxed sessions to
+    /// receive SIGHUP, which terminates the remote `emacs-lsp-proxy --remote-server`
+    /// processes.  Uses `try_lock` — if the lock is held the kill is skipped,
+    /// but the `MasterProcess::drop` impl will still fire later when the Arc
+    /// is released.
+    pub fn kill_master_sync(&self) {
+        if let Ok(mut guard) = self.master_process.try_lock() {
+            if let Some(ref mut mp) = *guard {
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let socket = mp.socket_path.to_string_lossy();
+                    let ssh_args_base = [
+                        "-S", &socket,
+                        "-o", "ControlMaster=no",
+                        "-T",
+                        "-o", "LogLevel=ERROR",
+                        "-o", "BatchMode=yes",
+                        &mp.destination,
+                    ];
+
+                    // Step 1: Directly kill the remote emacs-lsp-proxy process
+                    // via the existing ControlMaster connection.
+                    //
+                    // On macOS, the remote host does not have a PTY (we use -T),
+                    // so sshd never sends SIGHUP to the remote process group when
+                    // the connection drops.  TCP RST also does not reliably close
+                    // the remote process's stdin on macOS — it can survive for
+                    // hours waiting for TCP keepalive to expire.  The only
+                    // guaranteed fix is to kill it directly over SSH.
+                    let kill_result = std::process::Command::new("ssh")
+                        .args(ssh_args_base)
+                        .arg("pkill -TERM -f 'emacs-lsp-proxy.*--remote-server'; true")
+                        .output();
+                    match kill_result {
+                        Ok(_) => info!("sent SIGTERM to remote emacs-lsp-proxy on {}", mp.destination),
+                        Err(e) => warn!("could not send SIGTERM to remote on {}: {e}", mp.destination),
+                    }
+
+                    // Step 2: Gracefully close the ControlMaster so it sends
+                    // proper SSH disconnect messages.
+                    let exit_result = std::process::Command::new("ssh")
+                        .args(["-S", &socket, "-O", "exit", "-o", "LogLevel=ERROR", &mp.destination])
+                        .output();
+                    match exit_result {
+                        Ok(out) if out.status.success() => {
+                            info!("ssh -O exit succeeded for {}", mp.destination);
+                        }
+                        Ok(out) => warn!(
+                            "ssh -O exit failed for {} (exit={:?}): {}",
+                            mp.destination, out.status.code(),
+                            String::from_utf8_lossy(&out.stderr).trim()
+                        ),
+                        Err(e) => warn!("ssh -O exit could not run for {}: {e}", mp.destination),
+                    }
+                }
+
+                // Fallback / belt-and-suspenders: SIGKILL the master process.
+                // If `ssh -O exit` already caused it to exit this is a no-op.
+                let _ = mp.process.start_kill();
+
+                #[cfg(not(target_os = "windows"))]
+                let _ = std::fs::remove_file(&mp.socket_path);
+            }
+            *guard = None;
+        }
+    }
+
     pub async fn connect(options: SshConnectionOptions) -> Result<Self> {
         let socket = SshSocket::new(options.clone())?;
         let temp_dir = tempfile::tempdir().context("Failed to create temp directory")?;

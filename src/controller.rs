@@ -77,6 +77,13 @@ impl Controller {
             }
         };
 
+        // Register a sync exit hook so handle_exit can kill remote processes
+        // before process::exit() — which does not run async Drop chains.
+        if let Some(ref manager) = remote_manager {
+            let m = manager.clone();
+            crate::application::register_exit_hook(move || m.kill_all_sync());
+        }
+
         let (remote_task_tx, remote_result_rx) = match remote_manager.clone() {
             Some(manager) => {
                 let (task_tx, task_rx) = mpsc::unbounded_channel::<RemoteTask>();
@@ -101,6 +108,7 @@ impl Controller {
             remote_result_rx,
         }
     }
+
 
     fn handle_message(&mut self, msg: Message, now: Instant) -> Result<()> {
         // RPC-layer heartbeat from the local RpcClient. Short-circuit before

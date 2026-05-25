@@ -391,6 +391,12 @@ pub fn handle_exit(app: &mut Application, _params: ()) -> Result<()> {
     // Cleanup all resources
     app.cleanup_resources();
 
+    // Kill remote connections synchronously before calling process::exit().
+    // process::exit() does not run Drop implementations, so without this call
+    // the remote emacs-lsp-proxy --remote-server processes would keep running
+    // after lsp-proxy restarts.
+    crate::application::run_exit_hook();
+
     // Exit the process
     std::process::exit(exit_code);
 }
