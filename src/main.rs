@@ -141,6 +141,16 @@ fn run_server() -> Result<()> {
     let (connect, io_threads) = Connection::stdio();
     let syn_loader_config = config::default_syntax_loader();
     main_loop(connect, syn_loader_config).unwrap();
+
+    // Clean up remote connections when the main loop exits.  This covers two
+    // cases:
+    //   1. Emacs sent `exit` notification → handle_exit already called
+    //      run_exit_hook(); calling it again here is a no-op (try_lock returns
+    //      the already-cleared state).
+    //   2. Emacs closed stdin directly (e.g. quit Emacs without lsp-proxy-restart)
+    //      → handle_exit was never called; this is the only cleanup opportunity.
+    crate::application::run_exit_hook();
+
     info!("Server started successfully.");
     io_threads.join()?;
     Ok(())

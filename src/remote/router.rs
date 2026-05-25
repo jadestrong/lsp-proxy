@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Mutex;
 use tokio_util::compat::{Compat, TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -140,7 +140,7 @@ impl RemoteConnectionManager {
             .start_remote_lsp_proxy(&binary_cmd)
             .await?;
 
-        let (stream, process_handle) = SshRpcStream::from_child_stdio(
+        let stream = SshRpcStream::from_child_stdio(
             lsp_process.stdin,
             lsp_process.stdout,
             lsp_process.process,
@@ -152,11 +152,7 @@ impl RemoteConnectionManager {
         // them to the Controller's result sink.
         let (unsolicited_tx, mut unsolicited_rx) =
             tokio::sync::mpsc::unbounded_channel::<Message>();
-        let client = Arc::new(RpcClient::new_with_transport_killer(
-            stream,
-            Some(unsolicited_tx),
-            Some(Arc::new(move || process_handle.kill_sync())),
-        )?);
+        let client = Arc::new(RpcClient::new(stream, Some(unsolicited_tx))?);
 
         let sink_snapshot = self.result_sink.lock().clone();
         match sink_snapshot {
@@ -655,37 +651,25 @@ impl RemoteConnectionManager {
     /// slave process that carries a remote RPC stream, then shut down the SSH
     /// ControlMaster.
     pub fn kill_all_sync(&self) {
-        if let Ok(clients) = self.rpc_clients.try_lock() {
-            for client in clients.values() {
-                client.kill_transport_sync();
-            }
-        }
+        // `kill_master_sync` handles everything: it pkill's the remote process
+        // directly (most reliable on macOS), then gracefully closes the
+        // ControlMaster.  The SSH slave process is handled by kill_on_drop
+        // when the tokio runtime naturally cleans up.
         if let Ok(connections) = self.ssh_connections.try_lock() {
             for conn in connections.values() {
                 conn.kill_master_sync();
             }
         }
-        info!("kill_all_sync: remote RPC transports and ControlMaster processes signalled");
+        info!("kill_all_sync: ControlMaster processes signalled");
     }
 
     /// Close all active connections in the correct order:
     /// RPC clients first (EOF to remote process), then SSH connections (ControlMaster).
     pub async fn cleanup(&self) {
-        // 1. Kill RPC transports first.  This terminates the local SSH slave
-        //    process carrying the remote `emacs-lsp-proxy --remote-server`
-        //    before the ControlMaster is torn down.
-        {
-            let mut clients = self.rpc_clients.lock().await;
-            for client in clients.values() {
-                client.kill_transport_sync();
-            }
-            clients.clear();
-        }
-
-        // 2. Drop SSH connections — kills the ControlMaster after children
-        //    have already been signalled.
+        // RPC clients first so kill_on_drop fires on the SSH slave before the
+        // ControlMaster is torn down.
+        self.rpc_clients.lock().await.clear();
         self.ssh_connections.lock().await.clear();
-
         info!("Remote connections cleaned up");
     }
 }
@@ -775,26 +759,11 @@ pub struct SshRpcStream {
     reader: Compat<tokio::process::ChildStdout>,
     writer: Compat<tokio::process::ChildStdin>,
     /// The local SSH slave process that carries the tunnel.  Kept here so its
-    /// lifetime matches the stream.  A clone of the handle is also stored on
-    /// the `RpcClient` so shutdown paths that call `process::exit()` can kill
-    /// the process synchronously without relying on Drop.
-    _process: SshRpcProcessHandle,
-}
-
-#[derive(Clone)]
-pub struct SshRpcProcessHandle {
-    process: Arc<StdMutex<Option<tokio::process::Child>>>,
-}
-
-impl SshRpcProcessHandle {
-    pub fn kill_sync(&self) {
-        if let Ok(mut guard) = self.process.lock() {
-            if let Some(child) = guard.as_mut() {
-                let _ = child.start_kill();
-            }
-            *guard = None;
-        }
-    }
+    /// lifetime matches the stream: when `SshRpcStream` is dropped (i.e. when
+    /// the `RpcClient` is dropped), the process is automatically killed via
+    /// `kill_on_drop`.  This ensures the remote `emacs-lsp-proxy --remote-server`
+    /// loses its connection and exits before the SSH ControlMaster is torn down.
+    _process: tokio::process::Child,
 }
 
 impl SshRpcStream {
@@ -802,16 +771,12 @@ impl SshRpcStream {
         stdin: tokio::process::ChildStdin,
         stdout: tokio::process::ChildStdout,
         process: tokio::process::Child,
-    ) -> (Self, SshRpcProcessHandle) {
-        let process = SshRpcProcessHandle {
-            process: Arc::new(StdMutex::new(Some(process))),
-        };
-        let stream = Self {
+    ) -> Self {
+        Self {
             reader: stdout.compat(),
             writer: stdin.compat_write(),
-            _process: process.clone(),
-        };
-        (stream, process)
+            _process: process,
+        }
     }
 }
 

@@ -8,10 +8,12 @@
 
 use anyhow::Result;
 use crossbeam_channel::{bounded, Receiver, Sender};
-use log::{debug, error};
+use log::{debug, error, info};
 use lsp_types::NumberOrString;
 use prost::Message as _;
 use std::io::{stdin, stdout, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 use crate::connection::{Connection, IoThreads};
@@ -87,12 +89,49 @@ const MAX_MESSAGE_LEN: u32 = 10 * 1024 * 1024;
 /// Build a [`Connection`] that speaks Envelope frames on stdio.
 ///
 /// The returned `IoThreads` can be joined just like `Connection::stdio()`.
+/// Idle timeout for the remote server: if no message arrives from the local
+/// lsp-proxy for this many seconds, assume the local process has died
+/// (e.g. Emacs killed it with SIGKILL) and exit.
+///
+/// The local side sends a heartbeat ping every 5 s with up to 5 misses before
+/// declaring the connection dead (≈ 25 s total).  We use 3× that window to
+/// avoid false positives while still cleaning up promptly.
+const IDLE_EXIT_SECS: u64 = 75;
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 pub fn envelope_stdio() -> (Connection, IoThreads) {
     let (writer_sender, writer_receiver) = bounded::<Message>(0);
     let (reader_sender, reader_receiver) = bounded::<Message>(0);
 
+    // Shared timestamp updated by read_loop on every received envelope.
+    let last_msg = Arc::new(AtomicU64::new(now_secs()));
+
+    let last_msg_for_watchdog = last_msg.clone();
+    thread::Builder::new()
+        .name("remote-idle-watchdog".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(std::time::Duration::from_secs(15));
+                let idle = now_secs().saturating_sub(last_msg_for_watchdog.load(Ordering::Relaxed));
+                if idle >= IDLE_EXIT_SECS {
+                    info!(
+                        "remote server idle for {idle}s (threshold {IDLE_EXIT_SECS}s), \
+                         local lsp-proxy likely dead — exiting"
+                    );
+                    std::process::exit(0);
+                }
+            }
+        })
+        .expect("spawn idle watchdog");
+
     let writer = thread::spawn(move || write_loop(writer_receiver));
-    let reader = thread::spawn(move || read_loop(reader_sender));
+    let reader = thread::spawn(move || read_loop(reader_sender, last_msg));
 
     (
         Connection {
@@ -103,7 +142,7 @@ pub fn envelope_stdio() -> (Connection, IoThreads) {
     )
 }
 
-fn read_loop(sender: Sender<Message>) -> std::io::Result<()> {
+fn read_loop(sender: Sender<Message>, last_msg: Arc<AtomicU64>) -> std::io::Result<()> {
     let mut stdin = stdin().lock();
     let mut len_buf = [0u8; MESSAGE_LEN_SIZE];
     let mut body = Vec::<u8>::new();
@@ -124,6 +163,9 @@ fn read_loop(sender: Sender<Message>) -> std::io::Result<()> {
         }
         body.resize(len as usize, 0);
         stdin.read_exact(&mut body)?;
+
+        // Reset the idle timer: local lsp-proxy is still alive.
+        last_msg.store(now_secs(), Ordering::Relaxed);
 
         let envelope = match Envelope::decode(body.as_slice()) {
             Ok(e) => e,

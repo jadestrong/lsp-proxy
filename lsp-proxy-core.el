@@ -178,23 +178,6 @@ This is used to determine if LSP requests should be sent.")
   (and lsp-proxy--connection
        (jsonrpc-running-p lsp-proxy--connection)))
 
-(defun lsp-proxy--connection-process (connection)
-  "Return the process backing CONNECTION, if any."
-  (when connection
-    (ignore-errors
-      (jsonrpc--process connection))))
-
-(defun lsp-proxy--wait-process-exit (process timeout)
-  "Wait up to TIMEOUT seconds for PROCESS to exit.
-Return non-nil when PROCESS is no longer live."
-  (let ((deadline (+ (float-time) timeout)))
-    (while (and (processp process)
-                (process-live-p process)
-                (< (float-time) deadline))
-      (accept-process-output process 0.05))
-    (not (and (processp process)
-              (process-live-p process)))))
-
 (defun lsp-proxy--ensure-connection ()
   "Ensure connection is established."
   (unless (lsp-proxy--connection-alivep)
@@ -564,33 +547,44 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
       (setq lsp-proxy--recent-changes nil))))
 
 ;;; Commands
+(defun lsp-proxy--shutdown-server ()
+  "Send shutdown + exit to the running lsp-proxy server and wait for it to die.
+Does NOT restart or reconnect.  Safe to call from `kill-emacs-hook'."
+  (let ((connection lsp-proxy--connection))
+    (when (and connection (jsonrpc-running-p connection))
+      ;; Bypass `lsp-proxy--has-any-servers' / `lsp-proxy-mode' guards: these
+      ;; are server-lifecycle messages, not document-scoped requests.
+      (ignore-errors
+        (jsonrpc-request connection 'shutdown (list :params nil) :timeout 1.5))
+      (ignore-errors
+        (jsonrpc-notify connection 'exit (list :params nil)))
+      ;; Wait up to 3s for the Rust process to handle `exit' (which
+      ;; synchronously kills remote SSH connections before calling
+      ;; process::exit).  If it doesn't exit in time, force-kill it.
+      (let ((proc (ignore-errors (jsonrpc--process connection)))
+            (deadline (+ (float-time) 3.0)))
+        (when (processp proc)
+          (while (and (process-live-p proc) (< (float-time) deadline))
+            (accept-process-output proc 0.05)))
+        (when (and (processp proc) (process-live-p proc))
+          (ignore-errors (jsonrpc-shutdown connection)))))
+    (setq lsp-proxy--connection nil)))
+
 (defun lsp-proxy-restart ()
   "Restart."
   (interactive)
-  (let* ((connection lsp-proxy--connection)
-         (process (lsp-proxy--connection-process connection)))
-    (when (and connection (jsonrpc-running-p connection))
-      ;; `shutdown' and `exit' are server-lifecycle operations, not
-      ;; document-scoped.  Bypass the `lsp-proxy--has-any-servers' and
-      ;; `lsp-proxy-mode' guards by calling jsonrpc directly so these are
-      ;; always delivered regardless of the current buffer state.
-      (ignore-errors
-        (jsonrpc-request connection 'shutdown
-                         (list :params nil) :timeout 1.5))
-      (ignore-errors
-        (jsonrpc-notify connection 'exit (list :params nil)))
-      ;; Give the Rust server a chance to run its `exit' handler.  That handler
-      ;; synchronously kills remote SSH transports before calling
-      ;; `process::exit'.  Calling `jsonrpc-shutdown' immediately can delete the
-      ;; local process before it handles `exit', leaving remote servers alive.
-      (unless (and (processp process)
-                   (lsp-proxy--wait-process-exit process 3.0))
-        (ignore-errors
-          (jsonrpc-shutdown connection))))
-    (setq lsp-proxy--connection nil))
+  (lsp-proxy--shutdown-server)
   (lsp-proxy--cleanup)
   (lsp-proxy--on-doc-focus (selected-window))
   (message "[LSP-PROXY] Process restarted."))
+
+(defun lsp-proxy--kill-emacs-hook ()
+  "Clean up lsp-proxy remote servers before Emacs exits.
+Added to `kill-emacs-hook' so remote emacs-lsp-proxy processes are
+terminated even when Emacs exits without calling `lsp-proxy-restart'."
+  (lsp-proxy--shutdown-server))
+
+(add-hook 'kill-emacs-hook #'lsp-proxy--kill-emacs-hook)
 
 (defun lsp-proxy-open-log-file ()
   "Open the log file. If it does not exist, create it first."
