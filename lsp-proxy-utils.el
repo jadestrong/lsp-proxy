@@ -465,14 +465,14 @@ edit proposed by the server."
            (mapcar (eglot--lambda ((TextDocumentEdit) textDocument edits)
                      (eglot--dbind ((VersionedTextDocumentIdentifier) uri version)
                          textDocument
-                       (list (eglot-uri-to-path uri) edits version)))
+                       (list (lsp-proxy--uri-to-path uri) edits version)))
                    documentChanges)))
       (unless (and changes documentChanges)
         ;; We don't want double edits, and some servers send both
         ;; changes and documentChanges.  This unless ensures that we
         ;; prefer documentChanges over changes.
         (cl-loop for (uri edits) on changes by #'cddr
-                 do (push (list (eglot-uri-to-path uri) edits) prepared)))
+                 do (push (list (lsp-proxy--uri-to-path uri) edits) prepared)))
       (cl-flet ((notevery-visited-p ()
                   (cl-notevery #'find-buffer-visiting
                                (mapcar #'car prepared)))
