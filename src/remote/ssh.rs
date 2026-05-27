@@ -109,6 +109,15 @@ impl SshConnectionOptions {
             None => self.destination(),
         }
     }
+
+    /// Returns the `-p <port>` argument pair when a non-default port is set,
+    /// or an empty vec otherwise. Use with `cmd.args(options.port_args())`.
+    pub fn port_args(&self) -> Vec<String> {
+        match self.port {
+            Some(port) => vec!["-p".to_string(), port.to_string()],
+            None => vec![],
+        }
+    }
 }
 
 /// SSH Socket封装
@@ -426,6 +435,7 @@ impl SshSocket {
             .arg("LogLevel=ERROR")
             .arg("-o")
             .arg("RemoteCommand=none")
+            .args(self.connection_options.port_args())
             .arg(self.connection_options.destination())
             .arg(command);
 
@@ -540,13 +550,17 @@ impl SshConnection {
 
         if master_guard.is_none() {
             let destination = self.socket.connection_options.destination();
-            let additional_args = self
+            let port_args = self.socket.connection_options.port_args();
+            let user_args = self
                 .socket
                 .connection_options
                 .args
                 .as_ref()
                 .cloned()
                 .unwrap_or_default();
+            // Prepend port args so they appear before any user-supplied args.
+            let mut additional_args = port_args;
+            additional_args.extend(user_args);
 
             #[cfg(not(target_os = "windows"))]
             let master =
@@ -594,6 +608,7 @@ impl SshConnection {
             .arg("LogLevel=ERROR")
             .arg("-o")
             .arg("RemoteCommand=none")
+            .args(self.socket.connection_options.port_args())
             .arg(self.socket.connection_options.destination())
             .arg(command);
 
@@ -624,6 +639,7 @@ impl SshConnection {
             .arg("LogLevel=ERROR")
             .arg("-o")
             .arg("RemoteCommand=none")
+            .args(self.socket.connection_options.port_args())
             .arg(local_path)
             .arg(format!(
                 "{}:{}",
@@ -705,6 +721,7 @@ impl SshConnection {
             .arg("ServerAliveInterval=15")
             .arg("-o")
             .arg("ServerAliveCountMax=3")
+            .args(self.socket.connection_options.port_args())
             .arg(self.socket.connection_options.destination())
             .arg(&command)
             .stdin(std::process::Stdio::piped())
