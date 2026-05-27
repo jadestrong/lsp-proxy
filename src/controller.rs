@@ -388,6 +388,7 @@ impl Controller {
                         }
                         Err(err) => {
                             warn!("remote worker result channel closed: {err}");
+                            self.remote_result_rx = None;
                         }
                     }
                 }
