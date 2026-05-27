@@ -365,7 +365,7 @@ impl Controller {
                                         .as_ref()
                                         .map(|v| {
                                             let s = v.to_string();
-                                            s[..s.len().min(256)].to_string()
+                                            crate::utils::truncate_preview(&s, 256).to_string()
                                         })
                                         .unwrap_or_else(|| "<none>".into());
                                     debug!(

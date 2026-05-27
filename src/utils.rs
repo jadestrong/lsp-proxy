@@ -15,6 +15,17 @@ pub fn current_working_dir() -> PathBuf {
         .expect("Cound't determine current working directory")
 }
 
+/// Truncate `s` to at most `max_bytes` bytes, respecting UTF-8 character boundaries.
+pub fn truncate_preview(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    match s.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_bytes).last() {
+        Some(i) if i < s.len() => &s[..i],
+        _ => &s[..max_bytes],
+    }
+}
+
 pub mod path {
     use crate::utils::current_working_dir;
     use etcetera::home_dir;

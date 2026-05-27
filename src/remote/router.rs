@@ -1,16 +1,5 @@
 use anyhow::{anyhow, Result};
 use log::{debug, info, warn};
-
-/// Truncate `s` to at most `max_bytes` bytes, respecting UTF-8 character boundaries.
-fn truncate_preview(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-    match s.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_bytes).last() {
-        Some(i) if i < s.len() => &s[..i],
-        _ => &s[..max_bytes],
-    }
-}
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -250,7 +239,7 @@ impl RemoteConnectionManager {
                     .as_ref()
                     .map(|v| {
                         let s = v.to_string();
-                        truncate_preview(&s, 256).to_string()
+                        crate::utils::truncate_preview(&s, 256).to_string()
                     })
                     .unwrap_or_else(|| "<none>".into());
                 debug!(
@@ -268,7 +257,7 @@ impl RemoteConnectionManager {
                     .as_ref()
                     .map(|v| {
                         let s = v.to_string();
-                        truncate_preview(&s, 256).to_string()
+                        crate::utils::truncate_preview(&s, 256).to_string()
                     })
                     .unwrap_or_else(|| "<none>".into());
                 debug!(
