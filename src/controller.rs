@@ -555,6 +555,11 @@ fn spawn_remote_worker(
                     tokio::spawn(async move {
                         match task {
                             RemoteTask::RouteMessage { message } => {
+                                let request_id = if let Message::Request(req) = &message {
+                                    Some(req.id.clone())
+                                } else {
+                                    None
+                                };
                                 match manager.route_message(message).await {
                                     Ok(Some(response)) => {
                                         if let Err(e) = result_tx.send(response) {
@@ -566,6 +571,20 @@ fn spawn_remote_worker(
                                     }
                                     Err(e) => {
                                         error!("remote routing failed: {e}");
+                                        if let Some(id) = request_id {
+                                            let resp = Message::Response(Response {
+                                                id,
+                                                result: None,
+                                                error: Some(crate::lsp::jsonrpc::Error {
+                                                    code: crate::lsp::jsonrpc::ErrorCode::InternalError,
+                                                    message: format!("remote routing failed: {e}"),
+                                                    data: None,
+                                                }),
+                                            });
+                                            if let Err(e) = result_tx.send(resp) {
+                                                warn!("remote result channel closed: {e}");
+                                            }
+                                        }
                                     }
                                 }
                             }
