@@ -31,9 +31,17 @@ impl RemoteHost {
         } else {
             format!("{}@", self.user)
         };
+        // Include remote_type in the key so `/ssh:user@host:` and
+        // `/rpc:user@host:` don't collapse to the same cached client —
+        // their unsolicited-message bridges rewrite URIs back with
+        // different TRAMP prefixes.
+        let type_str = match self.remote_type {
+            RemoteType::Ssh => "ssh",
+            RemoteType::Rpc => "rpc",
+        };
         match self.port {
-            Some(port) => format!("{}{}:{}", user_part, self.host, port),
-            None => format!("{}{}", user_part, self.host),
+            Some(port) => format!("{}:{}{}:{}", type_str, user_part, self.host, port),
+            None => format!("{}:{}{}", type_str, user_part, self.host),
         }
     }
 }
