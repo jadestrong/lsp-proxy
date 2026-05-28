@@ -834,13 +834,13 @@ When the binary check fails (missing or version mismatch on both the global comm
 
 lsp-proxy prints a hint in the minibuffer and waits for you to act:
 
-```
+```text
 [lsp-proxy] Remote binary unavailable on myserver (…). Run M-x lsp-proxy-remote-deploy to deploy v0.7.2 to ~/.cache/…
 ```
 
 Run `M-x lsp-proxy-remote-deploy` to open the `*lsp-proxy-deploy*` buffer. It shows the check result for both locations, then asks for confirmation before uploading:
 
-```
+```text
 Deploy log — myserver  [manual]  (started 2026-05-19 10:30:00)
 ------------------------------------------------------------
 
@@ -861,7 +861,7 @@ Confirm the `[lsp-proxy] Deploy v0.7.2 to myserver?` prompt and the upload begin
 
 lsp-proxy starts the upload immediately as soon as the check fails, streaming each step to the `*lsp-proxy-deploy*` buffer so you can follow along without doing anything:
 
-```
+```text
 Deploy log — myserver  [auto]  (started 2026-05-19 10:30:00)
 ------------------------------------------------------------
 
