@@ -200,6 +200,14 @@ fn load_login_shell_env() {
         }
     };
 
+    if !output.status.success() {
+        info!(
+            "load_login_shell_env: `{shell} -l -i -c env` exited with {}, skipping env override",
+            output.status
+        );
+        return;
+    }
+
     let mut applied = 0usize;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if let Some((key, value)) = line.split_once('=') {
