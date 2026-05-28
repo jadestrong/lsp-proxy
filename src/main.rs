@@ -140,7 +140,7 @@ fn with_extra_thread(
 fn run_server() -> Result<()> {
     let (connect, io_threads) = Connection::stdio();
     let syn_loader_config = config::default_syntax_loader();
-    main_loop(connect, syn_loader_config).unwrap();
+    main_loop(connect, syn_loader_config)?;
 
     // Clean up remote connections when the main loop exits.  This covers two
     // cases:
@@ -164,8 +164,7 @@ fn run_remote_server() -> Result<()> {
 
     let (connect, io_threads) = remote::server::envelope_stdio();
     let syn_loader_config = config::default_syntax_loader();
-    main_loop(connect, syn_loader_config).unwrap();
-    info!("Remote server started successfully.");
+    main_loop(connect, syn_loader_config)?;
     io_threads.join()?;
     Ok(())
 }
