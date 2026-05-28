@@ -87,6 +87,7 @@ impl Args {
         println!();
         println!("USAGE:");
         println!("    emacs-lsp-proxy [OPTIONS] --stdio");
+        println!("    emacs-lsp-proxy [OPTIONS] --remote-server");
         println!();
         println!("OPTIONS:");
         println!("    -c, --config <FILE>       Set configuration file path");
