@@ -151,14 +151,33 @@ impl Drop for MasterProcess {
         // `emacs-lsp-proxy --remote-server` processes) receive SIGHUP and
         // exit when lsp-proxy restarts or a connection is evicted.
         //
+        // With ControlPersist=600 the foreground ssh daemonises immediately,
+        // so `self.process` is already dead by the time we reach here.
+        // We must use `ssh -O exit` to signal the background ControlMaster
+        // daemon; only then will muxed sessions receive a proper SSH
+        // disconnect.  Fall back to SIGKILL as a belt-and-suspenders measure.
+        //
         // `start_kill()` is synchronous (SIGKILL, no await needed) and safe
         // to call from any context, including outside the tokio runtime.
         // We intentionally avoid `tokio::spawn` here — Drop can be invoked
         // after the runtime has shut down, and spawn would panic in that case.
-        let _ = self.process.start_kill();
-
         #[cfg(not(target_os = "windows"))]
-        let _ = std::fs::remove_file(&self.socket_path);
+        {
+            let _ = std::process::Command::new("ssh")
+                .args([
+                    "-S",
+                    &self.socket_path.to_string_lossy(),
+                    "-O",
+                    "exit",
+                    "-o",
+                    "LogLevel=ERROR",
+                    &self.destination,
+                ])
+                .output();
+            let _ = std::fs::remove_file(&self.socket_path);
+        }
+
+        let _ = self.process.start_kill();
     }
 }
 
@@ -466,11 +485,15 @@ impl SshConnection {
                 {
                     let socket = mp.socket_path.to_string_lossy();
                     let ssh_args_base = [
-                        "-S", &socket,
-                        "-o", "ControlMaster=no",
+                        "-S",
+                        &socket,
+                        "-o",
+                        "ControlMaster=no",
                         "-T",
-                        "-o", "LogLevel=ERROR",
-                        "-o", "BatchMode=yes",
+                        "-o",
+                        "LogLevel=ERROR",
+                        "-o",
+                        "BatchMode=yes",
                         &mp.destination,
                     ];
 
@@ -488,14 +511,28 @@ impl SshConnection {
                         .arg("pkill -TERM -f 'emacs-lsp-proxy.*--remote-server'; true")
                         .output();
                     match kill_result {
-                        Ok(_) => info!("sent SIGTERM to remote emacs-lsp-proxy on {}", mp.destination),
-                        Err(e) => warn!("could not send SIGTERM to remote on {}: {e}", mp.destination),
+                        Ok(_) => info!(
+                            "sent SIGTERM to remote emacs-lsp-proxy on {}",
+                            mp.destination
+                        ),
+                        Err(e) => warn!(
+                            "could not send SIGTERM to remote on {}: {e}",
+                            mp.destination
+                        ),
                     }
 
                     // Step 2: Gracefully close the ControlMaster so it sends
                     // proper SSH disconnect messages.
                     let exit_result = std::process::Command::new("ssh")
-                        .args(["-S", &socket, "-O", "exit", "-o", "LogLevel=ERROR", &mp.destination])
+                        .args([
+                            "-S",
+                            &socket,
+                            "-O",
+                            "exit",
+                            "-o",
+                            "LogLevel=ERROR",
+                            &mp.destination,
+                        ])
                         .output();
                     match exit_result {
                         Ok(out) if out.status.success() => {
@@ -503,7 +540,8 @@ impl SshConnection {
                         }
                         Ok(out) => warn!(
                             "ssh -O exit failed for {} (exit={:?}): {}",
-                            mp.destination, out.status.code(),
+                            mp.destination,
+                            out.status.code(),
                             String::from_utf8_lossy(&out.stderr).trim()
                         ),
                         Err(e) => warn!("ssh -O exit could not run for {}: {e}", mp.destination),
@@ -677,9 +715,7 @@ impl SshConnection {
         // argument to `sh -c`, so the remote path must be single-quote escaped
         // to handle spaces and shell metacharacters safely.
         let quoted_path = shell_single_quote(remote_path);
-        let mut inner = format!(
-            "{quoted_path} --remote-server --max-item {max_items}"
-        );
+        let mut inner = format!("{quoted_path} --remote-server --max-item {max_items}");
         if log_level > 0 {
             inner.push_str(&format!(" --log-level {log_level}"));
         }
@@ -893,12 +929,18 @@ mod tests {
 
     #[test]
     fn shell_single_quote_plain_path() {
-        assert_eq!(shell_single_quote("/usr/local/bin/proxy"), "'/usr/local/bin/proxy'");
+        assert_eq!(
+            shell_single_quote("/usr/local/bin/proxy"),
+            "'/usr/local/bin/proxy'"
+        );
     }
 
     #[test]
     fn shell_single_quote_path_with_spaces() {
-        assert_eq!(shell_single_quote("/home/my user/bin"), "'/home/my user/bin'");
+        assert_eq!(
+            shell_single_quote("/home/my user/bin"),
+            "'/home/my user/bin'"
+        );
     }
 
     #[test]

@@ -297,9 +297,14 @@ fn message_to_envelope(msg: Message) -> Result<Envelope> {
             })
         }
         Message::Request(Request { id, method, params }) => {
-            // Server-initiated requests. Use the numeric id if available,
-            // otherwise fall back to hashing/ignoring (strings aren't
-            // representable in the wire `id` field).
+            // Server-initiated requests (e.g. window/showMessageRequest).
+            // TODO: String request IDs are not representable in the wire `id`
+            // field (u32), so they are silently dropped here (envelope.id =
+            // None).  The receiver (rpc.rs decode_server_request) will then
+            // discard the entire message and the LSP server will never get a
+            // response, potentially causing it to stall or time out.  A proper
+            // fix would maintain a HashMap<u32, RequestId> to round-trip
+            // arbitrary IDs (e.g. by hashing the string to a u32 key).
             let params_bytes = serde_json::to_vec(&params)?;
             Ok(Envelope {
                 id: request_id_to_u32(&id),
