@@ -8,7 +8,6 @@ use tempfile::TempDir;
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-
 /// Result of a remote command, preserving the exit code so callers can tell
 /// "binary not found" (non-zero exit) from "transport failure" (error on the
 /// Result).
@@ -164,6 +163,12 @@ impl Drop for MasterProcess {
 }
 
 impl MasterProcess {
+    /// Sentinel printed by the remote command to signal the SSH connection is
+    /// ready. Shared between `new()` (which embeds it in the remote command)
+    /// and `wait_connected()` (which scans stdout for it).
+    #[cfg(target_os = "windows")]
+    const CONNECTION_ESTABLISHED_MAGIC: &'static str = "LSP_PROXY_SSH_CONNECTION_ESTABLISHED";
+
     #[cfg(not(target_os = "windows"))]
     pub async fn new(
         socket_path: &std::path::Path,
@@ -233,12 +238,15 @@ impl MasterProcess {
 
     #[cfg(target_os = "windows")]
     pub async fn new(destination: &str, additional_args: Vec<String>) -> Result<Self> {
-        // Windows 不走 ControlMaster,仍保留一个 echo 标记后 sleep 的长连接占位。
+        // On Windows, `ControlMaster` and `ControlPath` are not supported:
+        // https://github.com/PowerShell/Win32-OpenSSH/issues/405
+        // https://github.com/PowerShell/Win32-OpenSSH/wiki/Project-Scope
+        //
+        // Using an ugly workaround to detect connection establishment
+        // -N doesn't work with JumpHosts as windows openssh never closes stdin in that case
         let args = [
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=NUL",
+            "-t",
+            &format!("echo '{}'; exec $0", Self::CONNECTION_ESTABLISHED_MAGIC),
         ];
 
         let mut master_process = Command::new("ssh");
@@ -247,10 +255,9 @@ impl MasterProcess {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .args(&args)
             .args(&additional_args)
             .arg(destination)
-            .arg("echo SSH_CONNECTION_ESTABLISHED; sleep 3600");
+            .args(&args);
 
         debug!("Starting SSH master process: ssh {}", destination);
         let process = master_process
@@ -323,37 +330,22 @@ impl MasterProcess {
     pub async fn wait_connected(&mut self) -> Result<()> {
         use tokio::io::{AsyncBufReadExt, BufReader};
 
-        let deadline = std::time::Instant::now() + MASTER_READY_TIMEOUT;
         let Some(stdout) = self.process.stdout.take() else {
             return Err(anyhow!("SSH master has no captured stdout to monitor"));
         };
-        let mut lines = BufReader::new(stdout).lines();
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
 
         loop {
-            if let Some(status) = self.process.try_wait()? {
-                return Err(anyhow!("SSH master exited early with status {}", status));
+            let n = reader.read_line(&mut line).await?;
+            if n == 0 {
+                return Err(anyhow!("SSH master stdout closed before readiness marker"));
             }
-
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Err(anyhow!(
-                    "SSH master did not emit readiness marker within {:?}",
-                    MASTER_READY_TIMEOUT
-                ));
+            if line.contains(Self::CONNECTION_ESTABLISHED_MAGIC) {
+                info!("SSH master ready (saw readiness marker)");
+                return Ok(());
             }
-
-            match tokio::time::timeout(remaining, lines.next_line()).await {
-                Ok(Ok(Some(line))) if line.contains("SSH_CONNECTION_ESTABLISHED") => {
-                    info!("SSH master ready (saw readiness marker)");
-                    return Ok(());
-                }
-                Ok(Ok(Some(_))) => continue,
-                Ok(Ok(None)) => {
-                    return Err(anyhow!("SSH master stdout closed before readiness marker"));
-                }
-                Ok(Err(e)) => return Err(anyhow!("error reading SSH master stdout: {}", e)),
-                Err(_) => {} // tick around the outer loop so we can recheck try_wait
-            }
+            line.clear();
         }
     }
 
