@@ -710,16 +710,18 @@ impl SshConnection {
             .get()
             .copied()
             .unwrap_or(20);
-
-        // `ssh host <cmd>` passes <cmd> to the remote login shell as a string
-        // argument to `sh -c`, so the remote path must be single-quote escaped
-        // to handle spaces and shell metacharacters safely.
-        let quoted_path = shell_single_quote(remote_path);
-        let mut inner = format!("{quoted_path} --remote-server --max-item {max_items}");
+        let mut inner = format!(
+            "{remote_path} --remote-server --max-item {max_items}"
+        );
         if log_level > 0 {
             inner.push_str(&format!(" --log-level {log_level}"));
         }
 
+        // Execute the remote binary directly.  The binary itself calls
+        // `load_login_shell_env()` at startup to capture and apply the login
+        // shell's environment (PATH, nvm, Homebrew, etc.), so we do not need
+        // any shell wrapper here.  Avoiding a wrapper removes all shell syntax
+        // compatibility issues (bash vs fish vs zsh) and stdout-pollution risk.
         let command = inner;
 
         let mut cmd = Command::new("ssh");
@@ -833,16 +835,6 @@ impl SshLspProcess {
     }
 }
 
-/// Wrap `s` in POSIX single quotes, escaping any embedded single quotes.
-///
-/// The result is safe to embed in a command string passed to a remote shell
-/// via `ssh host <cmd>`, where the shell interprets the string.
-/// Example: `/home/my user/bin` → `'/home/my user/bin'`
-/// Example: `it's here`        → `'it'"'"'s here'`
-fn shell_single_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -925,26 +917,5 @@ mod tests {
             msg.contains("boom"),
             "stderr ('boom') should be surfaced in the error, got: {msg}"
         );
-    }
-
-    #[test]
-    fn shell_single_quote_plain_path() {
-        assert_eq!(
-            shell_single_quote("/usr/local/bin/proxy"),
-            "'/usr/local/bin/proxy'"
-        );
-    }
-
-    #[test]
-    fn shell_single_quote_path_with_spaces() {
-        assert_eq!(
-            shell_single_quote("/home/my user/bin"),
-            "'/home/my user/bin'"
-        );
-    }
-
-    #[test]
-    fn shell_single_quote_embedded_single_quote() {
-        assert_eq!(shell_single_quote("it's here"), "'it'\\''s here'");
     }
 }
