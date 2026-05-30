@@ -319,6 +319,133 @@ impl Request for RustAnalyzerExpandMacro {
     const METHOD: &'static str = "rust-analyzer/expandMacro";
 }
 
+// emacs/getRemoteInfo
+#[derive(Debug)]
+pub enum GetRemoteInfo {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteClientInfo {
+    pub connection_key: String,
+    pub remote_type: String,
+    pub is_alive: bool,
+    /// Absolute path where the remote binary is (or should be) installed.
+    pub binary_path: String,
+    /// Version of the locally-running lsp-proxy (compile-time).
+    pub local_version: String,
+    /// Version reported by the remote binary, if reachable.
+    pub remote_version: Option<String>,
+    /// One of: "deployed", "missing", "version_mismatch", "unknown".
+    pub deploy_status: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteConnectionStatus {
+    pub enabled: bool,
+    pub clients: Vec<RemoteClientInfo>,
+}
+
+impl Request for GetRemoteInfo {
+    type Params = ();
+    type Result = RemoteConnectionStatus;
+    const METHOD: &'static str = "emacs/getRemoteInfo";
+}
+
+// emacs/checkRemoteBinary — probe both the global command and the deploy path
+// without uploading anything.
+#[derive(Debug)]
+pub enum CheckRemoteBinary {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBinaryLocationStatus {
+    /// "match" | "version_mismatch" | "missing"
+    pub status: String,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckRemoteBinaryResult {
+    pub global: RemoteBinaryLocationStatus,
+    pub path: RemoteBinaryLocationStatus,
+    /// Set when either location has a matching binary; the value to pass to
+    /// the server launch command.
+    pub available_binary: Option<String>,
+    pub local_version: String,
+    pub deploy_path: String,
+}
+
+impl Request for CheckRemoteBinary {
+    type Params = DeployRemoteBinaryParams;
+    type Result = CheckRemoteBinaryResult;
+    const METHOD: &'static str = "emacs/checkRemoteBinary";
+}
+
+// emacs/remoteDeployNeeded — sent by the server when the remote binary is
+// missing or outdated, asking the user to trigger a manual deploy.
+#[derive(Debug)]
+pub enum RemoteDeployNeeded {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDeployNeededParams {
+    pub connection_key: String,
+    /// "missing" | "version_mismatch"
+    pub reason: String,
+    pub remote_version: Option<String>,
+    pub local_version: String,
+    /// The fallback deploy path that would be used if the user deploys.
+    pub deploy_path: String,
+}
+
+impl Notification for RemoteDeployNeeded {
+    type Params = RemoteDeployNeededParams;
+    const METHOD: &'static str = "emacs/remoteDeployNeeded";
+}
+
+// emacs/deployRemoteBinary — user-initiated deploy request.
+#[derive(Debug)]
+pub enum DeployRemoteBinary {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployRemoteBinaryParams {
+    pub connection_key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployRemoteBinaryResult {
+    pub success: bool,
+    /// The binary command/path now available on the remote.
+    pub binary_path: Option<String>,
+    pub message: String,
+}
+
+impl Request for DeployRemoteBinary {
+    type Params = DeployRemoteBinaryParams;
+    type Result = DeployRemoteBinaryResult;
+    const METHOD: &'static str = "emacs/deployRemoteBinary";
+}
+
+// emacs/remoteDeployProgress — progress notifications streamed during deploy.
+#[derive(Debug)]
+pub enum RemoteDeployProgress {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDeployProgressParams {
+    pub connection_key: String,
+    pub message: String,
+}
+
+impl Notification for RemoteDeployProgress {
+    type Params = RemoteDeployProgressParams;
+    const METHOD: &'static str = "emacs/remoteDeployProgress";
+}
+
 // emacs/forwardRequest
 #[derive(Debug)]
 pub enum ForwardRequest {}

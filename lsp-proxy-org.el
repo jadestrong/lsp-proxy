@@ -258,7 +258,7 @@ The server side will handle didClose if needed when reusing servers."
           (setq-local lsp-proxy-org-babel--saved-trigger-characters
                       lsp-proxy--completion-trigger-characters))
         (lsp-proxy--notify 'textDocument/didOpen
-                           (list :textDocument (append (eglot--TextDocumentIdentifier)
+                           (list :textDocument (append (lsp-proxy--TextDocumentIdentifier)
                                                        (list
                                                         :text (org-element-property :value lsp-proxy-org-babel--info-cache)
                                                         :languageId normalized-language

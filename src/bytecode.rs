@@ -27,8 +27,8 @@ impl FromStr for LispObject {
             Ok(Self::Nil)
         } else if s == "t" {
             Ok(Self::T)
-        } else if s.starts_with(":") {
-            Ok(Self::Keyword(s[1..].to_string()))
+        } else if let Some(stripped) = s.strip_prefix(':') {
+            Ok(Self::Keyword(stripped.to_string()))
         } else {
             bail!("Supported LispObject: {s}")
         }
@@ -77,7 +77,7 @@ impl LispObject {
                         127 => result += "\\d",
                         27 => result += "\\e",
                         // NOTE: do not use 0..=7 in this branch, because it takes one more byte than the next branch
-                        8..=26 => {
+                        14..=26 => {
                             // \^@ \^A \^B ... \^Z
                             result += &format!("\\^{}", (*c as u32 + 64) as u8 as char);
                         }
@@ -193,7 +193,7 @@ impl Op {
             Self::Call(v) => Ok(smallvec![(32 + 7) as u8, (v & 0xff) as u8, (v >> 8) as u8]),
             Self::StackRef(v) if (1..=4).contains(&v) => Ok(smallvec![v as u8]),
             Self::StackRef(_) => unimplemented!(),
-            Self::List(v) if v == 0 => unreachable!(),
+            Self::List(0) => unreachable!(),
             Self::List(v) if (1..=4).contains(&v) => Ok(smallvec![66 + v]),
             Self::List(v) => Ok(smallvec![175, v]),
             Self::Discard => Ok(smallvec![136]),

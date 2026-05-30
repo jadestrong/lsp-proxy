@@ -184,24 +184,85 @@ If the system is not Windows, return the original path."
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
 
+(defun lsp-proxy--path-to-uri (path)
+  "Convert PATH to an LSP `file://' URI.
+Unlike `eglot-path-to-uri', this preserves a TRAMP prefix (`/ssh:host:')
+rather than stripping it. lsp-proxy's Rust backend uses that prefix as
+the sole signal for routing the request to a remote LSP server; if we
+let eglot drop it, every buffer looks local and remote mode never
+engages."
+  (let ((remote-prefix (and path (file-remote-p path))))
+    (if remote-prefix
+        (concat "file://"
+                remote-prefix
+                (url-hexify-string
+                 (substring path (length remote-prefix))
+                 url-path-allowed-chars))
+      (concat "file://"
+              (if (eq system-type 'windows-nt) "/" "")
+              (url-hexify-string path url-path-allowed-chars)))))
+
+(defun lsp-proxy--TextDocumentIdentifier ()
+  "Build a TextDocumentIdentifier for the current buffer.
+Drop-in replacement for `eglot--TextDocumentIdentifier' that uses
+`lsp-proxy--path-to-uri', so TRAMP-rooted buffers produce URIs the
+Rust-side remote router can recognise."
+  (let ((path (or buffer-file-name
+                  (ignore-errors (buffer-file-name (buffer-base-buffer))))))
+    (unless path
+      (error "lsp-proxy: buffer has no file name"))
+    (list :uri (lsp-proxy--path-to-uri path))))
+
+(defun lsp-proxy--VersionedTextDocumentIdentifier ()
+  "Build a VersionedTextDocumentIdentifier for the current buffer.
+Mirrors `eglot--VersionedTextDocumentIdentifier' but routes the URI
+through `lsp-proxy--path-to-uri' so TRAMP prefixes survive.
+Reads the version directly from the eglot-side buffer-local variables
+to avoid a circular require on `lsp-proxy-core'."
+  (let ((version (cond ((boundp 'eglot--docver) eglot--docver)
+                       ((boundp 'eglot--versioned-identifier)
+                        eglot--versioned-identifier)
+                       (t 0))))
+    (append (lsp-proxy--TextDocumentIdentifier)
+            (list :version version))))
+
+(defun lsp-proxy--TextDocumentPositionParams ()
+  "Build a TextDocumentPositionParams for the current buffer + point.
+Mirrors `eglot--TextDocumentPositionParams' but the embedded URI goes
+through `lsp-proxy--path-to-uri', keeping TRAMP prefixes intact so the
+Rust remote router can dispatch the request."
+  (list :textDocument (lsp-proxy--TextDocumentIdentifier)
+        :position (eglot--pos-to-lsp-position)))
+
 (defun lsp-proxy--uri-to-path (uri)
-  "Convert URI to file path."
+  "Convert URI to file path.
+When the URI's path already carries a TRAMP method marker (`/ssh:' or
+`/rpc:') the Rust backend preserved the remote identity in the URI
+itself — we must NOT glue the project's own remote-prefix on top, or
+the path ends up with the method/host segment doubled (which then
+fails to open on the remote FS)."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-proxy--current-project-root (file-remote-p lsp-proxy--current-project-root)))
+  (let* ((remote-prefix (and lsp-proxy--current-project-root
+                             (file-remote-p lsp-proxy--current-project-root)))
          (url (url-generic-parse-url uri)))
-    ;; Only parse file:// URIs, leave other URI untouched as
+    ;; Only parse file:// URIs, leave other URIs untouched as
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
         (let* ((retval (url-unhex-string (url-filename url)))
+               (already-tramp (or (string-prefix-p "/ssh:" retval)
+                                  (string-prefix-p "/rpc:" retval)))
                ;; Remove the leading "/" for local MS Windows-style paths.
                (normalized (if (and (not remote-prefix)
+                                    (not already-tramp)
                                     (eq system-type 'windows-nt)
                                     (cl-plusp (length retval))
                                     (eq (aref retval 0) ?/))
                                (w32-long-file-name (substring retval 1))
                              retval)))
-          (concat remote-prefix normalized))
+          (if already-tramp
+              normalized
+            (concat remote-prefix normalized)))
       uri)))
 
 ;;; Snippet expansion
@@ -276,7 +337,7 @@ virtual document sent to the language server."
                    args
                  ;; Otherwise, flatten as before
                  (apply 'append args)))
-         (base-params (append (eglot--TextDocumentIdentifier)
+         (base-params (append (lsp-proxy--TextDocumentIdentifier)
                               `(:params ,params)
                               rest))
          (virtual-doc (lsp-proxy--make-virtual-doc-context)))
@@ -355,6 +416,91 @@ Only works when mode is `tick or `alive."
       (setq lsp-proxy--on-idle-timer nil)
       (when lsp-proxy-mode
         (run-hooks 'lsp-proxy-on-idle-hook)))))
+
+(defun lsp-proxy--propose-changes-as-diff (prepared)
+  "Helper for `lsp-proxy--apply-workspace-edit'.
+Goal is to popup a `diff-mode' buffer containing all the changes
+of PREPARED, ready to apply with C-c C-a.  PREPARED is a
+list ((FILENAME EDITS VERSION)...)."
+  (with-current-buffer (get-buffer-create "*EGLOT proposed server changes*")
+    (buffer-disable-undo (current-buffer))
+    (let ((inhibit-read-only t)
+          (target (current-buffer)))
+      (diff-mode)
+      (erase-buffer)
+      (pcase-dolist (`(,path ,edits ,_) prepared)
+        (with-temp-buffer
+          (let* ((diff (current-buffer))
+                 (existing-buf (find-buffer-visiting path))
+                 (existing-buf-label (prin1-to-string existing-buf)))
+            (with-temp-buffer
+              (if existing-buf
+                  (insert-buffer-substring existing-buf)
+                (insert-file-contents path))
+              (eglot--apply-text-edits edits nil t)
+              (diff-no-select (or existing-buf path) (current-buffer) nil t diff)
+              (when existing-buf
+                ;; Here we have to pretend the label of the unsaved
+                ;; buffer is the actual file, just so that we can
+                ;; diff-apply without troubles.  If there's a better
+                ;; way, it probably involves changes to `diff.el'.
+                (with-current-buffer diff
+                  (goto-char (point-min))
+                  (while (search-forward existing-buf-label nil t)
+                    (replace-match (buffer-file-name existing-buf))))))
+            (with-current-buffer target
+              (insert-buffer-substring diff))))))
+    (setq-local buffer-read-only t)
+    (buffer-enable-undo (current-buffer))
+    (goto-char (point-min))
+    (pop-to-buffer (current-buffer))
+    (font-lock-ensure)))
+
+(defun lsp-proxy--apply-workspace-edit (wedit origin)
+  "Apply (or offer to apply) the workspace edit WEDIT.
+ORIGIN is a symbol designating the command that originated this
+edit proposed by the server."
+  (eglot--dbind ((WorkspaceEdit) changes documentChanges) wedit
+    (let ((prepared
+           (mapcar (eglot--lambda ((TextDocumentEdit) textDocument edits)
+                     (eglot--dbind ((VersionedTextDocumentIdentifier) uri version)
+                         textDocument
+                       (list (lsp-proxy--uri-to-path uri) edits version)))
+                   documentChanges)))
+      (unless (and changes documentChanges)
+        ;; We don't want double edits, and some servers send both
+        ;; changes and documentChanges.  This unless ensures that we
+        ;; prefer documentChanges over changes.
+        (cl-loop for (uri edits) on changes by #'cddr
+                 do (push (list (lsp-proxy--uri-to-path uri) edits) prepared)))
+      (cl-flet ((notevery-visited-p ()
+                  (cl-notevery #'find-buffer-visiting
+                               (mapcar #'car prepared)))
+                (accept-p ()
+                  (y-or-n-p
+                   (format "[eglot] Server wants to edit:\n%sProceed? "
+                           (cl-loop
+                            for (f eds _) in prepared
+                            concat (format
+                                    "  %s (%d change%s)\n"
+                                    f (length eds)
+                                    (if (> (length eds) 1) "s" ""))))))
+                (apply ()
+                  (cl-loop for edit in prepared
+                   for (path edits version) = edit
+                   do (with-current-buffer (find-file-noselect path)
+                        (eglot--apply-text-edits edits version))
+                   finally (eldoc) (eglot--message "Edit successful!"))))
+        (let ((decision (eglot--confirm-server-edits origin prepared)))
+          (cond
+           ((or (eq decision 'diff)
+                (and (eq decision 'maybe-diff) (notevery-visited-p)))
+            (lsp-proxy--propose-changes-as-diff prepared))
+           ((or (memq decision '(t summary))
+                (and (eq decision 'maybe-summary) (notevery-visited-p)))
+            (when (accept-p) (apply)))
+           (t
+            (apply))))))))
 
 (provide 'lsp-proxy-utils)
 ;;; lsp-proxy-utils.el ends here

@@ -18,6 +18,7 @@
 (require 'jsonrpc)
 (require 'dash)
 (require 'lsp-proxy-utils)
+(require 'lsp-proxy-remote)
 
 (defcustom lsp-proxy-log-file-directory temporary-file-directory
   "The directory for `lsp-proxy' server to generate log file."
@@ -135,7 +136,6 @@ This is used to determine if LSP requests should be sent.")
 (declare-function eglot--TextDocumentIdentifier "ext:eglot")
 (declare-function eglot--VersionedTextDocumentIdentifier "ext:eglot")
 (declare-function eglot--widening "ext:eglot")
-(declare-function eglot--apply-workspace-edit "ext:eglot")
 (declare-function lsp-proxy-org-babel-send-src-block-to-lsp-server "lsp-proxy-org")
 (declare-function lsp-proxy-org-babel-monitor-after-change "lsp-proxy-org")
 
@@ -304,7 +304,11 @@ Only sends requests if servers are available."
                   :name "lsp proxy"
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
-                  :process (make-process :name "lsp proxy agent"
+                  :process (let ((process-environment
+                                  (cons (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
+                                                lsp-proxy-remote-binary-path)
+                                        process-environment)))
+                              (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file
                                                                 "--stdio"
@@ -317,7 +321,7 @@ Only sends requests if servers are available."
                                                           (when lsp-proxy-enable-bytecode '("--bytecode")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
-                                         :noquery t))))
+                                         :noquery t)))))
     (condition-case nil
         (funcall make-fn :events-buffer-config `(:size ,lsp-proxy-log-max))
       (invalid-slot-name
@@ -387,13 +391,17 @@ Only sends requests if servers are available."
         (pcase kind
           ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
           ("report" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
-          ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token)))))))
+          ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token))))))
+  (when (eql method 'emacs/remoteDeployNeeded)
+    (lsp-proxy-remote--handle-deploy-needed msg))
+  (when (eql method 'emacs/remoteDeployProgress)
+    (lsp-proxy-remote--handle-deploy-progress msg)))
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
   (when (eql method 'workspace/applyEdit)
     (lsp-proxy--dbind (:edit edit) msg
-      (eglot--apply-workspace-edit edit last-command)))
+      (lsp-proxy--apply-workspace-edit edit last-command)))
   (when (eql method 'eslint/openDoc)
     (lsp-proxy--dbind (:url url) msg
       (browse-url url))))
@@ -453,7 +461,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   (when (and lsp-proxy-mode (eq window (selected-window)))
     (if lsp-proxy--buffer-opened
         (lsp-proxy--notify ':textDocument/didFocus
-                           (list :textDocument (eglot--TextDocumentIdentifier)))
+                           (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
       (lsp-proxy--on-doc-open))))
 
 (defun lsp-proxy--get-initial-content ()
@@ -486,7 +494,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
             (if is-large-file
                 (setq-local lsp-proxy--support-document-highlight nil))
             (lsp-proxy--notify 'textDocument/didOpen
-                               (list :textDocument (append (eglot--TextDocumentIdentifier)
+                               (list :textDocument (append (lsp-proxy--TextDocumentIdentifier)
                                                            (list
                                                             :text initial-content
                                                             :languageId lsp-proxy--language
@@ -503,19 +511,19 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
   "Notify that the document has been closed."
   (when (and lsp-proxy--buffer-opened buffer-file-name)
     (lsp-proxy--notify 'textDocument/didClose
-                       (list :textDocument (eglot--TextDocumentIdentifier)))
+                       (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
     (setq-local lsp-proxy--buffer-opened nil)))
 
 (defun lsp-proxy--will-save ()
   "Send textDocument/willSave notification."
   (lsp-proxy--notify 'textDocument/willSave
                      ;; 1 Manual, 2 AfterDelay, 3 FocusOut
-                     (list :textDocument (eglot--TextDocumentIdentifier) :reason 1)))
+                     (list :textDocument (lsp-proxy--TextDocumentIdentifier) :reason 1)))
 
 (defun lsp-proxy--did-save ()
   "Send textDocument/didSave notification."
   (lsp-proxy--notify 'textDocument/didSave
-                     (list :textDocument (eglot--TextDocumentIdentifier)))
+                     (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
   (setq-local lsp-proxy--skip-auto-open nil))
 
 (defun lsp-proxy--send-did-change ()
@@ -525,7 +533,7 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
                            (string= lsp-proxy--text-document-sync-kind "full"))))
       (lsp-proxy--notify 'textDocument/didChange
                          (list :textDocument
-                               (eglot--VersionedTextDocumentIdentifier)
+                               (lsp-proxy--VersionedTextDocumentIdentifier)
                                :contentChanges
                                (if full-sync-p
                                    (vector (list :text (eglot--widening
@@ -539,18 +547,44 @@ Records BEG, END and PRE-CHANGE-LENGTH locally."
       (setq lsp-proxy--recent-changes nil))))
 
 ;;; Commands
+(defun lsp-proxy--shutdown-server ()
+  "Send shutdown + exit to the running lsp-proxy server and wait for it to die.
+Does NOT restart or reconnect.  Safe to call from `kill-emacs-hook'."
+  (let ((connection lsp-proxy--connection))
+    (when (and connection (jsonrpc-running-p connection))
+      ;; Bypass `lsp-proxy--has-any-servers' / `lsp-proxy-mode' guards: these
+      ;; are server-lifecycle messages, not document-scoped requests.
+      (ignore-errors
+        (jsonrpc-request connection 'shutdown (list :params nil) :timeout 1.5))
+      (ignore-errors
+        (jsonrpc-notify connection 'exit (list :params nil)))
+      ;; Wait up to 3s for the Rust process to handle `exit' (which
+      ;; synchronously kills remote SSH connections before calling
+      ;; process::exit).  If it doesn't exit in time, force-kill it.
+      (let ((proc (ignore-errors (jsonrpc--process connection)))
+            (deadline (+ (float-time) 3.0)))
+        (when (processp proc)
+          (while (and (process-live-p proc) (< (float-time) deadline))
+            (accept-process-output proc 0.05)))
+        (when (and (processp proc) (process-live-p proc))
+          (ignore-errors (jsonrpc-shutdown connection)))))
+    (setq lsp-proxy--connection nil)))
+
 (defun lsp-proxy-restart ()
   "Restart."
   (interactive)
-  (unwind-protect
-      (progn
-        (lsp-proxy--request 'shutdown (lsp-proxy--build-params nil) :timeout 1.5)
-        (jsonrpc-notify lsp-proxy--connection 'exit (lsp-proxy--build-params nil)))
-    (jsonrpc-shutdown lsp-proxy--connection)
-    (setq lsp-proxy--connection nil))
+  (lsp-proxy--shutdown-server)
   (lsp-proxy--cleanup)
   (lsp-proxy--on-doc-focus (selected-window))
   (message "[LSP-PROXY] Process restarted."))
+
+(defun lsp-proxy--kill-emacs-hook ()
+  "Clean up lsp-proxy remote servers before Emacs exits.
+Added to `kill-emacs-hook' so remote emacs-lsp-proxy processes are
+terminated even when Emacs exits without calling `lsp-proxy-restart'."
+  (lsp-proxy--shutdown-server))
+
+(add-hook 'kill-emacs-hook #'lsp-proxy--kill-emacs-hook)
 
 (defun lsp-proxy-open-log-file ()
   "Open the log file. If it does not exist, create it first."

@@ -308,8 +308,9 @@ impl Document {
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>, language: Option<&str>) {
-        let language_config =
-            config_loader.language_config_for_file_name(self.path().unwrap().as_ref(), language);
+        let language_config = self.path().and_then(|path| {
+            config_loader.language_config_for_file_name(path.as_ref(), language)
+        });
         self.language_config = language_config;
     }
 

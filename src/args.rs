@@ -7,6 +7,7 @@ pub struct Args {
     pub log_level: u64,
     pub log_file: Option<PathBuf>,
     pub stdio: bool,
+    pub remote_server: bool,
     pub show_help: bool,
     pub show_version: bool,
     pub max_item_num: usize,
@@ -54,6 +55,7 @@ impl Args {
                     None => args.copilot_server_name = "copilot".to_string(),
                 },
                 "--stdio" => args.stdio = true,
+                "--remote-server" => args.remote_server = true,
                 "--bytecode" => args.enable_bytecode = true,
                 "-h" | "--help" => {
                     args.show_help = true;
@@ -66,6 +68,16 @@ impl Args {
                 _ => anyhow::bail!("unknown argument: {arg}"),
             }
         }
+        // `Args::default()` returns 0 for these; if the flag wasn't passed,
+        // substitute the documented defaults. Without this the remote-server
+        // (started with only --remote-server --log-level) silently truncates
+        // every completion response to 0 items.
+        if args.max_item_num == 0 {
+            args.max_item_num = 20;
+        }
+        if args.max_diagnostics_push == 0 {
+            args.max_diagnostics_push = 50;
+        }
         Ok(args)
     }
 
@@ -75,6 +87,7 @@ impl Args {
         println!();
         println!("USAGE:");
         println!("    emacs-lsp-proxy [OPTIONS] --stdio");
+        println!("    emacs-lsp-proxy [OPTIONS] --remote-server");
         println!();
         println!("OPTIONS:");
         println!("    -c, --config <FILE>       Set configuration file path");
@@ -83,6 +96,8 @@ impl Args {
         println!("        --max-item <NUM>      Maximum completion items (default: 20)");
         println!("        --max-diagnostics-push <NUM>  Maximum diagnostics to push (default: 50)");
         println!("        --stdio               Enable stdio communication mode (required)");
+        println!("        --remote-server       Run as a remote server (reads/writes Protobuf Envelopes on stdio)");
+        println!("        LSP_PROXY_REMOTE_BINARY_PATH  env var: remote host path for the deployed binary");
         println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");

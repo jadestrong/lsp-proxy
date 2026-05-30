@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package lsp_proxy.rpc;
+
+// Top-level wire envelope. Every message on the wire is exactly one Envelope
+// framed by a 4-byte little-endian length prefix.
+message Envelope {
+  // Correlation id. Required for Request/Response, optional for Notification.
+  optional uint32 id = 1;
+  // When this envelope is a Response to a request we initiated, echo the
+  // original request id so the client can route the response.
+  optional uint32 responding_to = 2;
+
+  oneof payload {
+    Request request = 3;
+    Response response = 4;
+    Notification notification = 5;
+  }
+}
+
+message Request {
+  // LSP method name, e.g. "textDocument/definition".
+  string method = 1;
+  // JSON-encoded LSP params.
+  bytes params = 2;
+}
+
+message Response {
+  // JSON-encoded LSP result. Mutually exclusive with `error`.
+  optional bytes result = 1;
+  optional RpcError error = 2;
+}
+
+message Notification {
+  string method = 1;
+  bytes params = 2;
+}
+
+message RpcError {
+  int32 code = 1;
+  string message = 2;
+  optional bytes data = 3;
+}

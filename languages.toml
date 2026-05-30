@@ -344,7 +344,7 @@ file-types = [
   { glob = "Cargo.lock" },
   { glob = "uv.lock" },
 ]
-language-servers = ["taplo"]
+language-servers = [{ name = "taplo", support-workspace = true }]
 
 [[language]]
 name = "bash"
@@ -420,7 +420,7 @@ file-types = [
   "avsc",
   { glob = ".prettierrc" },
 ]
-language-servers = ["vscode-json-language-server"]
+language-servers = [{name = "vscode-json-language-server", support-workspace = true}]
 
 [[language]]
 name = "java"

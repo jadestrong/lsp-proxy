@@ -21,6 +21,7 @@ mod lsp_ext;
 mod main_loop;
 mod msg;
 mod registry;
+mod remote;
 mod req_queue;
 mod syntax;
 mod thread;
@@ -35,7 +36,11 @@ use config::{
 use log::{error, info};
 use logging::init_tracing;
 
-use crate::{config::set_copilot_server_name, connection::Connection, main_loop::main_loop};
+use crate::{
+    config::{initialize_remote_binary_path, set_copilot_server_name},
+    connection::Connection,
+    main_loop::main_loop,
+};
 
 fn setup_logging(verbosity: u64) -> Result<()> {
     // Only use tracing for all logging
@@ -65,12 +70,21 @@ fn try_main() -> Result<()> {
         return Ok(());
     }
 
-    // Check if --stdio flag is provided
-    if !args.stdio {
-        eprintln!("Error: --stdio flag is required to start the server");
+    // One of --stdio or --remote-server must be set.
+    if !args.stdio && !args.remote_server {
+        eprintln!("Error: one of --stdio or --remote-server is required to start the server");
         eprintln!("Use --help for usage information");
         std::process::exit(1);
     }
+
+    let remote_server = args.remote_server;
+
+    // Tell `default_log_file` whether we're the remote side BEFORE we touch
+    // the LOG_FILE slot — otherwise the remote binary would fall back to
+    // `~/Library/Caches/lsp-proxy/default.log` even though the user has no
+    // reason to look there.
+    config::set_remote_server_mode(remote_server);
+    config::set_log_level(args.log_level);
 
     initialize_config_file(args.config_file);
     initialize_log_file(args.log_file);
@@ -78,6 +92,7 @@ fn try_main() -> Result<()> {
     set_max_diagnostics_push(args.max_diagnostics_push);
     set_enable_bytecode(args.enable_bytecode);
     set_copilot_server_name(args.copilot_server_name);
+    initialize_remote_binary_path();
 
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {e}");
@@ -91,10 +106,15 @@ fn try_main() -> Result<()> {
     }
 
     info!(
-        "Server starting... (version: {})",
-        env!("CARGO_PKG_VERSION")
+        "Server starting... (version: {}, mode: {})",
+        env!("CARGO_PKG_VERSION"),
+        if remote_server { "remote-server" } else { "stdio" }
     );
-    with_extra_thread("LspProxy", run_server)?;
+    if remote_server {
+        with_extra_thread("LspProxy", run_remote_server)?;
+    } else {
+        with_extra_thread("LspProxy", run_server)?;
+    }
 
     Ok(())
 }
@@ -120,8 +140,85 @@ fn with_extra_thread(
 fn run_server() -> Result<()> {
     let (connect, io_threads) = Connection::stdio();
     let syn_loader_config = config::default_syntax_loader();
-    main_loop(connect, syn_loader_config).unwrap();
+    main_loop(connect, syn_loader_config)?;
+
+    // Clean up remote connections when the main loop exits.  This covers two
+    // cases:
+    //   1. Emacs sent `exit` notification → handle_exit already called
+    //      run_exit_hook(); calling it again here is a no-op (try_lock returns
+    //      the already-cleared state).
+    //   2. Emacs closed stdin directly (e.g. quit Emacs without lsp-proxy-restart)
+    //      → handle_exit was never called; this is the only cleanup opportunity.
+    crate::application::run_exit_hook();
+
     info!("Server started successfully.");
     io_threads.join()?;
     Ok(())
+}
+
+fn run_remote_server() -> Result<()> {
+    // Load the login-shell environment before anything else so that language
+    // servers (node, python, …) can be found on PATH regardless of how the
+    // binary was launched via SSH.
+    load_login_shell_env();
+
+    let (connect, io_threads) = remote::server::envelope_stdio();
+    let syn_loader_config = config::default_syntax_loader();
+    main_loop(connect, syn_loader_config)?;
+    io_threads.join()?;
+    Ok(())
+}
+
+/// Capture the login-shell environment and apply it to the current process.
+///
+/// Runs `$SHELL -l -i -c env`, parses the output as `KEY=VALUE` lines, and
+/// calls `std::env::set_var` for every variable except `SHLVL` (which would
+/// confuse nested-shell detection).  Errors are logged but never fatal —
+/// if the capture fails the server still starts with its inherited env.
+fn load_login_shell_env() {
+    use std::process::{Command, Stdio};
+
+    let shell = match std::env::var("SHELL") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            info!("load_login_shell_env: $SHELL not set, skipping");
+            return;
+        }
+    };
+
+    let output = Command::new(&shell)
+        .args(["-l", "-i", "-c", "env"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null()) // discard interactive-mode noise (greeting, PS1, etc.)
+        .output();
+
+    let output = match output {
+        Ok(o) => o,
+        Err(e) => {
+            info!("load_login_shell_env: failed to run `{shell} -l -i -c env`: {e}");
+            return;
+        }
+    };
+
+    if !output.status.success() {
+        info!(
+            "load_login_shell_env: `{shell} -l -i -c env` exited with {}, skipping env override",
+            output.status
+        );
+        return;
+    }
+
+    let mut applied = 0usize;
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        if let Some((key, value)) = line.split_once('=') {
+            if key == "SHLVL" {
+                continue;
+            }
+            // SAFETY: single-threaded at this point; no other threads have
+            // been spawned yet so there is no risk of concurrent reads.
+            unsafe { std::env::set_var(key, value) };
+            applied += 1;
+        }
+    }
+    info!("load_login_shell_env: applied {applied} variables from `{shell} -l -i -c env`");
 }

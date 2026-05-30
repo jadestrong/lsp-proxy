@@ -190,7 +190,7 @@
   (let ((orig-major-mode major-mode))
     (lsp-proxy--async-request
      'rust-analyzer/expandMacro
-     (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+     (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
      :success-fn
      (lambda (resp)
        (-if-let* ((expansion (plist-get resp :expansion))
@@ -420,6 +420,35 @@ Skip reopening notifications for buffers not currently visible."
                                   (plist-get diag :message))))
               (insert "No diagnostics found\n")))))
 
+      ;; Remote connection status
+      (when (lsp-proxy--connection-alivep)
+        (lsp-proxy-remote-get-info
+         (lambda (status)
+           (with-current-buffer debug-buffer
+             (insert "\n=== Remote Connection Status ===\n")
+             (let ((enabled (eq (plist-get status :enabled) t))
+                   (clients (plist-get status :clients)))
+               (insert (format "Remote Enabled: %s\n" (if enabled "Yes" "No")))
+               (if (and clients (> (length clients) 0))
+                   (progn
+                     (insert (format "Active Clients: %d\n\n" (length clients)))
+                     (seq-doseq (client clients)
+                       (let ((key (plist-get client :connectionKey))
+                             (rtype (plist-get client :remoteType))
+                             (alive (eq (plist-get client :isAlive) t))
+                             (binary-path (plist-get client :binaryPath))
+                             (local-ver (plist-get client :localVersion))
+                             (remote-ver (plist-get client :remoteVersion))
+                             (deploy (plist-get client :deployStatus)))
+                         (insert (format "  [%s] %s (%s)\n"
+                                         (if alive "ALIVE" "DEAD")
+                                         key rtype))
+                         (insert (format "    Binary Path:    %s\n" (or binary-path "N/A")))
+                         (insert (format "    Deploy Status:  %s\n" (or deploy "unknown")))
+                         (insert (format "    Local Version:  %s\n" (or local-ver "N/A")))
+                         (insert (format "    Remote Version: %s\n" (or remote-ver "N/A"))))))
+                 (insert "No remote clients connected\n")))))))
+
       ;; Languages configuration
       (when (lsp-proxy--connection-alivep)
         (lsp-proxy--async-request
@@ -515,7 +544,7 @@ Skip reopening notifications for buffers not currently visible."
    'textDocument/codeAction
    (lsp-proxy--build-params
     (list
-     :textDocument (eglot--TextDocumentIdentifier)
+     :textDocument (lsp-proxy--TextDocumentIdentifier)
      :range (if (use-region-p)
                 (lsp-proxy--region-range (region-beginning) (region-end))
               (lsp-proxy--region-range (point) (point)))
@@ -549,7 +578,7 @@ Skip reopening notifications for buffers not currently visible."
          (command (plist-get item :command))
          (edit (plist-get item :edit)))
     (when edit
-      (eglot--apply-workspace-edit edit this-command))
+      (lsp-proxy--apply-workspace-edit edit this-command))
     (when command
       (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
 
@@ -599,10 +628,10 @@ Request codeAction/resolve for more info if server supports."
   (lsp-proxy--async-request
    'textDocument/rename
    (lsp-proxy--build-params
-    (append (eglot--TextDocumentPositionParams) `(:newName ,newname)))
+    (append (lsp-proxy--TextDocumentPositionParams) `(:newName ,newname)))
    :success-fn (lambda (edits)
                  (if edits
-                     (eglot--apply-workspace-edit edits this-command)
+                     (lsp-proxy--apply-workspace-edit edits this-command)
                    (lsp-proxy--warn "%s" "Server does not support rename.")))))
 
 ;;; Document formatting
@@ -677,7 +706,7 @@ Request codeAction/resolve for more info if server supports."
                :trimTrailingWhitespace lsp-proxy-trim-trailing-whitespace
                :insertFinalNewline lsp-proxy-insert-final-newline
                :trimFinalNewlines lsp-proxy-trim-final-newlines)
-     :textDocument (eglot--TextDocumentIdentifier)))
+     :textDocument (lsp-proxy--TextDocumentIdentifier)))
    :success-fn (lambda (edits)
                  (when (buffer-live-p (current-buffer))
                    (if (and edits (> (length edits) 0))
@@ -697,7 +726,7 @@ Request codeAction/resolve for more info if server supports."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/hover
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn (lambda (hover-help)
                  (if (and hover-help (not (equal hover-help "")))
                      (with-current-buffer (get-buffer-create lsp-proxy-hover-buffer)
@@ -715,7 +744,7 @@ Request codeAction/resolve for more info if server supports."
     (let ((buf (current-buffer)))
       (lsp-proxy--async-request
        'textDocument/hover
-       (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+       (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
        :success-fn (lambda (hover-help)
                      (eglot--when-buffer-window buf
                        (let* ((info (unless (string-empty-p hover-help)
@@ -759,7 +788,7 @@ most recently requested highlights.")
         (setq lsp-proxy--symbol-bounds-of-last-highlight-invocation curr-sym-bounds)
         (lsp-proxy--async-request
          'textDocument/documentHighlight
-         (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+         (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
          :success-fn
          (lambda (highlights)
            (mapc #'delete-overlay lsp-proxy--highlights)

@@ -383,8 +383,8 @@ If RETURN-RESULTS is non-nil, return the xref items instead of showing them."
 This version returns xref objects suitable for xref backend methods.
 EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (when-let* ((params (if extra-params
-                          (append (eglot--TextDocumentPositionParams) extra-params)
-                        (eglot--TextDocumentPositionParams)))
+                          (append (lsp-proxy--TextDocumentPositionParams) extra-params)
+                        (lsp-proxy--TextDocumentPositionParams)))
               (response (lsp-proxy--request 
                          method 
                          (lsp-proxy--build-params params))))
@@ -395,7 +395,7 @@ EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/definition
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-references ()
@@ -404,7 +404,7 @@ EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (lsp-proxy--async-request
    'textDocument/references
    (lsp-proxy--build-params
-    (append (eglot--TextDocumentPositionParams) `(:context (:includeDeclaration t))))
+    (append (lsp-proxy--TextDocumentPositionParams) `(:context (:includeDeclaration t))))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-declaration ()
@@ -412,7 +412,7 @@ EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/declaration
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-type-definition ()
@@ -420,7 +420,7 @@ EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/typeDefinition
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (defun lsp-proxy-find-implementations ()
@@ -428,7 +428,7 @@ EXTRA-PARAMS will be appended to the basic TextDocumentPositionParams."
   (interactive)
   (lsp-proxy--async-request
    'textDocument/implementation
-   (lsp-proxy--build-params (eglot--TextDocumentPositionParams))
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
    :success-fn #'lsp-proxy--process-locations))
 
 (provide 'lsp-proxy-xref)
