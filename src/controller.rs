@@ -38,6 +38,10 @@ pub struct Controller {
     /// Responses/notifications produced by the remote worker. Consumed by the
     /// main `select!` loop and forwarded to Emacs.
     remote_result_rx: Option<Receiver<Message>>,
+    /// Request ids that originated from the remote server (e.g. workspace/applyEdit)
+    /// and were forwarded to Emacs. When Emacs responds, we discard the response
+    /// here instead of forwarding to Application, which would panic on an unknown id.
+    pending_remote_to_emacs: std::collections::HashSet<msg::RequestId>,
 }
 
 /// Unit of work queued to the remote worker thread.
@@ -106,6 +110,7 @@ impl Controller {
             _remote_manager: remote_manager,
             remote_task_tx,
             remote_result_rx,
+            pending_remote_to_emacs: std::collections::HashSet::new(),
         }
     }
 
@@ -264,7 +269,14 @@ impl Controller {
                 }
             }
             Message::Response(resp) => {
-                self.sender_for_server.send(resp.into()).unwrap();
+                if self.pending_remote_to_emacs.remove(&resp.id) {
+                    // This response is for a request that originated from the remote
+                    // server (e.g. workspace/applyEdit). The remote server already
+                    // replied to the language server without waiting, so just discard.
+                    debug!("discarding Emacs response for remote-server request id={:?}", resp.id);
+                } else {
+                    self.sender_for_server.send(resp.into()).unwrap();
+                }
             }
             Message::Notification(not) => {
                 self.sender_for_server.send(not.into()).unwrap();
@@ -380,8 +392,16 @@ impl Controller {
                                     self.sender_to_emacs.send(not.into()).unwrap();
                                 }
                                 Message::Request(req) => {
-                                    // Server-initiated requests are rare for now;
-                                    // forward verbatim.
+                                    // Server-initiated request from the remote server
+                                    // (e.g. workspace/applyEdit). Track the id so that
+                                    // Emacs' response is discarded rather than forwarded
+                                    // to Application where it would panic on an unknown id.
+                                    debug!(
+                                        "forwarding server-initiated request from remote to Emacs: \
+                                         method={} id={:?}",
+                                        req.method, req.id
+                                    );
+                                    self.pending_remote_to_emacs.insert(req.id.clone());
                                     self.sender_to_emacs.send(req.into()).unwrap();
                                 }
                             }

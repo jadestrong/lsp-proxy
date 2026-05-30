@@ -65,11 +65,13 @@ impl Application {
     }
 
     pub(crate) fn complete_request(&mut self, response: Response) {
-        let handler = self
-            .req_queue
-            .outgoing
-            .complete(response.id.clone())
-            .expect("received response for unknown request");
+        let Some(handler) = self.req_queue.outgoing.complete(response.id.clone()) else {
+            log::warn!(
+                "received response for unknown request id={:?}, ignoring",
+                response.id
+            );
+            return;
+        };
         handler(self, response)
     }
 
