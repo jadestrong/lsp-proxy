@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use prost::Message as ProstMessage;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -29,7 +29,7 @@ pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/lsp_proxy.rpc.rs"));
 }
 
-use proto::{envelope, Envelope, RpcError};
+use proto::{envelope, Envelope};
 
 /// Wire format length type. Each Envelope is framed by a 4-byte LE length prefix.
 pub type MessageLen = u32;
@@ -416,166 +416,166 @@ fn decode_response(original_id: RequestId, resp: proto::Response) -> Result<Resp
     })
 }
 
-/// Server-side handler for decoded envelopes.
-#[async_trait::async_trait]
-#[allow(dead_code)]
-pub trait RpcHandler {
-    async fn handle_message(&self, message: Message) -> Result<Option<Message>>;
-}
-
-/// RPC server that reads Envelopes from a byte stream and dispatches to a handler.
-#[allow(dead_code)]
-pub struct RpcServer {
-    handler: Box<dyn RpcHandler + Send + Sync>,
-}
-
-impl RpcServer {
-    pub fn new<H: RpcHandler + Send + Sync + 'static>(handler: H) -> Self {
-        Self {
-            handler: Box::new(handler),
-        }
-    }
-
-    pub async fn serve<S>(&self, mut stream: S) -> Result<()>
-    where
-        S: AsyncRead + AsyncWrite + Send + Unpin,
-    {
-        info!("RPC server started");
-        let mut buffer = Vec::new();
-
-        loop {
-            match read_envelope(&mut stream, &mut buffer).await {
-                Ok(envelope) => {
-                    let envelope_id = envelope.id;
-                    let incoming_msg = match envelope_to_message(envelope) {
-                        Ok(msg) => msg,
-                        Err(e) => {
-                            warn!("Failed to decode envelope: {e}");
-                            continue;
-                        }
-                    };
-
-                    match self.handler.handle_message(incoming_msg).await {
-                        Ok(Some(response_msg)) => {
-                            let response_envelope =
-                                match message_to_response_envelope(response_msg, envelope_id) {
-                                    Ok(env) => env,
-                                    Err(e) => {
-                                        warn!("Failed to encode response: {e}");
-                                        continue;
-                                    }
-                                };
-                            if let Err(e) =
-                                write_envelope(&mut stream, &mut buffer, response_envelope).await
-                            {
-                                error!("Failed to write response envelope: {e}");
-                                break;
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            warn!("Handler error: {e}");
-                            if let Some(env_id) = envelope_id {
-                                let error_envelope = Envelope {
-                                    id: None,
-                                    responding_to: Some(env_id),
-                                    payload: Some(envelope::Payload::Response(proto::Response {
-                                        result: None,
-                                        error: Some(RpcError {
-                                            code: -32000,
-                                            message: e.to_string(),
-                                            data: None,
-                                        }),
-                                    })),
-                                };
-                                if let Err(we) =
-                                    write_envelope(&mut stream, &mut buffer, error_envelope).await
-                                {
-                                    error!("Failed to write error envelope: {we}");
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("RPC server read error: {e}");
-                    break;
-                }
-            }
-        }
-        info!("RPC server stopped");
-        Ok(())
-    }
-}
-
-/// Translate an incoming Envelope into an internal Message. The caller is
-/// responsible for using `envelope.id` when producing a response.
-#[allow(dead_code)]
-fn envelope_to_message(envelope: Envelope) -> Result<Message> {
-    let payload = envelope
-        .payload
-        .ok_or_else(|| anyhow!("envelope missing payload"))?;
-    match payload {
-        envelope::Payload::Request(req) => {
-            let params: crate::msg::Params = serde_json::from_slice(&req.params)?;
-            let id_numeric = envelope
-                .id
-                .ok_or_else(|| anyhow!("request envelope missing id"))?;
-            Ok(Message::Request(Request {
-                id: RequestId::from(id_numeric as i32),
-                method: req.method,
-                params,
-            }))
-        }
-        envelope::Payload::Notification(notif) => {
-            let params: crate::msg::Params = serde_json::from_slice(&notif.params)?;
-            Ok(Message::Notification(Notification {
-                method: notif.method,
-                params,
-            }))
-        }
-        envelope::Payload::Response(_) => {
-            Err(anyhow!("Unexpected response envelope on server side"))
-        }
-    }
-}
-
-/// Encode a server-produced Response Message into a correlated Envelope.
-#[allow(dead_code)]
-fn message_to_response_envelope(message: Message, responding_to: Option<u32>) -> Result<Envelope> {
-    let response = match message {
-        Message::Response(r) => r,
-        _ => return Err(anyhow!("handler returned non-response message")),
-    };
-    let result = match response.result {
-        Some(v) => Some(serde_json::to_vec(&v)?),
-        None => None,
-    };
-    let error = response.error.map(|e| RpcError {
-        code: e.code.code() as i32,
-        message: e.message,
-        data: e
-            .data
-            .as_ref()
-            .and_then(|d| serde_json::to_vec(d).ok()),
-    });
-    Ok(Envelope {
-        id: None,
-        responding_to,
-        payload: Some(envelope::Payload::Response(proto::Response {
-            result,
-            error,
-        })),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::msg::{Notification as MsgNotification, Params};
+    use log::info;
+    use proto::RpcError;
     use std::sync::{Arc, Mutex};
     use tokio_util::compat::TokioAsyncReadCompatExt;
+
+    #[async_trait::async_trait]
+    trait RpcHandler {
+        async fn handle_message(&self, message: Message) -> Result<Option<Message>>;
+    }
+
+    struct RpcServer {
+        handler: Box<dyn RpcHandler + Send + Sync>,
+    }
+
+    impl RpcServer {
+        fn new<H: RpcHandler + Send + Sync + 'static>(handler: H) -> Self {
+            Self {
+                handler: Box::new(handler),
+            }
+        }
+
+        async fn serve<S>(&self, mut stream: S) -> Result<()>
+        where
+            S: AsyncRead + AsyncWrite + Send + Unpin,
+        {
+            info!("RPC server started");
+            let mut buffer = Vec::new();
+
+            loop {
+                match read_envelope(&mut stream, &mut buffer).await {
+                    Ok(envelope) => {
+                        let envelope_id = envelope.id;
+                        let incoming_msg = match envelope_to_message(envelope) {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                warn!("Failed to decode envelope: {e}");
+                                continue;
+                            }
+                        };
+
+                        match self.handler.handle_message(incoming_msg).await {
+                            Ok(Some(response_msg)) => {
+                                let response_envelope =
+                                    match message_to_response_envelope(response_msg, envelope_id) {
+                                        Ok(env) => env,
+                                        Err(e) => {
+                                            warn!("Failed to encode response: {e}");
+                                            continue;
+                                        }
+                                    };
+                                if let Err(e) =
+                                    write_envelope(&mut stream, &mut buffer, response_envelope)
+                                        .await
+                                {
+                                    error!("Failed to write response envelope: {e}");
+                                    break;
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                warn!("Handler error: {e}");
+                                if let Some(env_id) = envelope_id {
+                                    let error_envelope = Envelope {
+                                        id: None,
+                                        responding_to: Some(env_id),
+                                        payload: Some(envelope::Payload::Response(
+                                            proto::Response {
+                                                result: None,
+                                                error: Some(RpcError {
+                                                    code: -32000,
+                                                    message: e.to_string(),
+                                                    data: None,
+                                                }),
+                                            },
+                                        )),
+                                    };
+                                    if let Err(we) =
+                                        write_envelope(&mut stream, &mut buffer, error_envelope)
+                                            .await
+                                    {
+                                        error!("Failed to write error envelope: {we}");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("RPC server read error: {e}");
+                        break;
+                    }
+                }
+            }
+            info!("RPC server stopped");
+            Ok(())
+        }
+    }
+
+    fn envelope_to_message(envelope: Envelope) -> Result<Message> {
+        let payload = envelope
+            .payload
+            .ok_or_else(|| anyhow!("envelope missing payload"))?;
+        match payload {
+            envelope::Payload::Request(req) => {
+                let params: crate::msg::Params = serde_json::from_slice(&req.params)?;
+                let id_numeric = envelope
+                    .id
+                    .ok_or_else(|| anyhow!("request envelope missing id"))?;
+                Ok(Message::Request(Request {
+                    id: RequestId::from(id_numeric as i32),
+                    method: req.method,
+                    params,
+                }))
+            }
+            envelope::Payload::Notification(notif) => {
+                let params: crate::msg::Params = serde_json::from_slice(&notif.params)?;
+                Ok(Message::Notification(Notification {
+                    method: notif.method,
+                    params,
+                }))
+            }
+            envelope::Payload::Response(_) => {
+                Err(anyhow!("Unexpected response envelope on server side"))
+            }
+        }
+    }
+
+    fn message_to_response_envelope(
+        message: Message,
+        responding_to: Option<u32>,
+    ) -> Result<Envelope> {
+        let response = match message {
+            Message::Response(r) => r,
+            _ => return Err(anyhow!("handler returned non-response message")),
+        };
+        let result = match response.result {
+            Some(v) => Some(serde_json::to_vec(&v)?),
+            None => None,
+        };
+        let error = response.error.map(|e| RpcError {
+            code: e.code.code() as i32,
+            message: e.message,
+            data: e
+                .data
+                .as_ref()
+                .and_then(|d| serde_json::to_vec(d).ok()),
+        });
+        Ok(Envelope {
+            id: None,
+            responding_to,
+            payload: Some(envelope::Payload::Response(proto::Response {
+                result,
+                error,
+            })),
+        })
+    }
 
     #[test]
     fn envelope_round_trip() {

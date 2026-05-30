@@ -651,50 +651,6 @@ impl SshConnection {
         })
     }
 
-    /// Copy a local file to a remote path via `scp`, reusing the SSH
-    /// ControlMaster socket for zero-handshake transfer. Caller should ensure
-    /// the parent directory exists (use [`run_command`] with `mkdir -p`).
-    pub async fn scp_upload(&self, local_path: &std::path::Path, remote_path: &str) -> Result<()> {
-        self.ensure_master_connection().await?;
-
-        let mut cmd = Command::new("scp");
-        #[cfg(not(target_os = "windows"))]
-        cmd.arg("-o")
-            .arg(format!("ControlPath={}", self.socket.socket_path.display()));
-        cmd.arg("-o")
-            .arg("ControlMaster=no")
-            // scp auto-infers no-TTY, but LogLevel + RemoteCommand overrides
-            // still help suppress spurious host config behaviour.
-            .arg("-o")
-            .arg("LogLevel=ERROR")
-            .arg("-o")
-            .arg("RemoteCommand=none")
-            .args(self.socket.connection_options.port_args())
-            .arg(local_path)
-            .arg(format!(
-                "{}:{}",
-                self.socket.connection_options.destination(),
-                remote_path
-            ));
-
-        debug!(
-            "scp {} -> {}:{}",
-            local_path.display(),
-            self.socket.connection_options.destination(),
-            remote_path
-        );
-        let output = cmd.output().await.context("scp failed to launch")?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!(
-                "scp upload failed (exit {}): {}",
-                output.status,
-                stderr.trim()
-            ));
-        }
-        Ok(())
-    }
-
     pub async fn start_remote_lsp_proxy(&self, remote_path: &str) -> Result<SshLspProcess> {
         self.ensure_master_connection().await?;
 
