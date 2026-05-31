@@ -17,6 +17,12 @@
 
 (require 'lsp-proxy-utils)
 
+(declare-function jsonrpc-async-request "jsonrpc" (connection method params &rest args))
+(declare-function lsp-proxy--ensure-connection "lsp-proxy-core" ())
+(defvar lsp-proxy--connection nil
+  "The active jsonrpc connection to the lsp-proxy server.
+Defined in `lsp-proxy-core'; declared here to avoid a circular require.")
+
 ;;; Low-level request helper
 ;;
 ;; `lsp-proxy--async-request' gates every send behind `lsp-proxy--has-any-servers',
@@ -209,6 +215,49 @@ Each entry has the form `[user@]host' matching lsp-proxy's connection key."
                  keys :test #'equal))))))
       (nreverse keys))))
 
+;;; Remote config file
+
+(defun lsp-proxy-remote--config-path-for-key (connection-key)
+  "Return the TRAMP path to languages.toml for CONNECTION-KEY.
+The config file lives in the same directory as the remote binary, which is
+determined by `lsp-proxy-remote-binary-path'."
+  (let* (;; Strip trailing /emacs-lsp-proxy (or any basename) to get the dir.
+         (remote-dir (file-name-directory lsp-proxy-remote-binary-path))
+         ;; Determine TRAMP method: prefer /ssh: but accept /rpc: for RPC hosts.
+         (tramp-prefix (concat "/ssh:" connection-key ":")))
+    (concat tramp-prefix remote-dir "languages.toml")))
+
+(defun lsp-proxy-remote--connection-key-from-buffer ()
+  "Return the SSH connection key for the current buffer's remote host, or nil.
+Recognises TRAMP paths of the form /ssh:user@host:/... and /rpc:user@host:/...
+and returns the `[user@]host' portion that lsp-proxy uses as a connection key."
+  (when-let ((remote (and buffer-file-name
+                          (file-remote-p buffer-file-name))))
+    ;; remote looks like "/ssh:user@host:" or "/rpc:user@host:"
+    (when (string-match "^/\\(?:ssh\\|rpc\\):\\(.*\\):$" remote)
+      (match-string 1 remote))))
+
+;;;###autoload
+(defun lsp-proxy-remote-open-config-file ()
+  "Open the languages.toml config file on a remote lsp-proxy host.
+
+When the current buffer visits a remote file (via TRAMP), opens the config
+directly on that host.  Otherwise prompts the user to choose a host from the
+known SSH connections (same completion as `lsp-proxy-remote-deploy')."
+  (interactive)
+  (let ((key (lsp-proxy-remote--connection-key-from-buffer)))
+    (unless key
+      ;; Not on a remote buffer — ask the user.
+      (setq key (completing-read
+                 "user@host: "
+                 (lsp-proxy-remote--tramp-ssh-keys)
+                 nil nil
+                 lsp-proxy-remote--pending-connection-key)))
+    (unless (and key (not (string-empty-p key)))
+      (user-error "No remote host selected"))
+    (let ((config-file (lsp-proxy-remote--config-path-for-key key)))
+      (find-file config-file))))
+
 ;;; Interactive deploy command
 
 ;;;###autoload
@@ -223,7 +272,7 @@ the upload begins.
 When called interactively, defaults to the host that last requested a deploy."
   (interactive
    (list (completing-read
-          "Remote host (connection key): "
+          "user@host: "
           (lsp-proxy-remote--tramp-ssh-keys)
           nil nil
           lsp-proxy-remote--pending-connection-key)))
