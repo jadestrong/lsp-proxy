@@ -538,3 +538,20 @@ name = "swift"
 file-types = ["swift", "swiftinterface"]
 roots = [ "Package.swift" ]
 language-servers = [ "sourcekit-lsp" ]
+
+[language-server.gopls]
+command = "gopls"
+
+[language-server.gopls.config]
+gofumpt = true
+
+[language-server.gopls.config.hints]
+assignVariableTypes = true
+parameterNames = true
+
+[[language]]
+name = "go"
+language-id = "go"
+file-types = ["go"]
+roots = ["go.mod", "go.work"]
+language-servers = ["gopls"]
