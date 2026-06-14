@@ -484,6 +484,7 @@ language-servers = [
 ### Server Management
 - `lsp-proxy-open-log-file`: Open the server log file
 - `lsp-proxy-open-config-file`: Open the language configuration file
+- `lsp-proxy-remote-open-config-file`: Open the `languages.toml` config on a remote host
 - `lsp-proxy-restart`: Restart the server
 - `lsp-proxy-workspace-restart`: Restart the LSP server for the current project
 
@@ -881,6 +882,25 @@ Re-open the remote file once the deploy completes.
 #### `M-x lsp-proxy-remote-deploy`
 
 This command is always available regardless of the deploy mode. It runs the full check-and-deploy flow interactively, defaulting to the host that most recently requested a deploy. Use it to re-deploy after a version upgrade or to recover from a failed auto-deploy.
+
+### Remote Configuration
+
+Each remote host has its own `languages.toml`, located in the same directory as the remote binary (`lsp-proxy-remote-binary-path`, default `~/.cache/emacs/lsp-proxy/languages.toml`). This is the remote counterpart to the local `M-x lsp-proxy-open-config-file`, letting you customize language servers per host without touching your local config.
+
+Run `M-x lsp-proxy-remote-open-config-file` to edit it:
+
+- When the current buffer visits a remote file (a TRAMP path such as `/ssh:myserver:/home/user/project/main.rs`), the command opens that host's config directly over TRAMP — no prompt.
+- Otherwise it prompts for a host, offering completion over your known SSH connections (the same candidates as `M-x lsp-proxy-remote-deploy`).
+
+The file is opened through TRAMP, so you edit and save it as a normal buffer. After changing it, run `M-x lsp-proxy-restart` to reload the configuration on the remote session.
+
+```elisp
+;; While visiting a remote file — opens that host's languages.toml directly
+M-x lsp-proxy-remote-open-config-file
+
+;; From a local buffer — prompts for the host first
+M-x lsp-proxy-remote-open-config-file
+```
 
 ### Diagnostics
 
