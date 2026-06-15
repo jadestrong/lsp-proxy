@@ -52,6 +52,7 @@
 (require 'lsp-proxy-inline-completion)
 (require 'lsp-proxy-org)
 (require 'lsp-proxy-copilot)
+(require 'lsp-proxy-install)
 
 (defvar lsp-proxy-mode)
 

@@ -62,9 +62,18 @@ characters, especially in newer Emacs versions (30.2+)."
 If specified, this path will be used instead of auto-detection.
 If nil, lsp-proxy will automatically search for the executable in:
 1. System PATH (emacs-lsp-proxy)
-2. Current directory (./emacs-lsp-proxy)
-3. target/release directory (./target/release/emacs-lsp-proxy)"
+2. Install directory (`lsp-proxy-install-dir')
+3. Current directory (./emacs-lsp-proxy)
+4. target/release directory (./target/release/emacs-lsp-proxy)"
   :type '(choice (const nil) file)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-install-dir
+  (expand-file-name (file-name-as-directory "lsp-proxy") user-emacs-directory)
+  "Directory where `lsp-proxy-install-server' places the managed binary.
+This directory is also searched by `lsp-proxy-server-executable' (see its
+priority list).  It is the same directory used for the user `languages.toml'."
+  :type 'directory
   :group 'lsp-proxy)
 
 (defvar-local lsp-proxy--support-inlay-hints nil
@@ -187,19 +196,21 @@ This is used to determine if LSP requests should be sent.")
   "Find emacs-lsp-proxy executable with priority order:
 1. User-specified path (lsp-proxy-server-path)
 2. System PATH (emacs-lsp-proxy)
-3. Current directory (./emacs-lsp-proxy)
-4. target/release directory (./target/release/emacs-lsp-proxy)"
+3. Install directory (`lsp-proxy-install-dir', via `lsp-proxy-install-server')
+4. Current directory (./emacs-lsp-proxy)
+5. target/release directory (./target/release/emacs-lsp-proxy)"
   (cond
    ;; Priority 1: User-specified path
    ((and lsp-proxy-server-path (file-executable-p lsp-proxy-server-path))
     lsp-proxy-server-path)
-   ;; Priority 2-4: Auto-detection
+   ;; Priority 2-5: Auto-detection
    (t
     (let* ((base-dir lsp-proxy--base-dir)
            (exe-name (if (eq system-type 'windows-nt)
                          "emacs-lsp-proxy.exe"
                        "emacs-lsp-proxy"))
            (candidates (list (executable-find "emacs-lsp-proxy")
+                             (expand-file-name exe-name lsp-proxy-install-dir)
                              (expand-file-name exe-name base-dir)
                              (expand-file-name (concat "target/release/" exe-name) base-dir))))
       (or (seq-find #'file-exists-p (delq nil candidates))

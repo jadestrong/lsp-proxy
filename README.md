@@ -32,6 +32,26 @@ npm install -g emacs-lsp-proxy
 
 This will automatically install the appropriate binary for your platform (Linux x64/ARM64, macOS x64/ARM64, Windows x64) and make the `emacs-lsp-proxy` command available in your PATH.
 
+### From Emacs (`M-x lsp-proxy-install-server`)
+
+If you don't want to use npm, cargo, or download the binary by hand, install it directly from Emacs:
+
+```elisp
+M-x lsp-proxy-install-server
+```
+
+This downloads the prebuilt binary for your platform from [GitHub Releases](https://github.com/jadestrong/lsp-proxy/releases) and installs it into `lsp-proxy-install-dir` (default `${user-emacs-directory}/lsp-proxy/`, next to your `languages.toml`). That directory is part of the executable search path, so the binary is picked up automatically — no extra configuration needed. Run the command again (or with a prefix argument, `C-u M-x lsp-proxy-install-server`) to upgrade or reinstall.
+
+By default the latest release is installed; pin a specific version with:
+
+```elisp
+(setq lsp-proxy-server-version "0.8.1")  ; with or without a leading "v"
+```
+
+Notes:
+- macOS / Linux extraction uses the system `tar`. On Windows the release asset is a `.7z`, so `7z` (p7zip / 7-Zip) must be available in `PATH`; otherwise use the npm method.
+- The download is fetched over HTTPS via Emacs's built-in `url` library — no external `curl` required.
+
 ### Nix Flake
 If you use Nix, you can build an optimized binary directly from the repository:
 
@@ -482,6 +502,7 @@ language-servers = [
  - `lsp-proxy-copilot-status`: Check current Copilot authentication status
 
 ### Server Management
+- `lsp-proxy-install-server`: Download and install the prebuilt server binary from GitHub Releases
 - `lsp-proxy-open-log-file`: Open the server log file
 - `lsp-proxy-open-config-file`: Open the language configuration file
 - `lsp-proxy-remote-open-config-file`: Open the `languages.toml` config on a remote host
@@ -497,7 +518,9 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 |----------|---------|-------------|
 | `lsp-proxy-log-file-directory` | `temporary-file-directory` | Directory where the external server writes its log file. Set to a persistent path if you want logs across restarts. |
 | `lsp-proxy-user-languages-config` | `${user-emacs-directory}/lsp-proxy/languages.toml` | User TOML config overriding/augmenting built-in language server definitions. Edited via `M-x lsp-proxy-open-config-file`. |
-| `lsp-proxy-server-path` | `nil` | Path to the lsp-proxy server executable. If specified, this path will be used instead of auto-detection. If nil, lsp-proxy will automatically search for the executable in: 1) System PATH 2) Current directory 3) target/release directory. |
+| `lsp-proxy-server-path` | `nil` | Path to the lsp-proxy server executable. If specified, this path will be used instead of auto-detection. If nil, lsp-proxy will automatically search for the executable in: 1) System PATH 2) `lsp-proxy-install-dir` 3) Current directory 4) target/release directory. |
+| `lsp-proxy-install-dir` | `${user-emacs-directory}/lsp-proxy/` | Directory where `M-x lsp-proxy-install-server` installs the managed binary. Also searched by the executable auto-detection above. |
+| `lsp-proxy-server-version` | `nil` | Release version installed by `M-x lsp-proxy-install-server` (e.g. `"0.8.1"`). `nil` installs the latest release. |
 | `lsp-proxy-log-max` | `0` | Max size (lines/events) of internal events buffer; `0` disables; `nil` infinite. Enable only while debugging. |
 | `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
 | `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
