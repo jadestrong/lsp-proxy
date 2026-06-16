@@ -45,15 +45,21 @@ impl LispObject {
                 result.reserve(s.len() * 2 + 2);
                 result.push('"');
                 for c in s.chars() {
-                    if c == '\"' || c == '\\' {
-                        result.push('\\');
-                        result.push(c);
-                    } else if (c as u32) < 32 || (c as u32) == 127 {
-                        // not printable
-                        // NOTE: cannot use escape for c in 128..=255, otherwise the string would become unibyte
-                        result += &format!("\\{:03o}", c as u32);
-                    } else {
-                        result.push(c);
+                    match c {
+                        '"' | '\\' => {
+                            result.push('\\');
+                            result.push(c);
+                        }
+                        '\0'..='\x1f' | '\x7f' => result.push_str(&format!("\\{:03o}", c as u32)),
+                        '\x20'..='\x7e' => result.push(c),
+                        _ => {
+                            let codepoint = c as u32;
+                            if codepoint <= 0xffff {
+                                result.push_str(&format!("\\u{codepoint:04X}"));
+                            } else {
+                                result.push_str(&format!("\\U{codepoint:08X}"));
+                            }
+                        }
                     }
                 }
                 result.push('"');
