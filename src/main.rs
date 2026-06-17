@@ -31,7 +31,7 @@ use anyhow::{Context, Result};
 use args::Args;
 use config::{
     initialize_config_file, initialize_log_file, set_enable_bytecode, set_max_completion_items,
-    set_max_diagnostics_push,
+    set_enable_snippets, set_max_diagnostics_push,
 };
 use log::{error, info};
 use logging::init_tracing;
@@ -91,6 +91,7 @@ fn try_main() -> Result<()> {
     set_max_completion_items(args.max_item_num);
     set_max_diagnostics_push(args.max_diagnostics_push);
     set_enable_bytecode(args.enable_bytecode);
+    set_enable_snippets(args.enable_snippets);
     set_copilot_server_name(args.copilot_server_name);
     initialize_remote_binary_path();
 

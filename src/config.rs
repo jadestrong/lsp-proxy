@@ -15,6 +15,7 @@ pub static MAX_COMPLETION_ITEMS: once_cell::sync::OnceCell<usize> =
 pub static MAX_DIAGNOSTICS_PUSH: once_cell::sync::OnceCell<usize> =
     once_cell::sync::OnceCell::new();
 pub static ENABLE_BYTECODE: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
+pub static ENABLE_SNIPPETS: once_cell::sync::OnceCell<bool> = once_cell::sync::OnceCell::new();
 
 pub static COPILOT_SERVER_NAME: once_cell::sync::OnceCell<String> =
     once_cell::sync::OnceCell::new();
@@ -35,6 +36,10 @@ pub fn set_max_diagnostics_push(max_diagnostics: usize) {
 
 pub fn set_enable_bytecode(enable: bool) {
     ENABLE_BYTECODE.set(enable).ok();
+}
+
+pub fn set_enable_snippets(enable: bool) {
+    ENABLE_SNIPPETS.set(enable).ok();
 }
 
 pub fn set_copilot_server_name(name: String) {

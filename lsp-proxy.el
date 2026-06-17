@@ -9,7 +9,7 @@
 ;; Version: 0.4.0
 ;; Keywords: abbrev bib c calendar comm convenience data docs emulations extensions faces files frames games hardware help hypermedia i18n internal languages lisp local maint mail matching mouse multimedia news outlines processes terminals tex tools unix vc wp
 ;; Homepage: https://github.com/jadestrong/lsp-proxy
-;; Package-Requires: ((emacs "30.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (dash "2.19.1") (f "0.21.0") (yasnippet "0.14.1"))
+;; Package-Requires: ((emacs "30.1") (s "1.13.1") (eldoc "1.14.0") (ht "2.4") (dash "2.19.1") (f "0.21.0"))
 
 ;; This file is not part of GNU Emacs.
 
@@ -37,7 +37,6 @@
 (require 'f)
 (require 'ht)
 (require 'dash)
-(require 'yasnippet)
 
 ;; Load lsp-proxy modules
 (require 'lsp-proxy-utils)

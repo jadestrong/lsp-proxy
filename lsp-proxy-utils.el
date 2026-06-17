@@ -17,7 +17,6 @@
 (require 'url-util)
 (require 'project)
 (require 'eglot)
-(require 'yasnippet nil t)
 
 (defvar lsp-proxy-mode)
 (defvar lsp-proxy-enable-org-babel)
@@ -264,54 +263,6 @@ fails to open on the remote FS)."
               normalized
             (concat remote-prefix normalized)))
       uri)))
-
-;;; Snippet expansion
-
-(declare-function yas-expand-snippet "ext:yasnippet")
-
-(defun lsp-proxy--expand-snippet (snippet &optional start end expand-env)
-  "Wrapper of `yas-expand-snippet' with all of it arguments.
-The snippet will be convert to LSP style and indent according to
-LSP server result."
-  (require 'yasnippet)
-  (let* ((inhibit-field-text-motion t)
-         (yas-wrap-around-region nil)
-         (yas-indent-line 'none)
-         (yas-also-auto-indent-first-line nil))
-    (yas-expand-snippet snippet start end expand-env)))
-
-;;; Text indentation utilities
-(defun lsp-proxy--indent-lines (start end &optional insert-text-mode?)
-  "Indent from START to END based on INSERT-TEXT-MODE? value.
-- When INSERT-TEXT-MODE? is provided
-  - if it's `lsp/insert-text-mode-as-it', do no editor indentation.
-  - if it's `lsp/insert-text-mode-adjust-indentation', adjust leading
-    whitespaces to match the line where text is inserted.
-- When it's not provided, using `indent-line-function' for each line."
-  (save-excursion
-    (goto-char end)
-    (let* ((end-line (line-number-at-pos))
-           (offset (save-excursion
-                     (goto-char start)
-                     (current-indentation)))
-           (indent-line-function
-            (cond ((equal insert-text-mode? 1)
-                   #'ignore)
-                  ((or (equal insert-text-mode? 2)
-                       ;; Indenting snippets is extremely slow in `org-mode' buffers
-                       ;; since it has to calculate indentation based on SRC block
-                       ;; position.  Thus we use relative indentation as default.
-                       (derived-mode-p 'org-mode))
-                   (lambda () (save-excursion
-                                (beginning-of-line)
-                                (indent-to-column offset))))
-                  (t indent-line-function))))
-      (goto-char start)
-      (forward-line)
-      (while (and (not (eobp))
-                  (<= (line-number-at-pos) end-line))
-        (funcall indent-line-function)
-        (forward-line)))))
 
 ;;; Request parameters
 

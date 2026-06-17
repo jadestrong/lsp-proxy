@@ -313,8 +313,12 @@ fn start_client(
         let value = _client
             .capabilities
             .get_or_try_init(|| {
+                let enable_snippets = crate::config::ENABLE_SNIPPETS
+                    .get()
+                    .copied()
+                    .unwrap_or(false);
                 _client
-                    .initialize(true)
+                    .initialize(enable_snippets)
                     .map_ok(|response| response.capabilities)
             })
             .await;
