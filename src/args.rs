@@ -13,6 +13,7 @@ pub struct Args {
     pub max_item_num: usize,
     pub max_diagnostics_push: usize,
     pub enable_bytecode: bool,
+    pub enable_snippets: bool,
     pub copilot_server_name: String,
 }
 
@@ -57,6 +58,7 @@ impl Args {
                 "--stdio" => args.stdio = true,
                 "--remote-server" => args.remote_server = true,
                 "--bytecode" => args.enable_bytecode = true,
+                "--enable-snippets" => args.enable_snippets = true,
                 "-h" | "--help" => {
                     args.show_help = true;
                     return Ok(args);
@@ -99,6 +101,7 @@ impl Args {
         println!("        --remote-server       Run as a remote server (reads/writes Protobuf Envelopes on stdio)");
         println!("        LSP_PROXY_REMOTE_BINARY_PATH  env var: remote host path for the deployed binary");
         println!("        --bytecode            Enable bytecode optimization for JSON-RPC");
+        println!("        --enable-snippets     Advertise snippet completion support to language servers");
         println!("    -h, --help               Print help information");
         println!("    -V, --version            Print version information");
     }

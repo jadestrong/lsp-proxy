@@ -263,9 +263,10 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
          (textEdit (plist-get item :textEdit))
          (additionalTextEdits (plist-get item :additionalTextEdits))
          (startPoint (- marker (length candidate)))
-         (insertTextMode (plist-get item :insertTextMode))
          (start (plist-get proxy-item :start))
-         (end (plist-get proxy-item :end)))
+         (end (plist-get proxy-item :end))
+         (snippet-fn (and (eq insertTextFormat 2)
+                          (eglot--snippet-expansion-fn))))
     (cond (textEdit
            (let* ((range (plist-get textEdit :range))
                   (replaceStart (eglot--lsp-position-to-point (plist-get range :start)))
@@ -274,19 +275,18 @@ Apply text edits in CANDIDATE when STATUS is finished or exact."
                   (insertText (s-replace "\r" "" (or newText ""))))
              (delete-region start end)
              (delete-region replaceStart replaceEnd)
-             (insert insertText)))
+             (goto-char replaceStart)
+             (funcall (or snippet-fn #'insert) insertText)))
           ;; A snippet should be inserted, but using plain
           ;; `insertText'.  This requires us to delete the
           ;; whole completion, since `insertText' is the full
           ;; completion's text.
+          (snippet-fn
+           (delete-region (- end (length candidate)) end)
+           (funcall snippet-fn (or insertText label)))
           (insertText
            (delete-region (- end (length candidate)) end)
            (insert (or insertText label))))
-    (lsp-proxy--indent-lines startPoint (point) insertTextMode)
-    (when (eq insertTextFormat 2)
-      (lsp-proxy--expand-snippet (buffer-substring startPoint (point))
-                                 startPoint
-                                 (point)))
     (if (cl-plusp (length additionalTextEdits))
         (eglot--apply-text-edits additionalTextEdits)
       (if-let* ((resolved-item (get-text-property 0 'resolved-item candidate)))

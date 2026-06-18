@@ -329,7 +329,8 @@ Only sends requests if servers are available."
                                                                 "--max-item" (number-to-string lsp-proxy-max-completion-item)
                                                                 "--max-diagnostics-push" (number-to-string lsp-proxy-diagnostics-max-push-count)
                                                                 "--copilot-server-name" lsp-proxy-copilot-server-name)
-                                                          (when lsp-proxy-enable-bytecode '("--bytecode")))
+                                                          (when lsp-proxy-enable-bytecode '("--bytecode"))
+                                                          (when (eglot--snippet-expansion-fn) '("--enable-snippets")))
                                          :connection-type 'pipe
                                          :stderr (get-buffer-create "*lsp proxy stderr*")
                                          :noquery t)))))

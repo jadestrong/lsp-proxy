@@ -666,9 +666,14 @@ impl SshConnection {
             .get()
             .copied()
             .unwrap_or(20);
-        let mut inner = format!(
-            "{remote_path} --remote-server --max-item {max_items}"
-        );
+        let mut inner = format!("{remote_path} --remote-server --max-item {max_items}");
+        if crate::config::ENABLE_SNIPPETS
+            .get()
+            .copied()
+            .unwrap_or(false)
+        {
+            inner.push_str(" --enable-snippets");
+        }
         if log_level > 0 {
             inner.push_str(&format!(" --log-level {log_level}"));
         }
