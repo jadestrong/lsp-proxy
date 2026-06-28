@@ -23,7 +23,9 @@
           cargoLock.lockFile = ./Cargo.lock;
           RUSTFLAGS = "-C target-cpu=native";
           buildType = "release";
-	  
+          nativeBuildInputs = with pkgs; [
+            openssh
+          ];
           meta = with pkgs.lib; {
             description = "An LSP client for Emacs implemented in Rust";
             homepage = "https://github.com/jadestrong/lsp-proxy";
