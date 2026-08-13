@@ -121,11 +121,17 @@ The standard `file-name-handler-alist' idiom, equivalent to
 (defun lsp-proxy-java--file-local-copy (filename)
   "Materialise FILENAME as a real local file and return its name.
 The TRAMP contract: the caller owns the returned file and deletes it."
-  (let* ((uri (or (lsp-proxy--decompiled-file-name-to-uri filename)
-                  (error "Not a decompiled file name: %s" filename)))
-         (code (plist-get (lsp-proxy-java--content uri) :code))
+  (unless (lsp-proxy--decompiled-file-name-p filename)
+    (signal 'file-missing (list "Opening file" "No such file" filename)))
+  (let* ((uri (lsp-proxy--decompiled-file-name-to-uri filename))
+         (content (lsp-proxy-java--content uri))
+         (code (plist-get content :code))
+         ;; Extension from the *decompiled language*, not from the URI: the URI
+         ;; member is often `.class', and the temp file's name is what drives
+         ;; coding-system and format detection when we read it back.
          (tmp (make-temp-file "lsp-proxy-decompiled-" nil
-                              (concat "." (or (file-name-extension filename) "java")))))
+                              (if (equal (plist-get content :language) "kotlin")
+                                  ".kt" ".java"))))
     (let ((coding-system-for-write 'utf-8)
           (write-region-inhibit-fsync t))
       (write-region code nil tmp nil 'silent))
@@ -281,11 +287,24 @@ disagrees, and pins down the read-only / no-backup properties."
                    #'lsp-proxy-java--file-handler))
 (add-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
 
+;; The virtual name keeps the URI's own member extension, so a `.class' member
+;; needs an explicit mapping; `.java'/`.kt' members already match the standard
+;; entries. Mapping to `java-mode' rather than `java-ts-mode' on purpose, so
+;; `major-mode-remap-alist' / `major-mode-remap-defaults' still decide whether
+;; the tree-sitter mode is used.
+(defconst lsp-proxy-java--class-auto-mode-entry
+  (cons (concat lsp-proxy--decompiled-file-name-regexp ".*\\.class\\'") 'java-mode)
+  "The `auto-mode-alist' entry this file installs for decompiled `.class' members.")
+
+(add-to-list 'auto-mode-alist lsp-proxy-java--class-auto-mode-entry)
+
 (defun lsp-proxy-java-unload-function ()
   "Deregister the decompiled-source handler.  See `unload-feature'."
   (setq file-name-handler-alist
         (rassq-delete-all #'lsp-proxy-java--file-handler
                           (copy-sequence file-name-handler-alist)))
+  (setq auto-mode-alist
+        (delete lsp-proxy-java--class-auto-mode-entry (copy-sequence auto-mode-alist)))
   (remove-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
   nil)
 

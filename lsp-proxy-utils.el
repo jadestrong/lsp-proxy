@@ -194,85 +194,141 @@ If the system is not Windows, return the original path."
 ;; let a `file-name-handler-alist' entry (see `lsp-proxy-java') supply the
 ;; content. The shape is
 ;;
-;;     /lspsrc:/<percent-encoded-original-uri>/<readable-basename>
+;;     /lspsrc:/<original-uri, minimally escaped>
 ;;
-;; which is self-contained (no lookup table needed), a fixed point of
-;; `expand-file-name', not matched by `tramp-file-name-regexp', and whose
-;; basename drives `auto-mode-alist' for free.
+;; e.g. jrt:///opt/jdk!/modules/java.base/java/lang/System.class becomes
+;;      /lspsrc:/jrt:%2F%2F/opt/jdk!/modules/java.base/java/lang/System.class
+;;
+;; This mirrors TRAMP's `/method:host:/remote/path': the payload is embedded
+;; *verbatim* and stays path-shaped, so it reads like a path, `file-name-nondirectory'
+;; gives a real basename, and anything that shortens paths for display (ibuffer,
+;; doom-modeline, recentf) has something sensible to shorten.  Escaping is kept to
+;; the three characters a file name genuinely cannot carry, which is why the
+;; original text remains legible.
+;;
+;; Two shape constraints are load-bearing:
+;;
+;;  * The `/' immediately after `lspsrc:' is required.  Without it the name
+;;    (`/lspsrc:jrt:...') matches `tramp-file-name-regexp' as method `lspsrc' +
+;;    host `jrt' + localname, and TRAMP claims it and fails with
+;;    "Method `lspsrc' is not known".  With the slash, TRAMP's mandatory second
+;;    colon cannot line up, so the URI may keep its own colons verbatim.
+;;
+;;  * The escaped form must be a fixed point of `expand-file-name': no run of
+;;    two or more slashes, no `.'/`..' path segment, and no leading or trailing
+;;    slash in the payload.  Those are exactly what the escaping removes.
 ;;
 ;; Everything in this section is a pure string transform: it must never perform
 ;; I/O or RPC, because `lsp-proxy--uri-to-path' is called once per location in
 ;; results as large as a project-wide `textDocument/references'.
 
 (defconst lsp-proxy--decompiled-prefix "/lspsrc:/"
-  "Prefix marking a virtual file name backed by the `decompile' command.")
+  "Prefix marking a virtual file name backed by the `decompile' command.
+The trailing slash is required to keep TRAMP from claiming the name; see the
+commentary above.")
 
 (defconst lsp-proxy--decompiled-file-name-regexp
-  (concat "\\`" (regexp-quote lsp-proxy--decompiled-prefix) "\\([^/]+\\)")
+  (concat "\\`" (regexp-quote lsp-proxy--decompiled-prefix))
   "Regexp matching a decompiled virtual file name.
-Group 1 is the percent-encoded original `jar:'/`jrt:' URI.
 
-Deliberately does NOT require a trailing slash after the encoded segment:
-primitives normalise names before dispatching, and `file-directory-p' in
-particular routes `directory-file-name' first, so the handler is asked about
-the slash-less directory form.  Requiring the slash makes every operation on
-the containing directory silently miss the handler.")
+Matches the prefix only, not a full name: primitives normalise names before
+dispatching — `file-directory-p' routes `directory-file-name' first — so the
+handler is also asked about ancestor directories of the file.  Anchoring on
+more than the prefix makes those operations silently miss the handler.")
 
 (defun lsp-proxy--decompiled-scheme-p (uri)
   "Return non-nil when URI uses a scheme served via the `decompile' command."
   (let ((u (if (keywordp uri) (substring (symbol-name uri) 1) uri)))
     (and (stringp u) (string-match-p "\\`\\(?:jar\\|jrt\\):" u))))
 
-(defun lsp-proxy--decompiled-basename (uri)
-  "Return a readable basename for URI, with a source extension.
-The extension matters: it is what `auto-mode-alist' uses to pick the major
-mode, so no explicit mode mapping is needed for the common cases."
-  (let* ((tail (if (string-match "!/\\(.*\\)\\'" uri) (match-string 1 uri) uri))
-         ;; `jrt:' URIs address JDK image modules as `modules/<module>/...'.
-         (tail (replace-regexp-in-string "\\`modules/[^/]+/" "" tail))
-         (base (if (string-match "\\([^/]+\\)\\'" tail) (match-string 1 tail) tail))
-         (stem (if (string-match "\\`\\(.+\\)\\.[^.]*\\'" base)
-                   (match-string 1 base)
-                 base))
-         (ext (if (string-match "\\.\\([^.]+\\)\\'" base) (match-string 1 base) nil)))
-    (concat (if (string-empty-p stem) "source" stem)
-            ;; A `.class' member decompiles to Java; Kotlin keeps its own
-            ;; extension so `kotlin-mode' is selected.
-            (if (member ext '("kt" "kts")) ".kt" ".java"))))
+(defun lsp-proxy--decompiled-escape (uri)
+  "Escape URI just enough to be usable as the tail of a virtual file name.
+Only `%', slash runs and `.'/`..' segments are touched; every other character —
+including the URI's own colons and any non-ASCII — is kept verbatim, which is
+what keeps the resulting name readable."
+  (let* (;; Escape `%' first so the escapes we add below are unambiguous.
+         (s (replace-regexp-in-string "%" "%25" uri t t))
+         ;; Collapse runs of slashes: keep one real separator, escape the rest.
+         (s (replace-regexp-in-string
+             "//+"
+             (lambda (run)
+               (concat (mapconcat #'identity
+                                  (make-list (1- (length run)) "%2F") "")
+                       "/"))
+             s t t))
+         ;; The prefix already supplies the leading separator, and a trailing
+         ;; slash would make the name look like a directory.
+         (s (replace-regexp-in-string "\\`/" "%2F" s t t))
+         (s (replace-regexp-in-string "/\\'" "%2F" s t t)))
+    ;; No empty segments remain, so a segment-wise pass is safe and cannot miss
+    ;; adjacent dot segments the way a single regexp over the whole string would.
+    (mapconcat (lambda (seg)
+                 (pcase seg ("." "%2E") (".." "%2E%2E") (_ seg)))
+               (split-string s "/")
+               "/")))
+
+(defun lsp-proxy--decompiled-unescape (tail)
+  "Inverse of `lsp-proxy--decompiled-escape' for TAIL.
+Single left-to-right pass, so an escape we introduced is never confused with
+one that was already present in the original URI."
+  (replace-regexp-in-string
+   "%25\\|%2F\\|%2E"
+   (lambda (m) (pcase m ("%25" "%") ("%2F" "/") ("%2E" ".")))
+   tail t t))
+
+(defvar lsp-proxy--decompiled-known-names (make-hash-table :test 'equal)
+  "Set of virtual names handed out by `lsp-proxy--decompiled-uri-to-file-name'.
+
+Needed because the name embeds the URI losslessly, which means every ancestor
+directory of a member is itself a well-formed name for its own shorter URI —
+so, unlike a scheme that derives the basename, the name's *form* cannot tell a
+servable member from one of the directories above it.  Recording what we handed
+out answers that exactly, and keeps probes for `.git' or `.dir-locals.el' inside
+the tree from being reported as existing files.")
+
+(defconst lsp-proxy--decompiled-source-extensions
+  '("java" "kt" "kts" "class" "scala" "groovy" "clj")
+  "Extensions treated as servable members when the name is not in the registry.
+Only a fallback for names restored from a previous session (desktop, recentf),
+where the registry is empty; names produced in this session are matched exactly.")
 
 (defun lsp-proxy--decompiled-uri-to-file-name (uri)
   "Return the virtual absolute file name representing URI."
-  (concat lsp-proxy--decompiled-prefix
-          (url-hexify-string uri)
-          "/"
-          (lsp-proxy--decompiled-basename uri)))
-
-(defun lsp-proxy--decompiled-name-parts (name)
-  "Split NAME into (ENCODED-URI . REST), or nil when NAME is not one of ours.
-REST is the remainder below the encoded segment: \"\" or \"/\" for the
-containing directory itself, \"/Bar.java\" for a file inside it."
-  (when (and (stringp name)
-             (string-match lsp-proxy--decompiled-file-name-regexp name))
-    (cons (match-string 1 name) (substring name (match-end 0)))))
+  (let ((name (concat lsp-proxy--decompiled-prefix
+                      (lsp-proxy--decompiled-escape uri))))
+    (puthash name t lsp-proxy--decompiled-known-names)
+    name))
 
 (defun lsp-proxy--decompiled-file-name-to-uri (name)
-  "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil."
-  (when-let* ((parts (lsp-proxy--decompiled-name-parts name)))
-    (decode-coding-string (url-unhex-string (car parts)) 'utf-8)))
+  "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil.
+For an ancestor directory of the virtual file this returns the URI prefix that
+directory corresponds to, which is not itself a servable URI; use
+`lsp-proxy--decompiled-file-name-p' to test for the real thing."
+  (when (and (stringp name)
+             (string-prefix-p lsp-proxy--decompiled-prefix name))
+    (lsp-proxy--decompiled-unescape
+     (substring name (length lsp-proxy--decompiled-prefix)))))
 
 (defun lsp-proxy--decompiled-file-name-p (name)
-  "Return non-nil when NAME is the canonical virtual name for its own URI.
-Probes for neighbouring files that we do not serve — `.dir-locals.el' in the
-same directory, backup names, and so on — deliberately fail this test, so the
-handler can report them as nonexistent instead of claiming the whole
-directory."
-  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name)))
-    (equal name (lsp-proxy--decompiled-uri-to-file-name uri))))
+  "Return non-nil when NAME denotes a servable decompiled member.
+Nil for the archive's intermediate directories and for probes at names we never
+handed out (`.git', `.dir-locals.el', backup names), so the handler can report
+those as nonexistent instead of claiming everything under the prefix."
+  (and (stringp name)
+       (string-prefix-p lsp-proxy--decompiled-prefix name)
+       (or (gethash name lsp-proxy--decompiled-known-names)
+           (member (file-name-extension name)
+                   lsp-proxy--decompiled-source-extensions))
+       t))
 
 (defun lsp-proxy--decompiled-directory-p (name)
-  "Return non-nil when NAME is the virtual directory holding a decompiled file."
-  (when-let* ((parts (lsp-proxy--decompiled-name-parts name)))
-    (member (cdr parts) '("" "/"))))
+  "Return non-nil when NAME is a path component inside a decompiled archive.
+Every name under the prefix that is not itself a servable file is one of the
+archive's intermediate directories, so path walks (`locate-dominating-file',
+`file-in-directory-p') see a consistent tree rather than dead ends."
+  (and (stringp name)
+       (string-prefix-p lsp-proxy--decompiled-prefix name)
+       (not (lsp-proxy--decompiled-file-name-p name))))
 
 (defun lsp-proxy--path-to-uri (path)
   "Convert PATH to an LSP `file://' URI.
@@ -343,7 +399,19 @@ fails to open on the remote FS)."
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
-        (let* ((retval (url-unhex-string (url-filename url)))
+        ;; `url-unhex-string' yields the percent-decoded *bytes*; decoding them
+        ;; as UTF-8 is what turns them back into a real Emacs string. This is
+        ;; the exact inverse of `url-hexify-string' in `lsp-proxy--path-to-uri',
+        ;; which encodes multibyte input as UTF-8, and matches the LSP spec.
+        ;;
+        ;; Skipping the decode still *opens* the file (Emacs re-encodes the raw
+        ;; bytes on the way to the syscall) but produces a string that is not
+        ;; `equal' to the same path anywhere else in Emacs. That silently breaks
+        ;; every path-keyed lookup for non-ASCII file names — notably
+        ;; `lsp-proxy--diagnostics-map', which is written under this path and
+        ;; read back under `buffer-file-name', so diagnostics never render.
+        (let* ((retval (decode-coding-string
+                        (url-unhex-string (url-filename url)) 'utf-8))
                (already-tramp (or (string-prefix-p "/ssh:" retval)
                                   (string-prefix-p "/rpc:" retval)))
                ;; Remove the leading "/" for local MS Windows-style paths.
