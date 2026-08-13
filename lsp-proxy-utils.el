@@ -183,23 +183,118 @@ If the system is not Windows, return the original path."
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
 
+;;; Virtual names for decompiled sources
+;;
+;; Language servers hand us `jar:'/`jrt:' URIs for JDK/library sources that have
+;; no path on disk. A URI is not a file name in Emacs' model (`file-name-absolute-p'
+;; is nil for it), so exposing one as `buffer-file-name' breaks every piece of
+;; path arithmetic in Emacs and in third-party packages.
+;;
+;; Instead we follow TRAMP: map each URI to a genuine *absolute* file name and
+;; let a `file-name-handler-alist' entry (see `lsp-proxy-java') supply the
+;; content. The shape is
+;;
+;;     /lspsrc:/<percent-encoded-original-uri>/<readable-basename>
+;;
+;; which is self-contained (no lookup table needed), a fixed point of
+;; `expand-file-name', not matched by `tramp-file-name-regexp', and whose
+;; basename drives `auto-mode-alist' for free.
+;;
+;; Everything in this section is a pure string transform: it must never perform
+;; I/O or RPC, because `lsp-proxy--uri-to-path' is called once per location in
+;; results as large as a project-wide `textDocument/references'.
+
+(defconst lsp-proxy--decompiled-prefix "/lspsrc:/"
+  "Prefix marking a virtual file name backed by the `decompile' command.")
+
+(defconst lsp-proxy--decompiled-file-name-regexp
+  (concat "\\`" (regexp-quote lsp-proxy--decompiled-prefix) "\\([^/]+\\)")
+  "Regexp matching a decompiled virtual file name.
+Group 1 is the percent-encoded original `jar:'/`jrt:' URI.
+
+Deliberately does NOT require a trailing slash after the encoded segment:
+primitives normalise names before dispatching, and `file-directory-p' in
+particular routes `directory-file-name' first, so the handler is asked about
+the slash-less directory form.  Requiring the slash makes every operation on
+the containing directory silently miss the handler.")
+
+(defun lsp-proxy--decompiled-scheme-p (uri)
+  "Return non-nil when URI uses a scheme served via the `decompile' command."
+  (let ((u (if (keywordp uri) (substring (symbol-name uri) 1) uri)))
+    (and (stringp u) (string-match-p "\\`\\(?:jar\\|jrt\\):" u))))
+
+(defun lsp-proxy--decompiled-basename (uri)
+  "Return a readable basename for URI, with a source extension.
+The extension matters: it is what `auto-mode-alist' uses to pick the major
+mode, so no explicit mode mapping is needed for the common cases."
+  (let* ((tail (if (string-match "!/\\(.*\\)\\'" uri) (match-string 1 uri) uri))
+         ;; `jrt:' URIs address JDK image modules as `modules/<module>/...'.
+         (tail (replace-regexp-in-string "\\`modules/[^/]+/" "" tail))
+         (base (if (string-match "\\([^/]+\\)\\'" tail) (match-string 1 tail) tail))
+         (stem (if (string-match "\\`\\(.+\\)\\.[^.]*\\'" base)
+                   (match-string 1 base)
+                 base))
+         (ext (if (string-match "\\.\\([^.]+\\)\\'" base) (match-string 1 base) nil)))
+    (concat (if (string-empty-p stem) "source" stem)
+            ;; A `.class' member decompiles to Java; Kotlin keeps its own
+            ;; extension so `kotlin-mode' is selected.
+            (if (member ext '("kt" "kts")) ".kt" ".java"))))
+
+(defun lsp-proxy--decompiled-uri-to-file-name (uri)
+  "Return the virtual absolute file name representing URI."
+  (concat lsp-proxy--decompiled-prefix
+          (url-hexify-string uri)
+          "/"
+          (lsp-proxy--decompiled-basename uri)))
+
+(defun lsp-proxy--decompiled-name-parts (name)
+  "Split NAME into (ENCODED-URI . REST), or nil when NAME is not one of ours.
+REST is the remainder below the encoded segment: \"\" or \"/\" for the
+containing directory itself, \"/Bar.java\" for a file inside it."
+  (when (and (stringp name)
+             (string-match lsp-proxy--decompiled-file-name-regexp name))
+    (cons (match-string 1 name) (substring name (match-end 0)))))
+
+(defun lsp-proxy--decompiled-file-name-to-uri (name)
+  "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil."
+  (when-let* ((parts (lsp-proxy--decompiled-name-parts name)))
+    (decode-coding-string (url-unhex-string (car parts)) 'utf-8)))
+
+(defun lsp-proxy--decompiled-file-name-p (name)
+  "Return non-nil when NAME is the canonical virtual name for its own URI.
+Probes for neighbouring files that we do not serve — `.dir-locals.el' in the
+same directory, backup names, and so on — deliberately fail this test, so the
+handler can report them as nonexistent instead of claiming the whole
+directory."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name)))
+    (equal name (lsp-proxy--decompiled-uri-to-file-name uri))))
+
+(defun lsp-proxy--decompiled-directory-p (name)
+  "Return non-nil when NAME is the virtual directory holding a decompiled file."
+  (when-let* ((parts (lsp-proxy--decompiled-name-parts name)))
+    (member (cdr parts) '("" "/"))))
+
 (defun lsp-proxy--path-to-uri (path)
   "Convert PATH to an LSP `file://' URI.
 Unlike `eglot-path-to-uri', this preserves a TRAMP prefix (`/ssh:host:')
 rather than stripping it. lsp-proxy's Rust backend uses that prefix as
 the sole signal for routing the request to a remote LSP server; if we
 let eglot drop it, every buffer looks local and remote mode never
-engages."
-  (let ((remote-prefix (and path (file-remote-p path))))
-    (if remote-prefix
-        (concat "file://"
-                remote-prefix
-                (url-hexify-string
-                 (substring path (length remote-prefix))
-                 url-path-allowed-chars))
-      (concat "file://"
-              (if (eq system-type 'windows-nt) "/" "")
-              (url-hexify-string path url-path-allowed-chars)))))
+engages.
+
+A decompiled virtual name round-trips back to the original `jar:'/`jrt:'
+URI rather than being wrapped in a bogus `file:///lspsrc:/...'."
+  (or (lsp-proxy--decompiled-file-name-to-uri path)
+      (let ((remote-prefix (and path (file-remote-p path))))
+        (if remote-prefix
+            (concat "file://"
+                    remote-prefix
+                    (url-hexify-string
+                     (substring path (length remote-prefix))
+                     url-path-allowed-chars))
+          (concat "file://"
+                  (if (eq system-type 'windows-nt) "/" "")
+                  (url-hexify-string path url-path-allowed-chars))))))
 
 (defun lsp-proxy--TextDocumentIdentifier ()
   "Build a TextDocumentIdentifier for the current buffer.
@@ -262,7 +357,16 @@ fails to open on the remote FS)."
           (if already-tramp
               normalized
             (concat remote-prefix normalized)))
-      uri)))
+      ;; `jar:'/`jrt:' become virtual absolute file names whose content the
+      ;; `lsp-proxy-java' handler fetches on first read. This is a pure string
+      ;; transform on purpose — no RPC here, or a references result spanning the
+      ;; JDK would fire one synchronous request per location.
+      ;;
+      ;; Any other non-file scheme passes through untouched so
+      ;; `file-name-handler-alist' can deal with it (bug#58790).
+      (if (lsp-proxy--decompiled-scheme-p uri)
+          (lsp-proxy--decompiled-uri-to-file-name uri)
+        uri))))
 
 ;;; Request parameters
 

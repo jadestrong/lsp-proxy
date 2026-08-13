@@ -723,6 +723,9 @@ pub(crate) async fn handle_execute_command(
                 .map(|_| Response::new_ok(req.id, ""));
             }
         }
+        // Forward the command result back to the client. Commands like the
+        // IntelliJ backend's `decompile` return data ({code, language}) that the
+        // client needs; a bare "" would drop it.
         call_single_language_server::<lsp_types::request::ExecuteCommand>(
             &req,
             params,
@@ -731,12 +734,32 @@ pub(crate) async fn handle_execute_command(
             Some(context.language_server_id),
         )
         .await
-        .map(|_| Response::new_ok(req.id, ""))
+        .map(|(result, _)| Response::new_ok(req.id, result))
     } else {
-        Err(anyhow::Error::msg(format!(
-            "No context params of {:?}",
-            req.method
-        )))
+        // No explicit server context: route to whichever server advertises the
+        // command in its executeCommandProvider. Lets the client invoke a
+        // command (e.g. `decompile`) by name without tracking server ids.
+        let target = language_servers.iter().find(|ls| {
+            ls.capabilities()
+                .execute_command_provider
+                .as_ref()
+                .is_some_and(|options| options.commands.iter().any(|c| *c == params.command))
+        });
+        match target {
+            Some(ls) => call_single_language_server::<lsp_types::request::ExecuteCommand>(
+                &req,
+                params,
+                &language_servers,
+                None,
+                Some(ls.id()),
+            )
+            .await
+            .map(|(result, _)| Response::new_ok(req.id, result)),
+            None => Err(anyhow::Error::msg(format!(
+                "No language server supports command {:?}",
+                params.command
+            ))),
+        }
     }
 }
 
