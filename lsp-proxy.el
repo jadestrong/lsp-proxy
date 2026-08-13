@@ -49,6 +49,7 @@
 (require 'lsp-proxy-imenu)
 (require 'lsp-proxy-inlay-hints)
 (require 'lsp-proxy-inline-completion)
+(require 'lsp-proxy-java)
 (require 'lsp-proxy-org)
 (require 'lsp-proxy-copilot)
 (require 'lsp-proxy-install)

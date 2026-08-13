@@ -173,6 +173,41 @@ paramName = "All"
 paramType = true
 await = true
 
+# JetBrains IntelliJ Language Server (headless).
+# Launches the backend distribution directly over stdio; lsp-proxy replaces the
+# Node wrapper (dist/cli.js) by injecting the same env vars (`environment`) and
+# initializationOptions (`config`) the wrapper used to merge.
+#   - `command` must be an absolute path (no ~/relative expansion) or on PATH.
+#   - Code intelligence requires a supported build system (Maven/Gradle/Bazel)
+#     in the project root AND the build tool (mvn/gradle) available on PATH.
+#   - `eulaHash` = sha256(server/EULA.txt)[:16]; recompute when the backend
+#     (and thus its bundled EULA.txt) is upgraded.
+[language-server.intellij]
+command = "/Users/zhangyuqiang/Documents/Github/intellij-server/server/bin/intellij-server"
+args = ["--stdio"]
+
+[language-server.intellij.environment]
+# Extra JVM options for the backend (maps to the wrapper's IJ_JAVA_OPTIONS).
+IJ_JAVA_OPTIONS = "-Xmx4g"
+# INTELLIJ_DATA_SHARING = "none"
+# INTELLIJ_REGION = "US"
+
+[language-server.intellij.config]
+intellijExtensions = true
+eulaHash = "34d850193ee04897"
+# Fallback SDK for symbol resolution. IMPORTANT: the backend only accepts a
+# MODULAR JDK (Java 9+, with lib/modules); a Java 8 JDK (jre/lib/rt.jar layout)
+# is silently rejected -> "Cannot resolve symbol 'String'/'System'".
+# The bundled JBR below resolves symbols but has NO src.zip, so JDK hover shows
+# only signatures. For real JDK Javadoc, install a JDK 17/21 that ships
+# lib/src.zip (Temurin/Zulu full JDK) and point here, e.g.:
+#   defaultSdk = "/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home"
+# (maven.compiler.target=1.8 from the project's pom still fixes the language
+#  level to 8 on import; the SDK only supplies the classpath + sources.)
+defaultSdk = "/Users/zhangyuqiang/Documents/Github/intellij-server/server/jbr/Contents/Home"
+buildTools = {}
+projects = []
+
 [[language]]
 name = "javascript"
 language-id = "javascript"
@@ -426,8 +461,32 @@ language-servers = [{name = "vscode-json-language-server", support-workspace = t
 [[language]]
 name = "java"
 file-types = ["java", "jav", "pde"]
-roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
-language-servers = ["jdtls"]
+roots = [
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "BUILD.bazel",
+  "MODULE.bazel",
+]
+# Driven by the JetBrains IntelliJ backend. Alternative: ["jdtls"].
+language-servers = ["intellij"]
+
+[[language]]
+name = "kotlin"
+language-id = "kotlin"
+file-types = ["kt", "kts"]
+roots = [
+  "build.gradle.kts",
+  "settings.gradle.kts",
+  "build.gradle",
+  "settings.gradle",
+  "pom.xml",
+  "BUILD.bazel",
+  "MODULE.bazel",
+]
+language-servers = ["intellij"]
 
 [[language]]
 name = "dart"
