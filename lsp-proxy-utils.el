@@ -413,8 +413,16 @@ itself — we must NOT glue the project's own remote-prefix on top, or
 the path ends up with the method/host segment doubled (which then
 fails to open on the remote FS)."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-proxy--current-project-root
-                             (file-remote-p lsp-proxy--current-project-root)))
+  (let* ((project-root lsp-proxy--current-project-root)
+         ;; Only a genuine TRAMP prefix may be glued onto a resolved path. A
+         ;; decompiled buffer reports `file-remote-p' too (that is what gives it
+         ;; TRAMP's short display), so if such a name ever ends up cached as the
+         ;; project root, an unguarded `file-remote-p' here would prefix every
+         ;; real `file://' location with `/lspsrc:/...!' — corrupting navigation
+         ;; out of a decompiled buffer back into project sources.
+         (remote-prefix (and project-root
+                             (not (lsp-proxy--decompiled-file-name-to-uri project-root))
+                             (file-remote-p project-root)))
          (url (url-generic-parse-url uri)))
     ;; Only parse file:// URIs, leave other URIs untouched as
     ;; `file-name-handler-alist' should know how to handle them
