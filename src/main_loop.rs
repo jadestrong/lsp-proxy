@@ -913,7 +913,19 @@ impl Application {
     fn handle_workspace_restart(&mut self, req: &msg::Request) {
         match self.get_working_document(req) {
             Ok(doc) => {
-                let config = doc.language_config().unwrap().clone();
+                // A virtual document (a `jar:`/`jrt:` decompiled source) can lack a
+                // language config, and always lacks a path; unwrapping either here
+                // took the whole proxy down when restart was invoked from such a
+                // buffer.
+                let Some(config) = doc.language_config().cloned() else {
+                    self.respond(Response::new_err(
+                        req.id.clone(),
+                        jsonrpc::ErrorCode::InvalidRequest,
+                        "Cannot restart the workspace from a document with no language config"
+                            .to_string(),
+                    ));
+                    return;
+                };
                 let doc_path = doc.path();
                 let old_client_ids: Vec<usize> = doc
                     .get_all_language_servers()
@@ -943,7 +955,11 @@ impl Application {
                         let mut doc_paths: Vec<String> = vec![];
                         for document_id in document_ids_to_refresh {
                             if let Some(doc) = self.editor.documents.remove(&document_id) {
-                                doc_paths.push(doc.path().unwrap().to_string_lossy().to_string());
+                                // Virtual documents have no path to report back;
+                                // skip them rather than panicking.
+                                if let Some(path) = doc.path() {
+                                    doc_paths.push(path.to_string_lossy().to_string());
+                                }
                             }
                         }
                         self.respond(Response::new_ok(req.id.clone(), doc_paths));

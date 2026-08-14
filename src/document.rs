@@ -109,6 +109,31 @@ impl VirtualDocumentInfo {
     }
 }
 
+/// Resolve a document URI to a filesystem path.
+///
+/// `None` for virtual documents — `jar:`/`jrt:` decompiled sources, whose content
+/// the language server produced and which have no location on disk.
+///
+/// The scheme check is load-bearing. `Url::to_file_path` does **not** verify the
+/// scheme on non-Windows targets, so `jrt:///<jdk>!/modules/java.base/java/lang/
+/// System.class` otherwise succeeds and hands back the URI's path component
+/// verbatim — `!` and all — as if it were a real file.
+///
+/// That fabricated path is worse than no path, because it keeps the archive's
+/// real prefix: walking it upwards reaches genuine directories, so workspace
+/// resolution "succeeds" and roots a language server at whatever repository
+/// happens to contain the JDK or jar. That is how opening a decompiled JDK source
+/// spawned a second, mis-rooted server instead of reusing the project's own.
+///
+/// `jar:` URIs are cannot-be-a-base and already failed to convert, which is why
+/// the two schemes used to behave differently for no stated reason.
+pub(crate) fn uri_to_local_path(uri: &Url) -> Option<PathBuf> {
+    if uri.scheme() != "file" {
+        return None;
+    }
+    Url::to_file_path(uri).ok()
+}
+
 #[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
@@ -135,10 +160,9 @@ impl Document {
         config_loader: Option<Arc<syntax::Loader>>,
         language: Option<&str>,
     ) -> Self {
-        // Pre-compute is_org_file
-        let is_org_file = uri
-            .to_file_path()
-            .ok()
+        // Pre-compute is_org_file. Goes through `uri_to_local_path` so a virtual
+        // document cannot be classified from a fabricated path.
+        let is_org_file = uri_to_local_path(uri)
             .and_then(|path| path.extension().map(|ext| ext == "org"))
             .unwrap_or(false);
 
@@ -172,9 +196,9 @@ impl Document {
         &self.uri
     }
 
-    /// A Url to file path
+    /// A Url to file path. `None` for virtual documents; see [`uri_to_local_path`].
     pub fn path(&self) -> Option<PathBuf> {
-        Url::to_file_path(self.uri()).ok()
+        uri_to_local_path(self.uri())
     }
 
     pub fn get_server_capabilities(&self) -> CustomServerCapabilitiesParams {
@@ -308,9 +332,16 @@ impl Document {
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>, language: Option<&str>) {
-        let language_config = self.path().and_then(|path| {
-            config_loader.language_config_for_file_name(path.as_ref(), language)
-        });
+        let language_config = match self.path() {
+            Some(path) => config_loader.language_config_for_file_name(path.as_ref(), language),
+            // A virtual document has no file name to match a glob or extension
+            // against, so the client-supplied `languageId` is the only thing that
+            // can identify it. Previously this fallback sat inside an `and_then`
+            // on `path()` and was therefore unreachable for pathless documents,
+            // leaving them with no language config at all — which meant no
+            // language server was ever launched for them.
+            None => language.and_then(|lang| config_loader.language_config_for_language_id(lang)),
+        };
         self.language_config = language_config;
     }
 
@@ -503,5 +534,80 @@ impl Document {
     /// Remove and return a virtual document server entry.
     pub fn remove_virtual_doc_server(&mut self, language: &str) -> Option<VirtualDocServerEntry> {
         self.language_servers_of_virtual_doc.remove(language)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uri_to_local_path;
+    use lsp_types::Url;
+    use std::path::PathBuf;
+
+    fn path_of(uri: &str) -> Option<PathBuf> {
+        uri_to_local_path(&Url::parse(uri).expect("valid url"))
+    }
+
+    #[test]
+    fn resolves_plain_file_uris() {
+        assert_eq!(
+            path_of("file:///tmp/proj/src/Main.java"),
+            Some(PathBuf::from("/tmp/proj/src/Main.java"))
+        );
+    }
+
+    #[test]
+    fn resolves_percent_encoded_file_uris() {
+        assert_eq!(
+            path_of("file:///tmp/a%20b/Main.java"),
+            Some(PathBuf::from("/tmp/a b/Main.java"))
+        );
+    }
+
+    #[test]
+    fn jar_uri_has_no_path() {
+        assert_eq!(
+            path_of("jar:file:///home/u/.m2/repo/foo/bar-1.0-sources.jar!/com/foo/Bar.java"),
+            None
+        );
+    }
+
+    /// The regression this guard exists for: without the scheme check a `jrt:`
+    /// URI resolves to a fabricated absolute path that keeps the archive's real
+    /// path prefix, so it looks entirely plausible and workspace resolution
+    /// happily walks up it.
+    #[test]
+    fn jrt_uri_has_no_path() {
+        let uri = "jrt:///Users/u/proj/jbr/Contents/Home!/modules/java.base/java/lang/System.class";
+        assert_eq!(path_of(uri), None);
+
+        // Pin the upstream behaviour we are guarding against, so this test starts
+        // failing (rather than silently passing) if the `url` crate ever changes.
+        // Note the fabricated path is the URI's whole path component, `!` and all:
+        // walking it upwards reaches real directories, which is how a decompiled
+        // JDK source ended up resolving to whatever repository happens to contain
+        // the JDK.
+        assert_eq!(
+            Url::parse(uri).unwrap().to_file_path().ok(),
+            Some(PathBuf::from(
+                "/Users/u/proj/jbr/Contents/Home!/modules/java.base/java/lang/System.class"
+            )),
+            "url crate no longer fabricates a path for jrt:; the scheme guard may be redundant"
+        );
+    }
+
+    #[test]
+    fn other_non_file_schemes_have_no_path() {
+        assert_eq!(path_of("untitled:Untitled-1"), None);
+        assert_eq!(path_of("jdt://contents/java.base/java.lang/String.class"), None);
+    }
+
+    /// Remote documents are still plain `file:` URIs (the TRAMP prefix lives
+    /// inside the path), so they must keep resolving.
+    #[test]
+    fn tramp_style_remote_file_uri_still_resolves() {
+        assert_eq!(
+            path_of("file:///ssh:host:/home/u/proj/Main.java"),
+            Some(PathBuf::from("/ssh:host:/home/u/proj/Main.java"))
+        );
     }
 }

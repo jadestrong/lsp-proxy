@@ -107,6 +107,25 @@ impl Registry {
         }
     }
 
+    /// The client most recently activated for a server name.
+    ///
+    /// Used for documents that have no workspace of their own — files under a
+    /// configured `library-directories` entry, and virtual documents. Never
+    /// panics on lock contention: a missed `try_lock` only makes that client
+    /// compare as least-recent, which is preferable to bringing the proxy down.
+    fn most_recently_activated(clients: &[Arc<Client>]) -> Option<Arc<Client>> {
+        clients
+            .iter()
+            .max_by_key(|client| {
+                client
+                    .activate_time
+                    .try_lock()
+                    .map(|time| *time)
+                    .unwrap_or_default()
+            })
+            .cloned()
+    }
+
     pub fn get<'a>(
         &'a mut self,
         language_config: &'a LanguageConfiguration,
@@ -120,6 +139,40 @@ impl Registry {
                       library_directories,
                       ..
                 } = feature;
+                // A document with no filesystem path is a virtual document: a
+                // `jar:`/`jrt:` decompiled source, whose content the language
+                // server itself produced. It has no workspace of its own, so it
+                // must not reach the root-matching logic below —
+                // `find_lsp_workspace(None, ..)` falls back to the proxy's CWD,
+                // which would either spawn a second server rooted at the CWD or,
+                // for a support-workspace client, register the CWD as a workspace
+                // folder.
+                //
+                // Attach it to the most recently activated client instead. This is
+                // the same rule `library-directories` already uses for files that
+                // live outside the workspace, generalised to documents that live
+                // nowhere at all.
+                if doc_path.is_none() {
+                    return match self.inner.get(name).and_then(|clients| Self::most_recently_activated(clients)) {
+                        Some(client) => {
+                            debug!(
+                                "Attaching virtual document to active client '{}' at {:?}",
+                                name, client.root_path
+                            );
+                            (name.to_owned(), Ok(client))
+                        }
+                        // Deliberately not started: there is no meaningful root to
+                        // give a server for a document that exists only inside an
+                        // archive. Opening a project file first gives it one.
+                        None => (
+                            name.to_owned(),
+                            Err(Error::Other(anyhow!(
+                                "No running '{name}' server to attach this virtual document to; open a file from the project first"
+                            ))),
+                        ),
+                    };
+                }
+
                 if let Some(clients) = self.inner.get(name) {
                     // find the root path of the current file based on the support_workspace strategy
                     let file_root = find_lsp_workspace(
@@ -151,15 +204,25 @@ impl Registry {
                     }
 
                     // If library_directories exists, check whether the file belongs to it; if it does, return the latest active client.
-                    if library_directories.iter().any(|dir| {
-                        path::path_is_ancestor_of(dir, &doc_path.unwrap().to_string_lossy())
-                    }) {
-                        if let Some(client) = clients
+                    //
+                    // `doc_path` is Some here — the None case returned above — so
+                    // this reads it structurally rather than unwrapping. The old
+                    // `doc_path.unwrap()` was only unreachable by accident: a
+                    // pathless document could never get a language config, so it
+                    // never reached this line. Making the languageId fallback work
+                    // for pathless documents removed that coupling and would have
+                    // turned this into a live panic for any server configured with
+                    // `library-directories`.
+                    let in_library_dir = doc_path.is_some_and(|path| {
+                        let path = path.to_string_lossy();
+                        library_directories
                             .iter()
-                            .max_by_key(|item| *item.activate_time.try_lock().unwrap())
-                        {
+                            .any(|dir| path::path_is_ancestor_of(dir, &path))
+                    });
+                    if in_library_dir {
+                        if let Some(client) = Self::most_recently_activated(clients) {
                             debug!("Using library directory client for '{}' at {:?}", name, client.root_path);
-                            return (name.to_owned(), Ok(client.clone()));
+                            return (name.to_owned(), Ok(client));
                         }
                     }
                 }
