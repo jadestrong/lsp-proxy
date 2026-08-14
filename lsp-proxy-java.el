@@ -186,6 +186,32 @@ already work because these names are ordinary absolute paths."
      nil)
     ('file-truename (car args))
 
+    ;; Claiming remoteness is what buys the TRAMP display behaviour: display
+    ;; code runs the name through `file-local-name' (defined as
+    ;; `(or (file-remote-p f 'localname) f)') and formats the result, which is
+    ;; exactly how doom-modeline shortens `/ssh:host:/long/path'. Here it yields
+    ;; the member path, e.g. `/modules/java.base/java/lang/System.class'.
+    ;;
+    ;; The full IDENTIFICATION contract is honoured: PREFIX and 'localname must
+    ;; concatenate back to the original name. Returning one fixed string for
+    ;; every identification (as an earlier revision did) feeds nonsense to
+    ;; callers that ask for 'host or 'method.
+    ;;
+    ;; This is safe here only because `default-directory' in these buffers is a
+    ;; real local directory, so nothing tries to launch a process "on the remote
+    ;; host"; the process-related operations below are handled explicitly anyway.
+    ('file-remote-p
+     (when-let* ((split (lsp-proxy--decompiled-name-split (car args))))
+       (pcase (cadr args)
+         ('localname (cdr split))
+         ('method "lspsrc")
+         ('user nil)
+         ('host (string-remove-suffix
+                 "!" (lsp-proxy--decompiled-unescape
+                      (substring (car split)
+                                 (length lsp-proxy--decompiled-prefix)))))
+         (_ (car split)))))
+
     ;; A stable, non-nil attribute list. nil breaks callers that expect a mode
     ;; string or a modtime, and a moving modtime makes auto-revert spin.
     ;;
@@ -243,7 +269,7 @@ already work because these names are ordinary absolute paths."
        file-directory-p file-accessible-directory-p access-file
        file-writable-p file-executable-p file-symlink-p
        file-newer-than-file-p vc-registered file-name-case-insensitive-p
-       file-truename file-attributes verify-visited-file-modtime
+       file-truename file-remote-p file-attributes verify-visited-file-modtime
        unhandled-file-name-directory temporary-file-directory
        process-file start-file-process shell-command make-process
        make-auto-save-file-name find-backup-file-name file-notify-add-watch
@@ -261,19 +287,50 @@ already work because these names are ordinary absolute paths."
   (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri buffer-file-name)))
     (lsp-proxy-java-flush-cache uri)))
 
+(defun lsp-proxy-java--mode-for-language (language)
+  "Return the major mode to use for a decompiled buffer of LANGUAGE.
+Honours `major-mode-remap-alist' so a user's tree-sitter preference wins."
+  (when-let* ((base (pcase language
+                      ("kotlin" (cond ((fboundp 'kotlin-ts-mode) 'kotlin-ts-mode)
+                                      ((fboundp 'kotlin-mode) 'kotlin-mode)))
+                      ((or "java" 'nil) 'java-mode)
+                      (_ nil))))
+    (if (fboundp 'major-mode-remap)
+        (major-mode-remap base)
+      (or (alist-get base major-mode-remap-alist) base))))
+
 (defun lsp-proxy-java--setup-buffer ()
   "Finalise a freshly opened decompiled buffer.
-The major mode already comes from `auto-mode-alist' via the virtual name's
-extension; this only corrects it when the server reports a language that
-disagrees, and pins down the read-only / no-backup properties."
+Sets the major mode from the language the server reported, and pins down the
+read-only / no-backup properties.
+
+The mode cannot be left to `auto-mode-alist': because these names report as
+remote, `set-auto-mode' strips the `file-remote-p' prefix before matching, so
+nothing lspsrc-specific survives to key on — and a member is often `X.class',
+whose extension says nothing about the decompiled language anyway.  The server's
+`:language' is the authoritative answer."
   (when-let* ((uri (and buffer-file-name
                         (lsp-proxy--decompiled-file-name-to-uri buffer-file-name))))
-    (let ((language (plist-get (gethash uri lsp-proxy-java--content-cache) :language)))
-      (when (and (equal language "kotlin")
-                 (not (derived-mode-p 'kotlin-mode 'kotlin-ts-mode)))
-        (cond ((fboundp 'kotlin-ts-mode) (kotlin-ts-mode))
-              ((fboundp 'kotlin-mode) (kotlin-mode)))))
-    (setq-local default-directory temporary-file-directory)
+    (let* ((language (plist-get (gethash uri lsp-proxy-java--content-cache) :language))
+           (mode (lsp-proxy-java--mode-for-language language)))
+      (when (and mode (not (eq major-mode mode)))
+        (funcall mode)))
+    ;; `default-directory' is deliberately left as the *virtual* directory that
+    ;; `find-file-noselect' derived from the name, which is what TRAMP does too
+    ;; (a TRAMP buffer's `default-directory' is the remote directory, not a local
+    ;; stand-in).  Two reasons:
+    ;;
+    ;;  * Display. Code that formats a path falls back to `default-directory'
+    ;;    when it cannot find a project — doom-modeline does exactly that — so
+    ;;    pointing it at `temporary-file-directory' made the mode-line render the
+    ;;    temp dir's last component as a fake project name plus the climb back
+    ;;    out of it: "T/../../../../../modules/java.base/java/lang/System.class".
+    ;;    Keeping it virtual yields "lang/System.class".
+    ;;
+    ;;  * Local subprocesses still work: Emacs' `encode_current_directory' runs
+    ;;    `default-directory' through `unhandled-file-name-directory' before
+    ;;    chdir'ing, and our handler answers that with a real directory. That
+    ;;    covers `call-process' as well as the dispatched `process-file' family.
     (setq-local buffer-auto-save-file-name nil)
     (setq-local make-backup-files nil)
     (add-hook 'before-revert-hook #'lsp-proxy-java--before-revert nil t)
@@ -287,24 +344,15 @@ disagrees, and pins down the read-only / no-backup properties."
                    #'lsp-proxy-java--file-handler))
 (add-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
 
-;; The virtual name keeps the URI's own member extension, so a `.class' member
-;; needs an explicit mapping; `.java'/`.kt' members already match the standard
-;; entries. Mapping to `java-mode' rather than `java-ts-mode' on purpose, so
-;; `major-mode-remap-alist' / `major-mode-remap-defaults' still decide whether
-;; the tree-sitter mode is used.
-(defconst lsp-proxy-java--class-auto-mode-entry
-  (cons (concat lsp-proxy--decompiled-file-name-regexp ".*\\.class\\'") 'java-mode)
-  "The `auto-mode-alist' entry this file installs for decompiled `.class' members.")
-
-(add-to-list 'auto-mode-alist lsp-proxy-java--class-auto-mode-entry)
+;; No `auto-mode-alist' entry on purpose: `set-auto-mode' strips the
+;; `file-remote-p' prefix before matching, so a pattern anchored on the lspsrc
+;; prefix can never fire. `lsp-proxy-java--setup-buffer' sets the mode instead.
 
 (defun lsp-proxy-java-unload-function ()
   "Deregister the decompiled-source handler.  See `unload-feature'."
   (setq file-name-handler-alist
         (rassq-delete-all #'lsp-proxy-java--file-handler
                           (copy-sequence file-name-handler-alist)))
-  (setq auto-mode-alist
-        (delete lsp-proxy-java--class-auto-mode-entry (copy-sequence auto-mode-alist)))
   (remove-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
   nil)
 
