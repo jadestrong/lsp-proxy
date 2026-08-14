@@ -55,6 +55,28 @@ pub struct RegisteredCapability {
     pub register_options: Option<lsp_types::TextDocumentRegistrationOptions>,
 }
 
+/// The `textDocument/publishDiagnostics` capabilities we advertise.
+///
+/// `versionSupport` states whether we *interpret* the `version` field of a
+/// `publishDiagnostics` notification. We do not — matching
+/// vscode-languageclient, which advertises `false` and whose `handleDiagnostics`
+/// reads only `uri` and `diagnostics`.
+///
+/// This used to be `true` while `main_loop` enforced `version == doc.version`,
+/// which made the push channel unusable. A server that stamps the version it
+/// analysed rather than the client's newest is behaving correctly, but under
+/// continuous typing its notifications never match, so every one was discarded —
+/// and because nothing re-requests a push, the final analysis was lost for good.
+///
+/// Extracted from the `initialize` capabilities literal purely so this decision
+/// is covered by a test.
+fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabilities {
+    lsp::PublishDiagnosticsClientCapabilities {
+        version_support: Some(false),
+        ..Default::default()
+    }
+}
+
 #[derive(Debug)]
 pub struct Client {
     id: usize,
@@ -739,10 +761,7 @@ impl Client {
                         dynamic_registration: Some(false),
                         related_document_support: Some(true),
                     }),
-                    publish_diagnostics: Some(lsp::PublishDiagnosticsClientCapabilities {
-                        version_support: Some(true),
-                        ..Default::default()
-                    }),
+                    publish_diagnostics: Some(publish_diagnostics_capabilities()),
                     inlay_hint: Some(lsp::InlayHintClientCapabilities {
                         dynamic_registration: Some(false),
                         resolve_support: None,
@@ -1015,5 +1034,23 @@ impl Client {
             },
             None => "none".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_diagnostics_capabilities;
+
+    /// Guards the fix for "diagnostics always dropped": advertising
+    /// `versionSupport: true` is only honest if we actually interpret the field,
+    /// and we deliberately do not (see `publish_diagnostics_capabilities` and the
+    /// `PublishDianostics` arm in `main_loop`). Flipping this back to `true`
+    /// without also adding real version handling reintroduces the bug.
+    #[test]
+    fn does_not_advertise_publish_diagnostics_version_support() {
+        assert_eq!(
+            publish_diagnostics_capabilities().version_support,
+            Some(false)
+        );
     }
 }

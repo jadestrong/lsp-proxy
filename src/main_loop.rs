@@ -424,10 +424,27 @@ impl Application {
                             log::debug!("Disabled pushlishDiagnostics for org file.");
                             return;
                         }
+                        // Deliberately no staleness gate, matching
+                        // vscode-languageclient's `handleDiagnostics`, which never reads
+                        // `params.version`. Superseding is by content instead: the
+                        // comparison below skips the notification when the diagnostics
+                        // are unchanged, and a newer publish simply replaces the older
+                        // set for this provider.
+                        //
+                        // Dropping stale publishes sounds safer but is strictly worse,
+                        // because nothing re-requests them. A server that stamps the
+                        // version it analysed will always lag the client while the user
+                        // types, so an equality check discarded every notification and
+                        // then went silent, losing the final analysis permanently.
+                        // Showing a slightly stale set that the next publish corrects is
+                        // the trade VS Code makes.
                         if let Some(version) = params.version {
                             if version != doc.version {
-                                log::error!("Version ({version}) is out of date for {:?} (expected ({}), dropping PublishDiagnostic notification", params.uri, doc.version());
-                                return;
+                                log::debug!(
+                                    "Accepting diagnostics for {:?} at server version ({version}) while the document is at ({}); ranges may lag until the next publish",
+                                    params.uri,
+                                    doc.version()
+                                );
                             }
                         }
                         let provider = DiagnosticProvider {
