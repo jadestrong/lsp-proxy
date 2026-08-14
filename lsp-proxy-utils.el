@@ -321,6 +321,27 @@ those as nonexistent instead of claiming everything under the prefix."
                    lsp-proxy--decompiled-source-extensions))
        t))
 
+(defun lsp-proxy--decompiled-name-split (name)
+  "Split NAME into (PREFIX . LOCALNAME) at the archive/member boundary.
+
+PREFIX and LOCALNAME concatenate back to NAME exactly — that is the contract
+`file-remote-p' must satisfy, and it is what lets `file-local-name' return just
+the member path.  Display code reuses this without knowing anything about us:
+doom-modeline, for instance, runs `buffer-file-name' through `file-local-name'
+before formatting, which is precisely how it shortens TRAMP names.
+
+The split is at the *last* `!/', so a nested archive yields the innermost
+member path."
+  (when (and (stringp name)
+             (string-prefix-p lsp-proxy--decompiled-prefix name))
+    (let ((bang (string-match-p "!/[^!]*\\'" name)))
+      (if bang
+          (cons (substring name 0 (1+ bang)) (substring name (1+ bang)))
+        ;; No member separator (an opaque URI): treat the whole payload as the
+        ;; local part, keeping the prefix as the "remote" component.
+        (cons (substring lsp-proxy--decompiled-prefix 0 -1)
+              (substring name (1- (length lsp-proxy--decompiled-prefix))))))))
+
 (defun lsp-proxy--decompiled-directory-p (name)
   "Return non-nil when NAME is a path component inside a decompiled archive.
 Every name under the prefix that is not itself a servable file is one of the
