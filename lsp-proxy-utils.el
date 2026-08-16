@@ -292,12 +292,35 @@ the tree from being reported as existing files.")
 Only a fallback for names restored from a previous session (desktop, recentf),
 where the registry is empty; names produced in this session are matched exactly.")
 
+(defvar lsp-proxy--decompiled-known-dirs (make-hash-table :test 'equal)
+  "Set of virtual directories that are ancestors of a name we handed out.
+
+Needed to keep the virtual filesystem self-consistent.  Reporting every
+prefix-matching name as a directory would make probes inside the tree — `.git',
+`.dir-locals.el' — look like existing directories, and `locate-dominating-file'
+would stop at a bogus root.  Reporting none of them makes `file-exists-p' deny a
+directory that `file-directory-p' affirms, which breaks any caller that
+sanity-checks a directory: flycheck validates `default-directory' with
+`file-exists-p' and errors out with \":working-directory ... does not exist\".
+
+Being an ancestor of a name we actually served distinguishes the two exactly.")
+
+(defun lsp-proxy--decompiled-register (name)
+  "Record NAME as a served virtual file, plus each of its ancestor directories."
+  (puthash name t lsp-proxy--decompiled-known-names)
+  (let ((dir (file-name-directory name)))
+    (while (and dir
+                (string-prefix-p lsp-proxy--decompiled-prefix dir)
+                (not (gethash dir lsp-proxy--decompiled-known-dirs)))
+      (puthash dir t lsp-proxy--decompiled-known-dirs)
+      (let ((parent (file-name-directory (directory-file-name dir))))
+        (setq dir (unless (equal parent dir) parent)))))
+  name)
+
 (defun lsp-proxy--decompiled-uri-to-file-name (uri)
   "Return the virtual absolute file name representing URI."
-  (let ((name (concat lsp-proxy--decompiled-prefix
-                      (lsp-proxy--decompiled-escape uri))))
-    (puthash name t lsp-proxy--decompiled-known-names)
-    name))
+  (lsp-proxy--decompiled-register
+   (concat lsp-proxy--decompiled-prefix (lsp-proxy--decompiled-escape uri))))
 
 (defun lsp-proxy--decompiled-file-name-to-uri (name)
   "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil.
@@ -342,14 +365,21 @@ member path."
         (cons (substring lsp-proxy--decompiled-prefix 0 -1)
               (substring name (1- (length lsp-proxy--decompiled-prefix))))))))
 
+(defun lsp-proxy--decompiled-buffer-p (&optional buffer)
+  "Return non-nil when BUFFER (default current) shows a decompiled virtual source."
+  (and (lsp-proxy--decompiled-file-name-to-uri
+        (buffer-local-value 'buffer-file-name (or buffer (current-buffer))))
+       t))
+
 (defun lsp-proxy--decompiled-directory-p (name)
-  "Return non-nil when NAME is a path component inside a decompiled archive.
-Every name under the prefix that is not itself a servable file is one of the
-archive's intermediate directories, so path walks (`locate-dominating-file',
-`file-in-directory-p') see a consistent tree rather than dead ends."
+  "Return non-nil when NAME is a directory inside a decompiled archive.
+
+True only for ancestors of a name we actually served (see
+`lsp-proxy--decompiled-known-dirs'), so path walks see a consistent tree while
+probes for files we do not serve still miss."
   (and (stringp name)
-       (string-prefix-p lsp-proxy--decompiled-prefix name)
-       (not (lsp-proxy--decompiled-file-name-p name))))
+       (gethash (file-name-as-directory name) lsp-proxy--decompiled-known-dirs)
+       t))
 
 (defun lsp-proxy--path-to-uri (path)
   "Convert PATH to an LSP `file://' URI.
