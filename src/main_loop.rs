@@ -736,6 +736,14 @@ impl Application {
                         let doc_id = doc.id();
                         let previous_result_id = doc.previous_diagnostic_id.clone();
 
+                        // Tag this batch so a response that is overtaken by a newer
+                        // batch can be recognised and discarded on arrival.
+                        let pull_generation = self
+                            .editor
+                            .document_mut(doc_id)
+                            .map(|doc| doc.next_pull_generation())
+                            .unwrap_or_default();
+
                         let limit_diagnostics = req
                             .params
                             .context
@@ -823,6 +831,7 @@ impl Application {
                                         result,
                                         doc_id,
                                         limit_diagnostics,
+                                        pull_generation,
                                     )
                                     .await;
                                 }
