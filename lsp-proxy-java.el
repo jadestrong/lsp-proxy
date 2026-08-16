@@ -123,6 +123,10 @@ The standard `file-name-handler-alist' idiom, equivalent to
 The TRAMP contract: the caller owns the returned file and deletes it."
   (unless (lsp-proxy--decompiled-file-name-p filename)
     (signal 'file-missing (list "Opening file" "No such file" filename)))
+  ;; Record it here too, not just where the name was minted: a name restored from
+  ;; a previous session (desktop, recentf) is recognised by extension but was
+  ;; never registered, so its ancestor directories would otherwise be unknown.
+  (lsp-proxy--decompiled-register filename)
   (let* ((uri (lsp-proxy--decompiled-file-name-to-uri filename))
          (content (lsp-proxy-java--content uri))
          (code (plist-get content :code))
@@ -170,10 +174,19 @@ already work because these names are ordinary absolute paths."
     ('insert-file-contents (apply #'lsp-proxy-java--insert-file-contents args))
     ('file-local-copy (lsp-proxy-java--file-local-copy (car args)))
 
-    ;; Existence: true only for the canonical name of an encoded URI, so probes
-    ;; for siblings (`.dir-locals.el', backup files, `.git') correctly miss.
-    ((or 'file-exists-p 'file-readable-p 'file-regular-p)
-     (and (lsp-proxy--decompiled-file-name-p (car args)) t))
+    ;; Existence covers both servable members and the archive directories above
+    ;; them, so it never contradicts `file-directory-p'. Disagreeing here breaks
+    ;; any caller that sanity-checks a directory — flycheck validates
+    ;; `default-directory' with `file-exists-p' and raises
+    ;; ":working-directory ... does not exist".
+    ;;
+    ;; Probes for names we do not serve (`.dir-locals.el', backup files, `.git')
+    ;; still miss, because neither predicate accepts them.
+    ((or 'file-exists-p 'file-readable-p)
+     (and (or (lsp-proxy--decompiled-file-name-p (car args))
+              (lsp-proxy--decompiled-directory-p (car args)))
+          t))
+    ('file-regular-p (and (lsp-proxy--decompiled-file-name-p (car args)) t))
     ((or 'file-directory-p 'file-accessible-directory-p)
      (and (lsp-proxy--decompiled-directory-p (car args)) t))
     ('access-file
@@ -337,12 +350,202 @@ whose extension says nothing about the decompiled language anyway.  The server's
     (set-buffer-modified-p nil)
     (setq buffer-read-only t)))
 
+;;; File templates
+;;
+;; "File and Code Templates": fill a newly created empty file from a template
+;; whose variables (`${PACKAGE_NAME}', `${NAME}', the Velocity `#if' directives)
+;; are expanded by the language server — the only side that knows the project
+;; model, e.g. which source root the file sits under.
+;;
+;; Same server contract as `decompile': `workspace/executeCommand' with command
+;; `interpolateFileTemplate' and arguments [FILE-URI, TEMPLATE], answering with
+;; the interpolated text in which a single `|' marks the caret.
+;;
+;; Ported from community/vscode-extension-core/src/fileTemplates.ts, with three
+;; deliberate differences:
+;;
+;;  * Trigger.  VSCode listens on `workspace.onDidCreateFiles', an explorer event
+;;    Emacs has no equivalent of.  The analogue is visiting a file that does not
+;;    exist yet, which is how a file gets created here.  Opening an existing empty
+;;    file deliberately does not trigger, so browsing never prompts.
+;;
+;;  * `$' is escaped before the caret marker becomes `$0'.  VSCode hands the whole
+;;    reply to `SnippetString', so a literal `$' in the result (a shell variable,
+;;    a Kotlin string template) is silently reread as snippet syntax.  Only the
+;;    caret marker should be snippet syntax.
+;;
+;;  * No reformatting pass.  The original runs `editor.action.formatDocument' and
+;;    then repairs the caret, because that formatter leaves a stray blank line
+;;    where the caret was.  That repair is specific to it; yasnippet already
+;;    indents what it expands.
+
+(defcustom lsp-proxy-java-file-templates
+  '(
+    ("java"
+     ("Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic class ${NAME} {\n\t|\n}")
+     ("Interface"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic interface ${NAME} {\n\t|\n}")
+     ("Record"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic record ${NAME}(|) {\n}")
+     ("Enum"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic enum ${NAME} {\n\t|\n}")
+     ("Annotation"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic @interface ${NAME} {\n\t|\n}")
+     ("Exception"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic class ${NAME} extends RuntimeException {\n    public ${NAME}(String message) {\n        super(message);\n    }\n}")
+     )
+    ("kotlin"
+     ("Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nclass ${NAME} {\n\t|\n}")
+     ("File"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\n|")
+     ("Interface"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\ninterface ${NAME} {\n\t|\n}")
+     ("Data Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\ndata class ${NAME}(|)\n")
+     ("Enum"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nenum class ${NAME} {\n\t|\n}")
+     ("Annotation"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nannotation class ${NAME}(|)")
+     ("Object"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nobject ${NAME} {\n\t|\n}")
+     )
+    )
+  "File templates for the JVM languages served by the IntelliJ backend.
+
+Keyed by language, then by template name.  Values are templates in the server's
+own syntax; their variables are interpolated by the server, not here.  A single
+`|' marks where the caret should end up.
+
+The defaults are the full set the backend's own VSCode extension ships (its
+`jetbrains.templates.*' settings)."
+  :type '(alist :key-type (string :tag "Language")
+          :value-type (alist :key-type (string :tag "Name")
+                       :value-type (string :tag "Template")))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-file-templates-on-create t
+  "Whether to offer a template when a new JVM source file is created.
+
+Non-nil mirrors the VSCode extension, which applies one as soon as an empty file
+appears; with a single template configured it applies without asking.
+Set to nil to insert templates only on demand, via
+\\[lsp-proxy-java-insert-file-template]."
+  :type 'boolean
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java--templates ()
+  "Return the templates for this buffer's language, or nil.
+Reads `lsp-proxy--language', which `lsp-proxy-mode' sets when it attaches."
+  (when-let* ((language (and (boundp 'lsp-proxy--language) lsp-proxy--language)))
+    (cdr (assoc language lsp-proxy-java-file-templates))))
+
+(defun lsp-proxy-java--select-template (templates)
+  "Return the template text to use from TEMPLATES, or nil if cancelled.
+A single entry is used without prompting, matching the VSCode extension."
+  (cond ((null templates) nil)
+        ((null (cdr templates)) (cdar templates))
+        (t (when-let* ((name (completing-read "Select a file template: "
+                                              (mapcar #'car templates) nil t)))
+             (cdr (assoc name templates))))))
+
+(defun lsp-proxy-java--template-to-snippet (content)
+  "Turn interpolated CONTENT into a snippet string.
+
+Everything the server produced is literal text, so `$' and `\\' are escaped
+first; only then does the caret marker become the exit point.  The other order
+would let a literal `$' be read as snippet syntax."
+  (let ((escaped (replace-regexp-in-string "[\\$]" "\\\\\\&" content)))
+    ;; Only the first marker counts — there is exactly one caret.
+    (if (string-match "|" escaped)
+        (concat (substring escaped 0 (match-beginning 0))
+                "$0"
+                (substring escaped (match-end 0)))
+      escaped)))
+
+(defun lsp-proxy-java--insert-template (content)
+  "Insert interpolated CONTENT, honouring the caret marker.
+Expands as a snippet when yasnippet is available, otherwise inserts the text and
+leaves point where the marker was."
+  (if-let* ((snippet-fn (and (fboundp 'eglot--snippet-expansion-fn)
+                             (eglot--snippet-expansion-fn))))
+      (funcall snippet-fn (lsp-proxy-java--template-to-snippet content))
+    (let ((caret (string-search "|" content)))
+      (insert (if caret
+                  (concat (substring content 0 caret) (substring content (1+ caret)))
+                content))
+      (when caret (goto-char (+ (point-min) caret))))))
+
+(defun lsp-proxy-java--request-template (template)
+  "Interpolate TEMPLATE for this buffer via the server, then insert the result.
+
+The request carries this buffer's own URI so the proxy routes it to this file's
+language servers; the server reads the target from the arguments.  Sending it
+also opens the document when it is not open yet, which
+`lsp-proxy--async-request' does for every request."
+  (let ((buffer (current-buffer))
+        (uri (plist-get (lsp-proxy--TextDocumentIdentifier) :uri))
+        (tick (buffer-chars-modified-tick)))
+    (lsp-proxy--async-request
+     'workspace/executeCommand
+     (lsp-proxy--build-params
+      (list :command "interpolateFileTemplate"
+            :arguments (vector uri template)))
+     :success-fn
+     (lambda (content)
+       (when (and (buffer-live-p buffer) (stringp content) (not (string-empty-p content)))
+         (with-current-buffer buffer
+           ;; The reply is asynchronous, so the buffer may have been typed into
+           ;; meanwhile. Only a still-empty, untouched buffer may be written to.
+           (if (and (zerop (buffer-size)) (eq tick (buffer-chars-modified-tick)))
+               (lsp-proxy-java--insert-template content)
+             (lsp-proxy--info "File template skipped: %s changed since the request"
+                              (buffer-name))))))
+     ;; A server without the command is not worth interrupting for; the original
+     ;; likewise only logs.
+     :error-fn (lambda (err)
+                 (lsp-proxy--warn "Could not interpolate file template: %s"
+                                  (or (plist-get err :message) err)))
+     :timeout-fn #'ignore)))
+
+;;;###autoload
+(defun lsp-proxy-java-insert-file-template ()
+  "Insert a file template into the current buffer.
+Prompts when several templates exist for the buffer's language."
+  (interactive)
+  (unless (bound-and-true-p lsp-proxy-mode)
+    (user-error "lsp-proxy is not active in this buffer"))
+  (let ((templates (lsp-proxy-java--templates)))
+    (unless templates
+      (user-error "No file templates for this language; see `lsp-proxy-java-file-templates'"))
+    (if-let* ((template (lsp-proxy-java--select-template templates)))
+        (lsp-proxy-java--request-template template)
+      (message "No template selected"))))
+
+(defun lsp-proxy-java--maybe-insert-template ()
+  "Offer a file template when visiting a newly created, still-empty file.
+
+Runs from `find-file-hook'.  Requires the file not to exist on disk yet: that is
+what makes this a file being created rather than an empty file being browsed."
+  (when (and lsp-proxy-java-file-templates-on-create
+             (bound-and-true-p lsp-proxy-mode)
+             buffer-file-name
+             (zerop (buffer-size))
+             (not (file-exists-p buffer-file-name))
+             ;; Virtual decompiled sources are served by us, never created.
+             (not (lsp-proxy--decompiled-buffer-p)))
+    (when-let* ((templates (lsp-proxy-java--templates))
+                (template (lsp-proxy-java--select-template templates)))
+      (lsp-proxy-java--request-template template))))
+
 ;;; Setup
 
 (add-to-list 'file-name-handler-alist
              (cons lsp-proxy--decompiled-file-name-regexp
                    #'lsp-proxy-java--file-handler))
 (add-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
+(add-hook 'find-file-hook #'lsp-proxy-java--maybe-insert-template)
 
 ;; No `auto-mode-alist' entry on purpose: `set-auto-mode' strips the
 ;; `file-remote-p' prefix before matching, so a pattern anchored on the lspsrc
@@ -354,6 +557,7 @@ whose extension says nothing about the decompiled language anyway.  The server's
         (rassq-delete-all #'lsp-proxy-java--file-handler
                           (copy-sequence file-name-handler-alist)))
   (remove-hook 'find-file-hook #'lsp-proxy-java--setup-buffer)
+  (remove-hook 'find-file-hook #'lsp-proxy-java--maybe-insert-template)
   nil)
 
 (provide 'lsp-proxy-java)
