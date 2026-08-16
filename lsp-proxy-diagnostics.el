@@ -76,6 +76,28 @@ of diagnostics are displayed due to the limit."
 (defvar lsp-proxy--diagnostics-map (make-hash-table :test 'equal)
   "Hash table mapping project roots to diagnostic maps.")
 
+(defcustom lsp-proxy-diagnostics-in-decompiled-buffers nil
+  "Whether to report diagnostics in decompiled `jar:'/`jrt:' source buffers.
+
+Nil by default.  Those buffers are read-only views of library
+sources that the language server itself produced, so any diagnostic
+in them is unactionable — you cannot edit the file to fix it — while
+still costing a pull round trip per buffer and, for a `.class'
+member, reporting complaints about decompiler output rather than
+about real code.
+
+Other features are unaffected: hover, goto-definition, references
+and completion all keep working in those buffers."
+  :type 'boolean
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-diagnostics--suppressed-p (&optional file)
+  "Return non-nil when diagnostics are suppressed for FILE.
+FILE defaults to the current buffer's `buffer-file-name'."
+  (and (not lsp-proxy-diagnostics-in-decompiled-buffers)
+       (lsp-proxy--decompiled-file-name-to-uri (or file buffer-file-name))
+       t))
+
 (defvar-local lsp-proxy-diagnostics--flycheck-enabled nil
   "Non-nil when flycheck integration has been enabled in this buffer.")
 
@@ -95,10 +117,15 @@ of diagnostics are displayed due to the limit."
   "Handle publish diagnostics notification MSG."
   (lsp-proxy--dbind (:uri uri :diagnostics diagnostics) msg
     (let ((filepath (lsp-proxy--uri-to-path uri)))
-      (if (file-exists-p filepath)
-          (lsp-proxy-diagnostics--handle-publish-diagnostics-optimized filepath diagnostics)
-        (if (> lsp-proxy-log-level 1)
-            (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
+      (cond
+       ;; Drop before storing, not just before rendering: the workspace map feeds
+       ;; `lsp-proxy-diagnostics-request-all' and the project diagnostics buffer,
+       ;; which would otherwise list entries for a file nobody can act on.
+       ((lsp-proxy-diagnostics--suppressed-p filepath) nil)
+       ((file-exists-p filepath)
+        (lsp-proxy-diagnostics--handle-publish-diagnostics-optimized filepath diagnostics))
+       ((> lsp-proxy-log-level 1)
+        (lsp-proxy--error "The file not found %s (uri=%s)" filepath uri))))))
 
 (defun lsp-proxy-diagnostics--handle-publish-diagnostics-optimized (filepath diagnostics)
   "Optimized diagnostics handling for FILEPATH with DIAGNOSTICS.
@@ -344,7 +371,9 @@ eglot functions."
 (defun lsp-proxy-diagnostics--request-pull-diagnostics (&optional full)
   "Request pull diagnostics if supported.
 When FULL is non-nil, request all diagnostics without limit."
-  (when (or full (and (boundp 'lsp-proxy--support-pull-diagnostic) lsp-proxy--support-pull-diagnostic))
+  (when (and (not (lsp-proxy-diagnostics--suppressed-p))
+             (or full (and (boundp 'lsp-proxy--support-pull-diagnostic)
+                           lsp-proxy--support-pull-diagnostic)))
     (lsp-proxy--async-request
      'textDocument/diagnostic
      (lsp-proxy--build-params
@@ -463,25 +492,29 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
 
 (defun lsp-proxy--diagnostics-setup ()
   "Setup diagnostics."
-  (cond
-   ((or (and (eq lsp-proxy-diagnostics-provider :auto)
-             (functionp 'flycheck-mode))
-        (and (eq lsp-proxy-diagnostics-provider :flycheck)
-             (or (functionp 'flycheck-mode)
-                 (user-error "The lsp-proxy-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
-    (require 'flycheck nil t)
-    (lsp-proxy-diagnostics-flycheck-enable))
-   ((or (eq lsp-proxy-diagnostics-provider :auto)
-        (eq lsp-proxy-diagnostics-provider :flymake)
-        (eq lsp-proxy-diagnostics-provider t))
-    (require 'flymake)
-    (lsp-proxy-diagnostics-flymake-enable))
-   ((not (eq lsp-proxy-diagnostics-provider :none))
-    (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
-   (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
+  ;; Skip enabling a renderer at all rather than enabling one and filtering
+  ;; later: flycheck validates `default-directory' with `file-exists-p' when a
+  ;; check starts, and these buffers have a virtual one.
+  (unless (lsp-proxy-diagnostics--suppressed-p)
+    (cond
+     ((or (and (eq lsp-proxy-diagnostics-provider :auto)
+               (functionp 'flycheck-mode))
+          (and (eq lsp-proxy-diagnostics-provider :flycheck)
+               (or (functionp 'flycheck-mode)
+                   (user-error "The lsp-proxy-diagnostics-provider is set to :flycheck but flycheck is not installed?"))))
+      (require 'flycheck nil t)
+      (lsp-proxy-diagnostics-flycheck-enable))
+     ((or (eq lsp-proxy-diagnostics-provider :auto)
+          (eq lsp-proxy-diagnostics-provider :flymake)
+          (eq lsp-proxy-diagnostics-provider t))
+      (require 'flymake)
+      (lsp-proxy-diagnostics-flymake-enable))
+     ((not (eq lsp-proxy-diagnostics-provider :none))
+      (lsp-proxy--warn "%s" "Unable to autoconfigure flycheck/flymake. The diagnostics won't be rendered."))
+     (t (lsp-proxy--warn "%s" "Unable to configuration flycheck. The diagnostics won't be rendered.")))
 
-  ;; Check for existing diagnostics when setting up
-  (lsp-proxy-diagnostics--check-existing-diagnostics))
+    ;; Check for existing diagnostics when setting up
+    (lsp-proxy-diagnostics--check-existing-diagnostics)))
 
 (defun lsp-proxy-diagnostics--check-existing-diagnostics ()
   "Check and render diagnostics for current buffer when diagnostics are set up."

@@ -146,6 +146,11 @@ pub struct Document {
 
     pub previous_diagnostic_id: Option<String>,
 
+    /// Monotonic counter of pull-diagnostic batches issued for this document.
+    pull_generation: u64,
+    /// Generation of the most recently applied pull-diagnostic response.
+    applied_pull_generation: u64,
+
     // If the document is a Org file, contains virtual document information
     pub virtual_doc: Option<VirtualDocumentInfo>,
     pub(crate) language_servers_of_virtual_doc: HashMap<LanguageServerName, VirtualDocServerEntry>,
@@ -174,6 +179,8 @@ impl Document {
             version: 0,
             diagnostics: None,
             previous_diagnostic_id: None,
+            pull_generation: 0,
+            applied_pull_generation: 0,
             virtual_doc: None,
             language_servers_of_virtual_doc: HashMap::new(),
             is_org_file,
@@ -199,6 +206,31 @@ impl Document {
     /// A Url to file path. `None` for virtual documents; see [`uri_to_local_path`].
     pub fn path(&self) -> Option<PathBuf> {
         uri_to_local_path(self.uri())
+    }
+
+    /// Reserve a generation for a pull-diagnostic batch about to be issued.
+    pub fn next_pull_generation(&mut self) -> u64 {
+        self.pull_generation += 1;
+        self.pull_generation
+    }
+
+    /// Whether a pull-diagnostic response tagged GENERATION may be applied.
+    ///
+    /// Pull requests are idle-debounced, but the debounce is shorter than a slow
+    /// server's turnaround, so two batches can be in flight at once. Responses are
+    /// then not guaranteed to arrive in issue order, and without this guard the
+    /// older batch's result would overwrite the newer one and stay until the next
+    /// idle tick.
+    ///
+    /// Rejects only *strictly older* generations: one batch issues a request per
+    /// language server and they all share a generation, so several responses
+    /// legitimately carry the same value.
+    pub fn accept_pull_generation(&mut self, generation: u64) -> bool {
+        if generation < self.applied_pull_generation {
+            return false;
+        }
+        self.applied_pull_generation = generation;
+        true
     }
 
     pub fn get_server_capabilities(&self) -> CustomServerCapabilitiesParams {
@@ -545,6 +577,65 @@ mod tests {
 
     fn path_of(uri: &str) -> Option<PathBuf> {
         uri_to_local_path(&Url::parse(uri).expect("valid url"))
+    }
+
+    fn doc(uri: &str) -> super::Document {
+        super::Document::new(&Url::parse(uri).unwrap(), None, None)
+    }
+
+    #[test]
+    fn pull_generations_are_monotonic() {
+        let mut d = doc("file:///tmp/a.java");
+        assert_eq!(d.next_pull_generation(), 1);
+        assert_eq!(d.next_pull_generation(), 2);
+        assert_eq!(d.next_pull_generation(), 3);
+    }
+
+    #[test]
+    fn in_order_pull_responses_are_all_accepted() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2) = (d.next_pull_generation(), d.next_pull_generation());
+        assert!(d.accept_pull_generation(g1));
+        assert!(d.accept_pull_generation(g2));
+    }
+
+    /// The bug this guard exists for: two batches in flight, the newer one lands
+    /// first, and the older response must not overwrite it.
+    #[test]
+    fn out_of_order_pull_response_is_rejected() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2) = (d.next_pull_generation(), d.next_pull_generation());
+        assert!(d.accept_pull_generation(g2), "newer batch lands first");
+        assert!(
+            !d.accept_pull_generation(g1),
+            "older batch must not overwrite the newer result"
+        );
+    }
+
+    /// One batch issues a request per language server, all sharing a generation,
+    /// so repeats of the same value must keep being accepted.
+    #[test]
+    fn same_generation_accepted_repeatedly_for_multiple_servers() {
+        let mut d = doc("file:///tmp/a.java");
+        let g = d.next_pull_generation();
+        assert!(d.accept_pull_generation(g));
+        assert!(d.accept_pull_generation(g));
+        assert!(d.accept_pull_generation(g));
+    }
+
+    /// A rejected batch must not advance the applied watermark, or the batch that
+    /// legitimately follows it would be rejected too.
+    #[test]
+    fn rejection_does_not_advance_the_watermark() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2, g3) = (
+            d.next_pull_generation(),
+            d.next_pull_generation(),
+            d.next_pull_generation(),
+        );
+        assert!(d.accept_pull_generation(g2));
+        assert!(!d.accept_pull_generation(g1));
+        assert!(d.accept_pull_generation(g3), "g3 still accepted after g1 was rejected");
     }
 
     #[test]

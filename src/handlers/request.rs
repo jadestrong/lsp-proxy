@@ -1248,8 +1248,29 @@ pub(crate) async fn handle_pull_diagnostic_response(
     result: lsp_types::DocumentDiagnosticReportResult,
     document_id: DocumentId,
     limit_diagnostics: bool,
+    pull_generation: u64,
 ) {
     job::dispatch(move |editor| {
+        // Discard the whole response if a newer pull batch has already been applied
+        // for this document; see `Document::accept_pull_generation`.
+        //
+        // This has to happen before anything is written, `previous_diagnostic_id`
+        // included: recording the resultId of a report we then threw away would let
+        // the next pull send it as `previousResultId`, the server could legitimately
+        // answer `Unchanged`, and those diagnostics would never arrive at all.
+        //
+        // `related_documents` is skipped along with it — those reports come from the
+        // same superseded analysis.
+        // A missing document is not a supersession — fall through so the report's
+        // `related_documents` are still applied to whatever is still open, as before.
+        if let Some(doc) = editor.document_mut(document_id) {
+            if !doc.accept_pull_generation(pull_generation) {
+                log::debug!(
+                    "Discarding pull diagnostics for document {document_id}: batch {pull_generation} was superseded"
+                );
+                return;
+            }
+        }
         let related_documents = match result {
             lsp_types::DocumentDiagnosticReportResult::Report(report) => {
                 let (result_id, related_documents, diagnostics) = match report {
