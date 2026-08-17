@@ -769,6 +769,11 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
             }
+            // Matched by method before the generic path below, which resolves a
+            // document first: installing a server is not about any open file.
+            Message::Request(req) if req.method == lsp_ext::InstallJavaServer::METHOD => {
+                self.handle_install_java_server(req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -934,6 +939,75 @@ impl Application {
         .finish();
 
         Ok(())
+    }
+
+    /// Install the IntelliJ language server, reporting progress as `$/progress`.
+    ///
+    /// Spawned rather than awaited: the transfer is ~370 MB, and the main loop must
+    /// keep serving the editor throughout.
+    fn handle_install_java_server(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallJavaServerParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installJavaServer params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let version = params.version.clone();
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone());
+            let outcome =
+                crate::java_install::install(&install_dir, version.as_deref(), force, progress)
+                    .await;
+
+            let response = match outcome {
+                Ok((launcher, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallJavaServerResult {
+                        launcher_path: launcher.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    id,
+                    jsonrpc::ErrorCode::InternalError,
+                    // `{:#}` includes the anyhow context chain, which is where the
+                    // actionable part lives (missing tool, checksum, wrong product).
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    /// Progress callback that pushes each update to the editor's echo area.
+    ///
+    /// Deliberately not `$/progress`: the editor files that by project root and only
+    /// renders it in a buffer that is both inside that project and has the minor mode
+    /// on, so an install started from anywhere else showed nothing at all.
+    fn install_progress_reporter(sender: Sender<Message>) -> crate::java_install::ProgressFn {
+        Box::new(move |percentage: Option<u32>, message: String| {
+            let notification = msg::Notification::new(
+                lsp_ext::InstallProgress::METHOD.to_string(),
+                lsp_ext::InstallProgressParams {
+                    message,
+                    percentage,
+                },
+            );
+            let _ = sender.send(notification.into());
+        })
     }
 
     fn handle_workspace_restart(&mut self, req: &msg::Request) {

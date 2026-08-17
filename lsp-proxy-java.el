@@ -539,6 +539,141 @@ what makes this a file being created rather than an empty file being browsed."
                 (template (lsp-proxy-java--select-template templates)))
       (lsp-proxy-java--request-template template))))
 
+;;; Server installation
+;;
+;; The IntelliJ backend is a required dependency of this file, so it needs an
+;; install path. The download itself lives in the proxy (`src/java_install.rs`):
+;; the archive is ~370 MB, and Rust already has tokio (so the editor stays
+;; responsive) plus an established `$/progress` pipeline that puts a percentage in
+;; the mode line. Everything below is the thin client half.
+;;
+;; The proxy's *own* installer stays in Emacs Lisp (`lsp-proxy-install.el`) — that
+;; one cannot run in the proxy, which does not exist yet when it runs.
+
+(defcustom lsp-proxy-java-server-install-dir
+  (expand-file-name "servers/intellij/" lsp-proxy-install-dir)
+  "Directory holding managed IntelliJ language server installs.
+Each build lands in its own `<version>/' subdirectory, so several can
+coexist and a downgrade is just a path change."
+  :type 'directory
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-server-version nil
+  "IntelliJ server build to install, e.g. \"263.2689.0\", or nil for the latest.
+
+Nil is preferable: the latest build is resolved from JetBrains' own
+extension metadata, which supplies the download URL *and* its checksum.
+A pinned version has to have its URL constructed instead, so it cannot be
+checksum-verified and the archive name is only confirmed for some
+platforms."
+  :type '(choice (const :tag "Latest" nil) string)
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java-server-launcher ()
+  "Return the newest managed IntelliJ server launcher, or nil if none.
+Useful for pointing a `languages.toml' entry at the managed install."
+  (let ((exe (if (eq system-type 'windows-nt) "intellij-server.exe" "intellij-server")))
+    (car
+     (sort
+      (seq-filter
+       #'file-executable-p
+       ;; The proxy flattens each install to `<version>/bin/<exe>', so the depth is
+       ;; fixed regardless of how the archive itself was packed.
+       (mapcar (lambda (dir) (expand-file-name (concat "bin/" exe) dir))
+               (when (file-directory-p lsp-proxy-java-server-install-dir)
+                 (directory-files lsp-proxy-java-server-install-dir t "\\`[0-9]" t))))
+      ;; Newest build first, comparing components numerically so that 263.10.0
+      ;; sorts above 263.9.0 (string order gets that backwards).
+      (lambda (a b)
+        (lsp-proxy-java--version<
+         (lsp-proxy-java--version-key b)
+         (lsp-proxy-java--version-key a)))))))
+
+(defun lsp-proxy-java-server-bin-directory ()
+  "Return the `bin/' directory of the newest managed IntelliJ server, or nil.
+
+Prepended to the proxy's PATH at startup so `languages.toml' can name the server
+plainly:
+
+  [language-server.intellij]
+  command = \"intellij-server\"
+  args = [\"--stdio\"]
+
+That keeps absolute, machine-specific paths out of the config entirely."
+  (when-let* ((launcher (lsp-proxy-java-server-launcher)))
+    (file-name-directory launcher)))
+
+(defun lsp-proxy-java--version-key (launcher)
+  "Return a comparable list of integers for LAUNCHER's version directory.
+LAUNCHER is `<version>/bin/<exe>', so the version sits two levels up."
+  (let ((dir launcher))
+    (dotimes (_ 2)
+      (setq dir (directory-file-name (file-name-directory dir))))
+    (mapcar #'string-to-number
+            (split-string (file-name-nondirectory dir) "\\." t))))
+
+(defun lsp-proxy-java--version< (a b)
+  "Return non-nil when version key A orders before B.
+Missing components count as zero, so 263.1 precedes 263.1.1."
+  (catch 'done
+    (while (or a b)
+      (let ((x (or (pop a) 0))
+            (y (or (pop b) 0)))
+        (unless (= x y)
+          (throw 'done (< x y)))))
+    nil))
+
+;;;###autoload
+(defun lsp-proxy-java-install-server (&optional force)
+  "Download and install the IntelliJ language server used for Java and Kotlin.
+
+Installs `lsp-proxy-java-server-version', or the latest build when that is nil.
+With a prefix argument FORCE, reinstall even if the version is already present.
+
+The work happens in the proxy; progress is reported in the echo area while it
+runs.  On success the launcher path is reported — point your `languages.toml'
+at it."
+  (interactive "P")
+  (lsp-proxy--ensure-connection)
+  (let ((dir (file-name-as-directory
+              (expand-file-name lsp-proxy-java-server-install-dir))))
+    (message "[lsp-proxy] Installing IntelliJ server into %s ..." dir)
+    (jsonrpc-async-request
+     lsp-proxy--connection 'emacs/installJavaServer
+     ;; The proxy wraps every request in a `{uri, context, params}' envelope and
+     ;; reads the payload out of the nested `params'; a flat payload lands in
+     ;; `req.params.params' as null. Built by hand rather than with
+     ;; `lsp-proxy--build-params', which derives a `uri' from `buffer-file-name' —
+     ;; installing a server is not about any open file. `uri' is optional server-side.
+     (list
+      :params
+      (append
+       (list :installDir dir
+             :force (if force t :json-false))
+       ;; Omit the key rather than encoding a null: this connection serializes with
+       ;; `:null-object nil', so a `:null' keyword is not a valid JSON value at all.
+       ;; The proxy's `version' field is `#[serde(default)]', so absent means latest.
+       (when lsp-proxy-java-server-version
+         (list :version lsp-proxy-java-server-version))))
+     :success-fn
+     (lambda (result)
+       (let ((path (plist-get result :launcherPath))
+             (version (plist-get result :version)))
+         (if (eq (plist-get result :alreadyInstalled) t)
+             (message "[lsp-proxy] IntelliJ server %s already installed: %s" version path)
+           ;; The proxy inherits PATH at startup, so a freshly installed server only
+           ;; becomes findable after a restart.
+           (message "[lsp-proxy] Installed IntelliJ server %s. Run M-x lsp-proxy-restart to use it (%s)"
+                    version path))))
+     :error-fn
+     (lambda (err)
+       (lsp-proxy--error "IntelliJ server install failed: %s"
+                         (or (plist-get err :message) err)))
+     :timeout-fn #'ignore
+     ;; The transfer is hundreds of megabytes; the default request timeout is far
+     ;; too short for it.
+     :timeout 3600)))
+
 ;;; Setup
 
 (add-to-list 'file-name-handler-alist

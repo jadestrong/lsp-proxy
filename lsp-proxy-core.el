@@ -307,6 +307,26 @@ Only sends requests if servers are available."
 
 ;;; Connection
 
+(defun lsp-proxy--managed-server-path-environment ()
+  "Return `process-environment' with managed language servers on PATH.
+
+Servers this package installs itself live in versioned directories no
+user would want to name in `languages.toml'.  Putting their `bin/' on the
+proxy's PATH instead means a config entry can just say
+`command = \"intellij-server\"' and the proxy's own `which' lookup finds it.
+
+PATH is fixed when the process starts, so a server installed afterwards is only
+picked up on the next `lsp-proxy-restart'."
+  (let ((dirs (delq nil (list (when (fboundp 'lsp-proxy-java-server-bin-directory)
+                                (lsp-proxy-java-server-bin-directory))))))
+    (if (null dirs)
+        process-environment
+      (cons (concat "PATH="
+                    (mapconcat (lambda (d) (directory-file-name d)) dirs path-separator)
+                    path-separator
+                    (or (getenv "PATH") ""))
+            process-environment))))
+
 (defun lsp-proxy--make-connection ()
   "Establish proxy jsonrpc connection."
   (let ((make-fn (apply-partially
@@ -318,7 +338,7 @@ Only sends requests if servers are available."
                   :process (let ((process-environment
                                   (cons (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
                                                 lsp-proxy-remote-binary-path)
-                                        process-environment)))
+                                        (lsp-proxy--managed-server-path-environment))))
                               (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file
@@ -365,6 +385,15 @@ Only sends requests if servers are available."
   (when  (eql method 'window/showMessage)
     (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
+  ;; Progress for a long-running install. Reported on its own channel rather than
+  ;; `$/progress' because that one is filed by project root and only rendered in a
+  ;; buffer inside that project with the minor mode on — an install can be started
+  ;; from anywhere, so it needs somewhere always visible.
+  (when (eql method 'emacs/installProgress)
+    (lsp-proxy--dbind (:message message :percentage percentage) msg
+      (message "[lsp-proxy] %s" (if percentage
+                                    (format "%s (%d%%)" message percentage)
+                                  message))))
   (when (eql method 'emacs/serverCapabilities)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters

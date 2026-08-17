@@ -70,6 +70,72 @@ impl Request for WorkspaceRestart {
     const METHOD: &'static str = "emacs/workspaceRestart";
 }
 
+// emacs/installJavaServer
+//
+// Downloads the JetBrains IntelliJ language server, which `lsp-proxy-java`
+// requires. Lives here rather than in Emacs Lisp because the proxy already has
+// tokio (so the ~370 MB download does not block the editor) and an established
+// `$/progress` pipeline; the Emacs side is only a thin command.
+//
+// The *proxy's own* installer stays in Emacs Lisp on purpose — that one cannot
+// run here, since the proxy does not exist yet when it runs.
+#[derive(Debug)]
+pub enum InstallJavaServer {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaServerParams {
+    /// Where to place `<version>/bin/intellij-server`. Chosen by the client so the
+    /// location stays next to everything else Emacs manages.
+    pub install_dir: String,
+    /// Pin a build (e.g. "263.2689.0"); `None` resolves the latest via Open VSX.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Reinstall even when this version is already present.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaServerResult {
+    pub launcher_path: String,
+    pub version: String,
+    /// True when the requested version was already installed and nothing was
+    /// downloaded.
+    pub already_installed: bool,
+}
+
+impl Request for InstallJavaServer {
+    type Params = InstallJavaServerParams;
+    type Result = InstallJavaServerResult;
+    const METHOD: &'static str = "emacs/installJavaServer";
+}
+
+// emacs/installProgress
+//
+// Progress for a long install, reported on its own channel rather than as
+// `$/progress`. The editor files `$/progress` by project root and only renders it
+// for a buffer that is both in that project and has `lsp-proxy-mode' on, so a
+// several-hundred-megabyte download started from anywhere else would be entirely
+// silent. This goes to the echo area instead, which is visible from any buffer.
+#[derive(Debug)]
+pub enum InstallProgress {}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgressParams {
+    pub message: String,
+    /// Completion percentage when the phase has a measurable size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentage: Option<u32>,
+}
+
+impl Notification for InstallProgress {
+    type Params = InstallProgressParams;
+    const METHOD: &'static str = "emacs/installProgress";
+}
+
 // emacs/getFiles
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -463,4 +529,87 @@ impl Request for ForwardRequest {
     type Params = ForwardRequestParams;
     type Result = serde_json::Value;
     const METHOD: &'static str = "emacs/forwardRequest";
+}
+
+#[cfg(test)]
+mod install_java_server_tests {
+    use super::InstallJavaServerParams;
+
+    /// The client omits `version` entirely rather than sending JSON null: its
+    /// jsonrpc connection serializes with `:null-object nil`, so a `:null` keyword
+    /// is not a valid value there. `#[serde(default)]` is what makes the absent key
+    /// mean "latest".
+    #[test]
+    fn version_may_be_absent() {
+        let json = r#"{"installDir":"/tmp/i/","force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+    }
+
+    #[test]
+    fn version_may_be_present_or_explicitly_null() {
+        let pinned = r#"{"installDir":"/tmp/i/","version":"263.2689.0","force":true}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(pinned).unwrap();
+        assert_eq!(params.version.as_deref(), Some("263.2689.0"));
+        assert!(params.force);
+
+        // Tolerate an explicit null too, so a future client need not special-case it.
+        let nulled = r#"{"installDir":"/tmp/i/","version":null,"force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(nulled).unwrap();
+        assert_eq!(params.version, None);
+    }
+
+    /// The full wire shape, end to end.
+    ///
+    /// The proxy wraps requests in a `{uri, context, params}` envelope and the
+    /// payload lives in the nested `params`. Deserializing the payload struct
+    /// alone hides that: a flat payload still parses in isolation while failing
+    /// for real with "invalid type: null". So this parses the envelope exactly as
+    /// it arrives on stdin, then the payload out of it.
+    #[test]
+    fn parses_the_real_request_envelope() {
+        let wire = r#"{
+          "id": 3,
+          "method": "emacs/installJavaServer",
+          "params": {
+            "params": {
+              "installDir": "/Users/u/.emacs.d/.local/cache/lsp-proxy/servers/intellij/",
+              "force": false
+            }
+          }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        let params: InstallJavaServerParams = serde_json::from_value(req.params.params).unwrap();
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+        assert!(params.install_dir.ends_with("/servers/intellij/"));
+    }
+
+    /// A payload flattened into the envelope (the bug) must be recognisable rather
+    /// than silently arriving as defaults.
+    #[test]
+    fn flat_payload_is_rejected() {
+        let wire = r#"{
+          "id": 3,
+          "method": "emacs/installJavaServer",
+          "params": { "installDir": "/tmp/i/", "force": false }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        assert!(
+            req.params.params.is_null(),
+            "a flat payload leaves the nested params null"
+        );
+        assert!(serde_json::from_value::<InstallJavaServerParams>(req.params.params).is_err());
+    }
+
+    /// Only `installDir` is genuinely required; the rest default.
+    #[test]
+    fn only_install_dir_is_required() {
+        let params: InstallJavaServerParams =
+            serde_json::from_str(r#"{"installDir":"/tmp/i/"}"#).unwrap();
+        assert_eq!(params.install_dir, "/tmp/i/");
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+    }
 }
