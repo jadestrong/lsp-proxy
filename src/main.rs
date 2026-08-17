@@ -13,6 +13,7 @@ mod editor;
 mod error;
 mod fuzzy;
 mod handlers;
+mod java_install;
 mod job;
 mod large_file_manager;
 mod logging;
