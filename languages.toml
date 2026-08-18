@@ -631,7 +631,6 @@ eulaHash = "34d850193ee04897"
 #   defaultSdk = "/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home"
 # (maven.compiler.target=1.8 from the project's pom still fixes the language
 #  level to 8 on import; the SDK only supplies the classpath + sources.)
-# defaultSdk = "/Users/zhangyuqiang/Documents/Github/intellij-server/server/jbr/Contents/Home"
-defaultSdk = "/Users/zhangyuqiang/.sdkman/candidates/java/current"
+# defaultSdk = ""
 buildTools = {}
 projects = []
