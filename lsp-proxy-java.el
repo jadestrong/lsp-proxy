@@ -677,6 +677,145 @@ at it."
      ;; too short for it.
      :timeout 3600)))
 
+;;; Import log
+;;
+;; `intellij/importLog' reports the build tool (Maven/Gradle/Bazel) resolving the
+;; project. It gets its own buffer rather than going to `*lsp-proxy-log*' because it
+;; is a discrete operation whose outcome the user has to act on: until the import
+;; succeeds nothing resolves, and the reason it failed is only ever in these lines.
+
+(defcustom lsp-proxy-java-import-log-max-lines 2000
+  "Maximum number of lines to keep in the import log buffer.
+Nil disables trimming."
+  :type '(choice (const :tag "Unlimited" nil) integer)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-import-log-auto-display 'on-failure
+  "When to show the import log buffer without being asked.
+
+VS Code reveals its Build panel both when an import starts and when it fails,
+which is unobtrusive there because the panel is a docked tab. In Emacs the
+equivalent steals a window, so starting an import — which happens on every
+project open — is a poor trigger. A failure is worth interrupting for, since
+otherwise nothing tells the user why no symbol resolves."
+  :type '(choice (const :tag "Never" nil)
+                 (const :tag "When an import fails" on-failure)
+                 (const :tag "When an import starts or fails" on-start))
+  :group 'lsp-proxy)
+
+(defconst lsp-proxy-java-import-log-buffer-name "*lsp-proxy-java-import*"
+  "Name of the buffer holding build-tool import output.")
+
+(defvar lsp-proxy-java--import-log-root nil
+  "Workspace root of the entry written to the import log most recently.
+Used to insert a heading when output starts coming from a different module.")
+
+(defvar-keymap lsp-proxy-java-import-log-mode-map
+  :doc "Keymap for `lsp-proxy-java-import-log-mode'."
+  ;; Deliberately not on `g': in `special-mode' that key means revert, and erasing
+  ;; the only record of why an import failed is a poor thing to do on a reflex.
+  "C-c C-k" #'lsp-proxy-java-import-log-clear)
+
+(define-derived-mode lsp-proxy-java-import-log-mode special-mode "Import Log"
+  "Major mode for the build-tool import log.
+
+\\{lsp-proxy-java-import-log-mode-map}"
+  (buffer-disable-undo)
+  (setq-local window-point-insertion-type t))
+
+(defun lsp-proxy-java--import-log-buffer ()
+  "Return the import log buffer, creating it if necessary."
+  (or (get-buffer lsp-proxy-java-import-log-buffer-name)
+      (with-current-buffer (get-buffer-create lsp-proxy-java-import-log-buffer-name)
+        (lsp-proxy-java-import-log-mode)
+        (current-buffer))))
+
+(defun lsp-proxy-java--import-log-insert (text root)
+  "Append TEXT to the import log, attributing it to workspace ROOT."
+  (with-current-buffer (lsp-proxy-java--import-log-buffer)
+    (let ((inhibit-read-only t)
+          ;; Only follow the output in windows whose point is already at the end,
+          ;; so a user reading back through a long import is not yanked away.
+          (at-end (mapcar (lambda (win) (cons win (= (window-point win) (point-max))))
+                          (get-buffer-window-list nil nil t))))
+      (save-excursion
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        ;; A heading whenever the module changes: in a monorepo several imports run
+        ;; and their lines would otherwise be indistinguishable.
+        (when (and root (not (equal root lsp-proxy-java--import-log-root)))
+          (insert (propertize (format "%s--- %s ---\n"
+                                      (if (bobp) "" "\n")
+                                      (abbreviate-file-name root))
+                              'face 'font-lock-comment-face)))
+        (insert text "\n")
+        (setq lsp-proxy-java--import-log-root (or root lsp-proxy-java--import-log-root))
+        (when (integerp lsp-proxy-java-import-log-max-lines)
+          (let ((excess (- (line-number-at-pos (point-max))
+                           lsp-proxy-java-import-log-max-lines)))
+            (when (> excess 0)
+              (goto-char (point-min))
+              (forward-line excess)
+              (delete-region (point-min) (point))))))
+      (dolist (entry at-end)
+        (when (cdr entry)
+          (set-window-point (car entry) (point-max)))))))
+
+(defun lsp-proxy-java--handle-import-log (msg)
+  "Render an `intellij/importLog' notification MSG."
+  (lsp-proxy--dbind (:type type :message message :tool tool
+                     :failed failed :succeeded succeeded :started started
+                     :rootPath root)
+      msg
+    (let ((failed (and failed (not (eq failed :json-false))))
+          (succeeded (and succeeded (not (eq succeeded :json-false))))
+          (started (and started (not (eq started :json-false)))))
+      (cond
+       (started
+        ;; Carries no message worth showing; it only marks the beginning.
+        (lsp-proxy-java--import-log-insert
+         (propertize (format "%s import started" (or tool "Build"))
+                     'face 'font-lock-comment-face)
+         root)
+        (when (eq lsp-proxy-java-import-log-auto-display 'on-start)
+          (lsp-proxy-java-open-import-log)))
+       (t
+        (lsp-proxy-java--import-log-insert
+         (if type (lsp-proxy--propertize message type) message)
+         root)
+        (cond
+         (failed
+          (when (memq lsp-proxy-java-import-log-auto-display '(on-start on-failure))
+            (lsp-proxy-java-open-import-log))
+          ;; The entry point VS Code puts in its status bar; here the echo area is
+          ;; the only place guaranteed to be visible from any buffer.
+          (lsp-proxy--warn "%s import failed. See `%s' (M-x lsp-proxy-java-open-import-log)."
+                           (or tool "Build")
+                           lsp-proxy-java-import-log-buffer-name))
+         (succeeded
+          (lsp-proxy--info "%s import finished." (or tool "Build")))))))))
+
+;;;###autoload
+(defun lsp-proxy-java-open-import-log ()
+  "Display the build-tool import log."
+  (interactive)
+  (let ((buffer (lsp-proxy-java--import-log-buffer)))
+    (with-current-buffer buffer
+      (when (= (buffer-size) 0)
+        (let ((inhibit-read-only t))
+          (insert (propertize
+                   "No import output yet.\n\nThe IntelliJ language server writes here while Maven, Gradle or Bazel\nresolves the project.\n"
+                   'face 'font-lock-comment-face)))))
+    (display-buffer buffer)))
+
+(defun lsp-proxy-java-import-log-clear ()
+  "Erase the import log."
+  (interactive)
+  (with-current-buffer (lsp-proxy-java--import-log-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer))
+    (setq lsp-proxy-java--import-log-root nil)))
+
 ;;; Setup
 
 (add-to-list 'file-name-handler-alist
