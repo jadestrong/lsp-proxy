@@ -149,6 +149,52 @@ impl Notification for InstallProgress {
     const METHOD: &'static str = "emacs/installProgress";
 }
 
+// intellij/importLog
+//
+// Build-tool import progress from the IntelliJ language server (Maven/Gradle/Bazel
+// resolving a project). Mirrors the `ImportLogParams` interface in the JetBrains
+// VS Code extension's `lspClient.ts`.
+//
+// Kept separate from `window/logMessage`: an import is a discrete, long operation
+// whose outcome the user acts on (a failed import means no symbols resolve), so it
+// gets its own buffer rather than being interleaved with general server chatter.
+#[derive(Debug)]
+pub enum ImportLog {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportLogParams {
+    /// `lsp_types::MessageType`: 1 = error, 2 = warning, 3 = info.
+    ///
+    /// Optional because losing a terminal `failed` event to a strict-parse error
+    /// would be worse than rendering one line without a severity face.
+    #[serde(rename = "type", default)]
+    pub typ: Option<u8>,
+    #[serde(default)]
+    pub message: String,
+    /// Build-tool display name, e.g. "Maven" / "Gradle" / "Bazel". Set on the
+    /// `started` and `failed` events.
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default)]
+    pub succeeded: bool,
+    /// Marks the beginning of an import; carries no message worth showing.
+    #[serde(default)]
+    pub started: bool,
+    /// Filled in by the proxy, not the server: which workspace root this import
+    /// belongs to. A monorepo runs one import per module, and their lines would
+    /// otherwise interleave in one buffer with no way to tell them apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_path: Option<String>,
+}
+
+impl Notification for ImportLog {
+    type Params = ImportLogParams;
+    const METHOD: &'static str = "intellij/importLog";
+}
+
 // emacs/getFiles
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -542,6 +588,90 @@ impl Request for ForwardRequest {
     type Params = ForwardRequestParams;
     type Result = serde_json::Value;
     const METHOD: &'static str = "emacs/forwardRequest";
+}
+
+#[cfg(test)]
+mod import_log_tests {
+    use super::{ImportLog, ImportLogParams};
+    use lsp_types::notification::Notification;
+
+    /// The method the JetBrains server actually sends. Getting this wrong means the
+    /// notification keeps being dropped as unhandled, which is the bug being fixed.
+    #[test]
+    fn method_matches_the_server() {
+        assert_eq!(ImportLog::METHOD, "intellij/importLog");
+    }
+
+    /// A `started` event as the server sends it: no `tool` guarantee, no message.
+    #[test]
+    fn parses_started_event() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"type":3,"message":"","started":true,"tool":"Maven"}"#)
+                .unwrap();
+        assert!(p.started);
+        assert!(!p.failed);
+        assert!(!p.succeeded);
+        assert_eq!(p.tool.as_deref(), Some("Maven"));
+    }
+
+    /// A plain progress line: only `type` and `message`, every flag absent. Absent
+    /// flags must read as false rather than failing the parse.
+    #[test]
+    fn parses_bare_progress_line() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"type":3,"message":"Resolving dependencies"}"#).unwrap();
+        assert_eq!(p.message, "Resolving dependencies");
+        assert!(!p.started && !p.failed && !p.succeeded);
+        assert_eq!(p.root_path, None);
+    }
+
+    /// A terminal failure must survive even a payload missing `message`; losing it
+    /// would leave the user with no indication that the import broke.
+    #[test]
+    fn failure_survives_a_missing_message() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"failed":true,"tool":"Gradle"}"#).unwrap();
+        assert!(p.failed);
+        assert_eq!(p.message, "");
+        assert_eq!(p.typ, None);
+    }
+
+    /// `rootPath` is the proxy's addition, so it must go out camelCase and must be
+    /// omitted rather than sent as null when unset.
+    #[test]
+    fn root_path_is_added_on_the_way_out() {
+        let mut p: ImportLogParams =
+            serde_json::from_str(r#"{"type":1,"message":"boom","failed":true}"#).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(
+            json.get("rootPath").is_none(),
+            "unset rootPath must be omitted, not null"
+        );
+
+        p.root_path = Some("/repo/initial".to_string());
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["rootPath"], "/repo/initial");
+        // `type` is a reserved word in Rust; make sure the rename survives.
+        assert_eq!(json["type"], 1);
+        assert!(json.get("typ").is_none());
+    }
+
+    /// The dispatch that was returning `Unhandled` before.
+    #[test]
+    fn registry_routes_the_notification() {
+        let serde_json::Value::Object(map) =
+            serde_json::json!({"type": 3, "message": "Importing", "tool": "Maven"})
+        else {
+            unreachable!()
+        };
+        let params = crate::lsp::jsonrpc::Params::Map(map);
+        match crate::registry::NotificationFromServer::parse(ImportLog::METHOD, params) {
+            Ok(crate::registry::NotificationFromServer::ImportLog(p)) => {
+                assert_eq!(p.message, "Importing");
+            }
+            other => panic!("expected ImportLog, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]

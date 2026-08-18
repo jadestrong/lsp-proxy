@@ -451,6 +451,11 @@ picked up on the next `lsp-proxy-restart'."
           ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
           ("report" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
           ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token))))))
+  ;; Build-tool import output. `lsp-proxy-java' is an optional module, so this is
+  ;; guarded the same way its server path lookup is.
+  (when (and (eql method 'intellij/importLog)
+             (fboundp 'lsp-proxy-java--handle-import-log))
+    (lsp-proxy-java--handle-import-log msg))
   (when (eql method 'emacs/remoteDeployNeeded)
     (lsp-proxy-remote--handle-deploy-needed msg))
   (when (eql method 'emacs/remoteDeployProgress)
@@ -483,7 +488,7 @@ server-supplied strings of any number, works with whatever completion UI
 the user has, and `C-g' maps cleanly onto dismissal.  It also blocks
 Emacs, which is what keeps the server from waiting indefinitely: the user
 cannot wander off mid-prompt."
-  (lsp-proxy--dbind (:type type :message message :actions actions) msg
+  (lsp-proxy--dbind (:message message :actions actions) msg
     ;; `actions' arrives as a vector.
     (let* ((actions (append actions nil))
            (choices (mapcar (lambda (action)

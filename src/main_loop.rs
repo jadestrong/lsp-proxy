@@ -524,6 +524,15 @@ impl Application {
                             },
                         )
                     }
+                    NotificationFromServer::ImportLog(mut params) => {
+                        // Stamped with the server's root rather than the editor's project
+                        // root: in a monorepo each module imports separately and the two
+                        // do not agree.
+                        let language_server = language_server!();
+                        params.root_path =
+                            Some(language_server.root_path.to_string_lossy().to_string());
+                        self.send_notification::<lsp_ext::ImportLog>(params)
+                    }
                     NotificationFromServer::ForwardRequest(params) => {
                         let language_server = language_server!();
                         let servers = self

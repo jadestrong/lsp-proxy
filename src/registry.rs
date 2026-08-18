@@ -52,6 +52,7 @@ pub enum NotificationFromServer {
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
     ForwardRequest(lsp_ext::TsserverRequestParams),
+    ImportLog(lsp_ext::ImportLogParams),
 }
 
 impl NotificationFromServer {
@@ -78,6 +79,10 @@ impl NotificationFromServer {
             lsp_ext::TsserverRequest::METHOD => {
                 let params: Vec<lsp_ext::TsserverRequestParams> = params.parse()?;
                 Self::ForwardRequest(params.into_iter().next().unwrap())
+            }
+            lsp_ext::ImportLog::METHOD => {
+                let params: lsp_ext::ImportLogParams = params.parse()?;
+                Self::ImportLog(params)
             }
             _ => {
                 return Err(Error::Unhandled);
