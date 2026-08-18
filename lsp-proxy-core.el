@@ -445,7 +445,40 @@ picked up on the next `lsp-proxy-restart'."
       (lsp-proxy--apply-workspace-edit edit last-command)))
   (when (eql method 'eslint/openDoc)
     (lsp-proxy--dbind (:url url) msg
-      (browse-url url))))
+      (browse-url url)))
+  (when (eql method 'window/showMessageRequest)
+    (lsp-proxy--handle-show-message-request msg)))
+
+(defun lsp-proxy--handle-show-message-request (msg)
+  "Let the user pick one of MSG's actions, per `window/showMessageRequest'.
+
+Returns the chosen `MessageActionItem', or nil.  Nil serializes to JSON
+null, which is how LSP spells \"the user dismissed the prompt\".
+
+The whole original action object is returned rather than a freshly built
+`(:title ...)': the spec lets a server carry extra fields in an action and
+rely on getting them back.
+
+`completing-read' (via `lsp-proxy--completing-read', which detaches the
+prompt from `this-command') is what eglot uses here as well.  It suits arbitrary
+server-supplied strings of any number, works with whatever completion UI
+the user has, and `C-g' maps cleanly onto dismissal.  It also blocks
+Emacs, which is what keeps the server from waiting indefinitely: the user
+cannot wander off mid-prompt."
+  (lsp-proxy--dbind (:type type :message message :actions actions) msg
+    ;; `actions' arrives as a vector.
+    (let* ((actions (append actions nil))
+           (choices (mapcar (lambda (action)
+                              (cons (plist-get action :title) action))
+                            actions)))
+      (when choices
+        (condition-case nil
+            (let ((title (lsp-proxy--completing-read
+                          message
+                          (mapcar #'car choices))))
+              (cdr (assoc title choices)))
+          ;; C-g while choosing is a dismissal, not an error to propagate.
+          (quit nil))))))
 
 ;;; Change tracking
 

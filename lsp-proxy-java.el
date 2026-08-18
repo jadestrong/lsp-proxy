@@ -446,8 +446,11 @@ Reads `lsp-proxy--language', which `lsp-proxy-mode' sets when it attaches."
 A single entry is used without prompting, matching the VSCode extension."
   (cond ((null templates) nil)
         ((null (cdr templates)) (cdar templates))
-        (t (when-let* ((name (completing-read "Select a file template: "
-                                              (mapcar #'car templates) nil t)))
+        ;; Raised from `find-file-hook', so `this-command' is the unrelated
+        ;; find-file command; see `lsp-proxy--completing-read'.
+        (t (when-let* ((name (lsp-proxy--completing-read
+                              "Select a file template: "
+                              (mapcar #'car templates))))
              (cdr (assoc name templates))))))
 
 (defun lsp-proxy-java--template-to-snippet (content)

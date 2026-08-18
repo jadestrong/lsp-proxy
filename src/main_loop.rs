@@ -35,7 +35,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use lsp_types::{notification::Notification, request::Request, LogMessageParams};
+use lsp_types::{notification::Notification, request::Request};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
@@ -331,13 +331,11 @@ impl Application {
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::ShowMessageRequest(params)) => {
-                        log::warn!("unhandled window/showMessageRequest: {params:?}");
-                        let log_message = LogMessageParams {
-                            typ: params.typ,
-                            message: params.message,
-                        };
-                        self.send_notification::<lsp_types::notification::LogMessage>(log_message);
-                        Ok(serde_json::Value::Null)
+                        // Answered asynchronously: the user has to choose first, so the
+                        // reply cannot be produced here. `forward_show_message_request`
+                        // takes ownership of `id` and replies once the editor responds.
+                        self.forward_show_message_request(server_id, id, params);
+                        return;
                     }
                 };
 
@@ -939,6 +937,53 @@ impl Application {
         .finish();
 
         Ok(())
+    }
+
+    /// Ask the editor to present a server's `window/showMessageRequest` and reply
+    /// with whatever the user chose.
+    ///
+    /// The request is deferred rather than answered inline: LSP defines the result as
+    /// the chosen `MessageActionItem`, or `null` when the user dismissed the prompt,
+    /// so answering before asking would mean always reporting "dismissed" — which is
+    /// exactly what the previous log-only implementation did, leaving the server to
+    /// fall back to a default the user never saw.
+    fn forward_show_message_request(
+        &mut self,
+        server_id: usize,
+        server_request_id: crate::msg::RequestId,
+        params: lsp_types::ShowMessageRequestParams,
+    ) {
+        let editor_request_id = self
+            .send_request_returning_id::<lsp_types::request::ShowMessageRequest>(
+                params,
+                Self::on_show_message_response,
+            );
+        self.pending_editor_choices
+            .insert(editor_request_id, (server_id, server_request_id));
+    }
+
+    /// Relay the user's choice back to the language server.
+    ///
+    /// A bare `fn` because that is what `ReqHandler` is; the correlation it needs was
+    /// stashed in `pending_editor_choices`.
+    fn on_show_message_response(&mut self, response: msg::Response) {
+        let Some((server_id, server_request_id)) =
+            self.pending_editor_choices.remove(&response.id)
+        else {
+            warn!("no pending showMessageRequest for response id={:?}", response.id);
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping showMessageRequest reply");
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer showMessageRequest: {error:?}");
+        }
+        // Absent or failed result means the prompt was dismissed, which LSP spells
+        // `null` — not an error.
+        let result = response.result.unwrap_or(Value::Null);
+        tokio::spawn(language_server.reply(server_request_id, Ok(result)));
     }
 
     /// Install the IntelliJ language server, reporting progress as `$/progress`.
