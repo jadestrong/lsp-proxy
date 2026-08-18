@@ -165,6 +165,29 @@ FORMAT and ARGS is the same as for `message'."
   `(-let ((,(lsp-proxy--transform-pattern pattern) ,source))
      ,@body))
 
+(defun lsp-proxy--completing-read (prompt choices)
+  "Read one of CHOICES with PROMPT, requiring a match.
+
+Differs from a bare `completing-read' only in rebinding `this-command'
+first, which matters for prompts we raise outside a command.
+
+Ivy identifies a prompt by its `:caller', and plain `completing-read'
+has no way to pass one, so `ivy-read' falls back to `this-command'.
+Raised from a process filter or a hook, that is whatever unrelated
+command the user last typed, and ivy then applies *its* configuration to
+our candidates: the display transformer from
+`ivy--display-transformers-alist' and the initial input from
+`ivy-initial-inputs-alist'.  With `counsel-M-x' left over there, the
+former reads each candidate as a command name and appends its alias --
+turning an action titled \"Use Gradle\" into \"Use Gradle (nil)\", since
+`symbol-function' of the interned title is nil and nil satisfies
+`symbolp' -- while the latter pre-fills the minibuffer with \"^\".
+
+Binding it to this function is also simply more accurate: the prompt was
+raised by lsp-proxy, not by the last thing the user ran."
+  (let ((this-command 'lsp-proxy--completing-read))
+    (completing-read prompt choices nil t)))
+
 ;;; Path utilities
 
 (defun lsp-proxy--fix-path-casing (path)

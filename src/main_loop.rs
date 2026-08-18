@@ -36,7 +36,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use lsp_types::{notification::Notification, request::Request, LogMessageParams};
+use lsp_types::{notification::Notification, request::Request};
 use serde_json::{json, Value};
 use std::time::Duration;
 use std::{
@@ -353,13 +353,11 @@ impl Application {
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::ShowMessageRequest(params)) => {
-                        log::warn!("unhandled window/showMessageRequest: {params:?}");
-                        let log_message = LogMessageParams {
-                            typ: params.typ,
-                            message: params.message,
-                        };
-                        self.send_notification::<lsp_types::notification::LogMessage>(log_message);
-                        Ok(serde_json::Value::Null)
+                        // Answered asynchronously: the user has to choose first, so the
+                        // reply cannot be produced here. `forward_show_message_request`
+                        // takes ownership of `id` and replies once the editor responds.
+                        self.forward_show_message_request(server_id, id, params);
+                        return;
                     }
                 };
 
