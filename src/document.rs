@@ -246,6 +246,7 @@ impl Document {
             support_hover: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
             has_any_servers: false,
+            workspace_roots: vec![],
         };
 
         let mut has_any_servers = false;
@@ -253,6 +254,11 @@ impl Document {
 
         self.language_servers().for_each(|ls| {
             has_any_servers = true;
+
+            let root = ls.root_path.to_string_lossy().to_string();
+            if !server_capabilities.workspace_roots.contains(&root) {
+                server_capabilities.workspace_roots.push(root);
+            }
 
             // Check text document sync capability
             let sync_kind = ls.get_text_document_sync_kind();
@@ -322,6 +328,7 @@ impl Document {
             support_hover: false,
             text_document_sync_kind: "incremental".to_string(),
             has_any_servers: false,
+            workspace_roots: vec![],
         };
 
         let mut has_any_servers = false;
@@ -330,6 +337,11 @@ impl Document {
         for entry in self.language_servers_of_virtual_doc.values() {
             let ls = &entry.client;
             has_any_servers = true;
+
+            let root = ls.root_path.to_string_lossy().to_string();
+            if !server_capabilities.workspace_roots.contains(&root) {
+                server_capabilities.workspace_roots.push(root);
+            }
 
             let sync_kind = ls.get_text_document_sync_kind();
             if sync_kind == "full" {

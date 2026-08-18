@@ -32,6 +32,19 @@ pub struct CustomServerCapabilitiesParams {
     pub text_document_sync_kind: String, // "full" or "incremental"
     pub support_hover: bool,
     pub has_any_servers: bool,
+    /// Workspace root of every language server serving this document.
+    ///
+    /// A list, not one value: a document can be served by several servers (vtsls +
+    /// eslint + tailwind) whose roots differ, and unlike the booleans above these
+    /// cannot be folded together.
+    ///
+    /// The editor needs them because `$/progress` is filed by server root, while the
+    /// editor's own notion of "the project" comes from project.el. In a monorepo those
+    /// disagree — the server root is the module (where `pom.xml` lives), project.el's
+    /// is the repository (where `.git` lives) — so a lookup keyed on the latter never
+    /// finds progress reported under the former.
+    #[serde(default)]
+    pub workspace_roots: Vec<String>,
 }
 
 impl Notification for CustomServerCapabilities {
@@ -529,6 +542,51 @@ impl Request for ForwardRequest {
     type Params = ForwardRequestParams;
     type Result = serde_json::Value;
     const METHOD: &'static str = "emacs/forwardRequest";
+}
+
+#[cfg(test)]
+mod server_capabilities_tests {
+    use super::CustomServerCapabilitiesParams;
+
+    fn params() -> CustomServerCapabilitiesParams {
+        CustomServerCapabilitiesParams {
+            uri: "file:///w/src/A.java".to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+            support_pull_diagnostic: false,
+            support_inline_completion: false,
+            text_document_sync_kind: "incremental".to_string(),
+            support_hover: false,
+            has_any_servers: true,
+            workspace_roots: vec!["/w/initial".to_string(), "/w/complete".to_string()],
+        }
+    }
+
+    /// The key on the wire must be `workspaceRoots`: the Emacs handler destructures
+    /// by that name, so a snake_case key would silently bind nil and the mode-line
+    /// would go back to showing nothing.
+    #[test]
+    fn serializes_roots_as_camel_case() {
+        let json = serde_json::to_value(params()).unwrap();
+        assert_eq!(
+            json.get("workspaceRoots").and_then(|v| v.as_array()).map(|a| a.len()),
+            Some(2),
+            "actual keys: {:?}",
+            json.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert!(json.get("workspace_roots").is_none());
+    }
+
+    /// Order is preserved, so the editor tries the servers in activation order.
+    #[test]
+    fn round_trips() {
+        let json = serde_json::to_string(&params()).unwrap();
+        let back: CustomServerCapabilitiesParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.workspace_roots, vec!["/w/initial", "/w/complete"]);
+    }
 }
 
 #[cfg(test)]

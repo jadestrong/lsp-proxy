@@ -307,6 +307,16 @@ Only sends requests if servers are available."
 
 ;;; Connection
 
+(defvar-local lsp-proxy--workspace-roots nil
+  "Workspace roots of the language servers serving this buffer.
+
+Kept per buffer because `$/progress' is filed by *server* root, while
+`lsp-proxy-project-root' reports what project.el thinks the project is.  Those
+disagree in a monorepo — the server root is the module, project.el's is the
+repository — so progress must be looked up by these instead.
+
+Normalised on arrival to match the keys used when progress is stored.")
+
 (defun lsp-proxy--managed-server-path-environment ()
   "Return `process-environment' with managed language servers on PATH.
 
@@ -405,7 +415,8 @@ picked up on the next `lsp-proxy-restart'."
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
                        :textDocumentSyncKind text-document-sync-kind
-                       :hasAnyServers has-any-servers)
+                       :hasAnyServers has-any-servers
+                       :workspaceRoots workspace-roots)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (file-exists-p filepath)
@@ -418,6 +429,13 @@ picked up on the next `lsp-proxy-restart'."
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
             (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
+            ;; Normalised here, once, so every later comparison is against the same
+            ;; shape as the keys `$/progress' is filed under.
+            (setq-local lsp-proxy--workspace-roots
+                        (mapcar (lambda (root)
+                                  (lsp-proxy--fix-path-casing
+                                   (lsp-proxy--normalize-path root)))
+                                (append workspace-roots nil)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)

@@ -139,12 +139,34 @@
   (let ((project (gethash project-root-path lsp-proxy--project-hashmap)))
     (and project (not (ht-empty? project)))))
 
+(defun lsp-proxy--progress-tokens-for-buffer ()
+  "Return the work-done tokens of any server serving this buffer, or nil.
+
+Checks each of `lsp-proxy--workspace-roots' in turn and returns the first
+non-empty set, so a buffer served by several servers still shows progress from
+whichever one is busy."
+  (or (seq-some (lambda (root)
+                  (let ((tokens (gethash root lsp-proxy--project-hashmap)))
+                    (and tokens (not (ht-empty? tokens)) tokens)))
+                lsp-proxy--workspace-roots)
+      ;; Capabilities may not have arrived yet; the project root is a reasonable
+      ;; guess for the single-module case, where the two coincide.
+      (when-let* ((project-root (lsp-proxy-project-root)))
+        (gethash (lsp-proxy--fix-path-casing
+                  (lsp-proxy--normalize-path project-root))
+                 lsp-proxy--project-hashmap))))
+
 (defun lsp-proxy--progress-status ()
   "Return the status of the progress for the current workspaces."
   (when lsp-proxy-mode
     (let ((progress-status
-           (when-let* ((project-root (lsp-proxy-project-root))
-                       (tokens (gethash (lsp-proxy--fix-path-casing project-root) lsp-proxy--project-hashmap)))
+           ;; Keyed on the roots of the servers actually serving this buffer, not on
+           ;; `lsp-proxy-project-root': in a monorepo the server root is the module
+           ;; (where `pom.xml' lives) while project.el reports the repository (where
+           ;; `.git' lives), so the latter never matches what progress was stored
+           ;; under. Falls back to the project root for buffers whose capabilities
+           ;; have not arrived yet.
+           (when-let* ((tokens (lsp-proxy--progress-tokens-for-buffer)))
              (unless (ht-empty? tokens)
                (mapconcat
                 (lambda (value)
