@@ -368,6 +368,25 @@ async fn remote_size(url: &str) -> u64 {
         .unwrap_or(0)
 }
 
+/// Percentage the download phase is allowed to occupy.
+///
+/// The phases after it report fixed values (`PCT_VERIFY` and up), so the transfer
+/// has to be squeezed below the lowest of them: reporting raw download percent
+/// would reach 99 and then jump *back* to 90 for verification, which reads as a
+/// broken indicator rather than as progress.
+const PCT_DOWNLOAD_MAX: u64 = 88;
+const PCT_VERIFY: u32 = 90;
+const PCT_UNPACK: u32 = 93;
+const PCT_INSTALL: u32 = 99;
+
+/// Map bytes transferred onto the download phase's slice of the total.
+fn download_pct(current: u64, total: u64) -> u32 {
+    if total == 0 {
+        return 0;
+    }
+    ((current.min(total) * PCT_DOWNLOAD_MAX / total) as u32).min(PCT_DOWNLOAD_MAX as u32)
+}
+
 /// Download URL to ARCHIVE, reporting progress by polling the partial file.
 ///
 /// Mirrors `remote::deploy`: `select!` runs the transfer and a size poller
@@ -410,9 +429,11 @@ async fn download_with_progress(url: &str, archive: &Path, progress: &ProgressFn
                 let current = meta.len();
                 if current == 0 { continue; }
                 if total > 0 {
-                    let pct = ((current * 100 / total) as u32).min(99);
-                    progress(Some(pct), format!(
-                        "Downloading IntelliJ server {pct}% ({:.0} / {:.0} MB)",
+                    // The prose deliberately carries no percentage: it is sent as a
+                    // structured field, and having it in both makes every renderer
+                    // that formats the two together print it twice.
+                    progress(Some(download_pct(current, total)), format!(
+                        "Downloading IntelliJ server ({:.0} / {:.0} MB)",
                         mb(current), mb(total)
                     ));
                 } else {
@@ -509,7 +530,7 @@ pub async fn install(
     // Publish atomically. A pre-existing destination is replaced only now that a
     // complete tree is ready. The server root is promoted directly to `<version>/`,
     // so the installed launcher is always at `<version>/bin/<exe>`.
-    progress(Some(99), "Installing IntelliJ server".into());
+    progress(Some(PCT_INSTALL), "Installing IntelliJ server".into());
     let server_root = launcher_in_staging
         .parent()
         .and_then(|bin| bin.parent())
@@ -546,7 +567,7 @@ async fn install_into_staging(
 
     match expected_sha {
         Some(expected) => {
-            progress(Some(90), "Verifying download".into());
+            progress(Some(PCT_VERIFY), "Verifying download".into());
             if let Err(err) = verify_checksum(&archive, expected).await {
                 // Remove the archive: a resumed transfer must never continue from
                 // bytes we already know are wrong.
@@ -555,12 +576,12 @@ async fn install_into_staging(
             }
         }
         None => progress(
-            Some(90),
+            Some(PCT_VERIFY),
             "No published checksum for a pinned version — skipping verification".into(),
         ),
     }
 
-    progress(Some(93), "Unpacking IntelliJ server".into());
+    progress(Some(PCT_UNPACK), "Unpacking IntelliJ server".into());
     let extract_dir = staging.join("unpacked");
     tokio::fs::create_dir_all(&extract_dir).await.ok();
     run(&extract_argv(&archive, &extract_dir), "unpacking").await?;
@@ -777,6 +798,56 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("lib")).unwrap();
         assert!(find_launcher(tmp.path()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod progress_pct_tests {
+    use super::{download_pct, PCT_DOWNLOAD_MAX, PCT_INSTALL, PCT_UNPACK, PCT_VERIFY};
+
+    /// The whole point of the mapping: an indicator that only ever moves forward.
+    /// Before this, the download reported raw percent up to 99 and verification then
+    /// reported 90.
+    #[test]
+    fn the_sequence_never_goes_backwards() {
+        let total = 370 * 1024 * 1024;
+        let mut seq: Vec<u32> = (0..=10)
+            .map(|tenth| download_pct(total / 10 * tenth, total))
+            .collect();
+        seq.extend([PCT_VERIFY, PCT_UNPACK, PCT_INSTALL]);
+        assert!(
+            seq.windows(2).all(|w| w[0] <= w[1]),
+            "not monotonic: {seq:?}"
+        );
+        assert!(*seq.last().unwrap() <= 100);
+    }
+
+    #[test]
+    fn download_stays_below_the_next_phase() {
+        let total = 1000;
+        for current in 0..=total {
+            let pct = download_pct(current, total);
+            assert!(
+                pct < PCT_VERIFY,
+                "download reported {pct}, which collides with the verify phase"
+            );
+        }
+        assert_eq!(download_pct(total, total), PCT_DOWNLOAD_MAX as u32);
+        assert_eq!(download_pct(0, total), 0);
+        assert_eq!(download_pct(total / 2, total), PCT_DOWNLOAD_MAX as u32 / 2);
+    }
+
+    /// `remote_size` returns 0 when the server sends no Content-Length; dividing by
+    /// it would panic.
+    #[test]
+    fn unknown_total_does_not_divide_by_zero() {
+        assert_eq!(download_pct(12345, 0), 0);
+    }
+
+    /// A file longer than the advertised length must not report over budget.
+    #[test]
+    fn overshooting_the_advertised_size_is_clamped() {
+        assert_eq!(download_pct(2000, 1000), PCT_DOWNLOAD_MAX as u32);
     }
 }
 

@@ -165,6 +165,83 @@ FORMAT and ARGS is the same as for `message'."
   `(-let ((,(lsp-proxy--transform-pattern pattern) ,source))
      ,@body))
 
+;;; Global status indicator
+;;
+;; A slot in `global-mode-string' for one long background operation — installing a
+;; language server, deploying the remote binary. Those run for minutes, are started
+;; from an arbitrary buffer, and report progress several times a second.
+;;
+;; The echo area is the wrong place for that: it is overwritten by anything else
+;; that speaks, it clobbers minibuffer input the user is in the middle of, and a
+;; download ticking every 700ms leaves hundreds of lines in `*Messages*'. The
+;; mode-line holds a value without competing for attention, so the ticks go here
+;; and only the terminal events (started, finished, failed) stay in the echo area.
+
+(defcustom lsp-proxy-global-status-prefix "⤓"
+  "String shown before the global status in the mode line."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defvar lsp-proxy--global-status nil
+  "Plist of the running background operation, or nil when none.
+
+Keys: `:label' (short name for the mode line), `:message' (full text, shown
+as a tooltip) and `:percentage' (an integer, or nil for a phase with no
+measurable size).
+
+Deliberately global rather than buffer-local: the operation belongs to the
+proxy, not to a buffer, and starting one from `*scratch*' must still show up
+while the user works elsewhere.")
+
+(defconst lsp-proxy--global-status-construct
+  '(:eval (lsp-proxy--global-status-string))
+  "The `global-mode-string' entry that renders `lsp-proxy--global-status'.
+A constant so it can be removed again by identity.")
+
+(defun lsp-proxy--global-status-string ()
+  "Render `lsp-proxy--global-status' for the mode line, or nil when idle.
+
+Kept short, and padded to a fixed width, because a segment that changes
+width on every update shifts everything after it in the mode line.  The
+untruncated text is in the tooltip."
+  (when lsp-proxy--global-status
+    (let ((label (plist-get lsp-proxy--global-status :label))
+          (message (plist-get lsp-proxy--global-status :message))
+          (percentage (plist-get lsp-proxy--global-status :percentage)))
+      (propertize
+       (concat lsp-proxy-global-status-prefix
+               label
+               (if (numberp percentage)
+                   ;; Padded: the installer never reports 100, so this is always
+                   ;; three columns wide.
+                   (format " %2d%%" percentage)
+                 "…")
+               " ")
+       'face 'mode-line-emphasis
+       'help-echo (or message label)))))
+
+(defun lsp-proxy--set-global-status (label message &optional percentage)
+  "Show LABEL in the mode line, with MESSAGE as its tooltip.
+PERCENTAGE, when a number, is displayed alongside LABEL."
+  (setq lsp-proxy--global-status
+        (list :label label :message message :percentage percentage))
+  ;; A string is a valid `global-mode-string', but `add-to-list' needs a list.
+  (unless (listp global-mode-string)
+    (setq global-mode-string (list global-mode-string)))
+  (add-to-list 'global-mode-string lsp-proxy--global-status-construct)
+  ;; Notifications arrive in a process filter, which does not itself trigger a
+  ;; redisplay; without this the indicator sits at whatever it last showed. `t'
+  ;; updates every window, not just the selected one.
+  (force-mode-line-update t))
+
+(defun lsp-proxy--clear-global-status ()
+  "Remove the global status from the mode line."
+  (setq lsp-proxy--global-status nil)
+  (when (listp global-mode-string)
+    (setq global-mode-string
+          (delq lsp-proxy--global-status-construct global-mode-string)))
+  (force-mode-line-update t))
+
 (defun lsp-proxy--completing-read (prompt choices)
   "Read one of CHOICES with PROMPT, requiring a match.
 

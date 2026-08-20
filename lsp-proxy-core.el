@@ -401,9 +401,11 @@ picked up on the next `lsp-proxy-restart'."
   ;; from anywhere, so it needs somewhere always visible.
   (when (eql method 'emacs/installProgress)
     (lsp-proxy--dbind (:message message :percentage percentage) msg
-      (message "[lsp-proxy] %s" (if percentage
-                                    (format "%s (%d%%)" message percentage)
-                                  message))))
+      ;; Mode line only. These arrive every 700ms for several minutes; see the
+      ;; commentary on `lsp-proxy--set-global-status'. The percentage is not
+      ;; appended to MESSAGE — it is rendered from the structured field, and the
+      ;; server deliberately leaves it out of the prose.
+      (lsp-proxy--set-global-status "IntelliJ" message percentage)))
   (when (eql method 'emacs/serverCapabilities)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters

@@ -324,6 +324,9 @@ Skip reopening notifications for buffers not currently visible."
           (setq-local lsp-proxy--buffer-opened nil)))))
   ;; clear all progress in map
   (clrhash lsp-proxy--project-hashmap)
+  ;; A background operation cannot survive the proxy it was running in, and no
+  ;; further notification would arrive to clear the indicator.
+  (lsp-proxy--clear-global-status)
   ;; clear all diagnostics
   (clrhash lsp-proxy--diagnostics-map)
   ;; clear current buffer's highlights

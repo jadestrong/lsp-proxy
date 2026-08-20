@@ -633,14 +633,18 @@ Missing components count as zero, so 263.1 precedes 263.1.1."
 Installs `lsp-proxy-java-server-version', or the latest build when that is nil.
 With a prefix argument FORCE, reinstall even if the version is already present.
 
-The work happens in the proxy; progress is reported in the echo area while it
-runs.  On success the launcher path is reported — point your `languages.toml'
-at it."
+The work happens in the proxy; progress is shown in the mode line while it runs
+\(hover it for the current phase).  On success the launcher path is reported —
+point your `languages.toml' at it."
   (interactive "P")
   (lsp-proxy--ensure-connection)
   (let ((dir (file-name-as-directory
               (expand-file-name lsp-proxy-java-server-install-dir))))
     (message "[lsp-proxy] Installing IntelliJ server into %s ..." dir)
+    ;; Set immediately rather than waiting for the first progress notification:
+    ;; looking up the latest version takes a moment, and an indicator that only
+    ;; appears seconds after the command looks like the command did nothing.
+    (lsp-proxy--set-global-status "IntelliJ" "Starting IntelliJ server install")
     (jsonrpc-async-request
      lsp-proxy--connection 'emacs/installJavaServer
      ;; The proxy wraps every request in a `{uri, context, params}' envelope and
@@ -660,6 +664,7 @@ at it."
          (list :version lsp-proxy-java-server-version))))
      :success-fn
      (lambda (result)
+       (lsp-proxy--clear-global-status)
        (let ((path (plist-get result :launcherPath))
              (version (plist-get result :version)))
          (if (eq (plist-get result :alreadyInstalled) t)
@@ -670,9 +675,15 @@ at it."
                     version path))))
      :error-fn
      (lambda (err)
+       (lsp-proxy--clear-global-status)
        (lsp-proxy--error "IntelliJ server install failed: %s"
                          (or (plist-get err :message) err)))
-     :timeout-fn #'ignore
+     ;; Was `ignore'. With an hour-long timeout that would leave the mode-line
+     ;; indicator up for the rest of the session if it ever fired.
+     :timeout-fn
+     (lambda ()
+       (lsp-proxy--clear-global-status)
+       (lsp-proxy--error "IntelliJ server install timed out"))
      ;; The transfer is hundreds of megabytes; the default request timeout is far
      ;; too short for it.
      :timeout 3600)))
