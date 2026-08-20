@@ -688,6 +688,36 @@ point your `languages.toml' at it."
      ;; too short for it.
      :timeout 3600)))
 
+;;; ModCommand action picker
+;;
+;; `intellij/chooseAction' arrives when a code action needs the user to pick between
+;; several variants (the IntelliJ ModCommand flow). The proxy asks us, we answer with
+;; the chosen entry's `index', and it delivers that to the server as
+;; `workspace/executeCommand chooseModCommandAction'.
+;;
+;; Dismissing returns nil, which the proxy leaves unanswered: the server protocol has
+;; no cancellation message here, so any index we invented would run an action the user
+;; did not pick.
+
+(defun lsp-proxy-java--handle-choose-action (msg)
+  "Let the user pick one of MSG's entries; return its `index' or nil."
+  (lsp-proxy--dbind (:title title :entries entries) msg
+    (let* ((entries (append entries nil))
+           (choices (mapcar (lambda (entry)
+                              (cons (plist-get entry :name) (plist-get entry :index)))
+                            entries)))
+      (when choices
+        (condition-case nil
+            (let ((name (lsp-proxy--completing-read
+                         (if (and title (not (string-empty-p title)))
+                             (format "%s " title)
+                           "Choose action: ")
+                         (mapcar #'car choices))))
+              ;; `alist-get' with a string key needs `equal'; the index may legitimately
+              ;; be 0, so a plain `or' fallback would be wrong.
+              (alist-get name choices nil nil #'equal))
+          (quit nil))))))
+
 ;;; Import log
 ;;
 ;; `intellij/importLog' reports the build tool (Maven/Gradle/Bazel) resolving the

@@ -626,6 +626,9 @@ impl Application {
                             },
                         )
                     }
+                    NotificationFromServer::ChooseAction(params) => {
+                        self.forward_choose_action(server_id, params);
+                    }
                     NotificationFromServer::ImportLog(mut params) => {
                         // Stamped with the server's root rather than the editor's project
                         // root: in a monorepo each module imports separately and the two
