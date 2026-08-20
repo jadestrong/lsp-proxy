@@ -110,7 +110,7 @@ impl Client {
         let file_root = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&file_root).ok();
 
@@ -207,7 +207,7 @@ impl Client {
         let root_path = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
@@ -448,7 +448,10 @@ impl Client {
         false
     }
 
-    async fn request<R: lsp::request::Request>(&self, params: R::Params) -> Result<R::Result>
+    pub(crate) async fn request<R: lsp::request::Request>(
+        &self,
+        params: R::Params,
+    ) -> Result<R::Result>
     where
         R::Params: serde::Serialize,
         R::Result: core::fmt::Debug, // TODO temporary
@@ -479,7 +482,7 @@ impl Client {
     ) -> impl Future<Output = Result<Value>> {
         let server_tx = self.server_tx.clone();
         let timeout_secs = self.req_timeout;
-        
+
         async move {
             use std::time::Duration;
             use tokio::time::timeout;
@@ -490,7 +493,7 @@ impl Client {
                 method,
                 params: Self::value_into_params(params),
             };
-            
+
             let (tx, mut rx) = channel::<Result<Value>>(1);
             server_tx
                 .send(Payload::Request {

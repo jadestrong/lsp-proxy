@@ -524,6 +524,9 @@ impl Application {
                             },
                         )
                     }
+                    NotificationFromServer::ChooseAction(params) => {
+                        self.forward_choose_action(server_id, params);
+                    }
                     NotificationFromServer::ImportLog(mut params) => {
                         // Stamped with the server's root rather than the editor's project
                         // root: in a monorepo each module imports separately and the two
@@ -975,6 +978,61 @@ impl Application {
     ///
     /// A bare `fn` because that is what `ReqHandler` is; the correlation it needs was
     /// stashed in `pending_editor_choices`.
+    /// Ask the editor to pick one of the server's actions.
+    fn forward_choose_action(&mut self, server_id: usize, params: lsp_ext::ChooseActionParams) {
+        if params.entries.is_empty() {
+            // Nothing to choose from; answering would send a meaningless index.
+            debug!("ignoring intellij/chooseAction with no entries");
+            return;
+        }
+        let session_id = params.session_id;
+        let editor_request_id = self.send_request_returning_id::<lsp_ext::EmacsChooseAction>(
+            params,
+            Self::on_choose_action_response,
+        );
+        self.pending_choose_actions
+            .insert(editor_request_id, (server_id, session_id));
+    }
+
+    /// Deliver the picked entry as `workspace/executeCommand`. A dismissed prompt
+    /// sends nothing: the server's protocol has no cancellation message for this, so
+    /// inventing an index would run an action the user did not choose.
+    fn on_choose_action_response(&mut self, response: msg::Response) {
+        let Some((server_id, session_id)) = self.pending_choose_actions.remove(&response.id) else {
+            warn!("no pending chooseAction for response id={:?}", response.id);
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer chooseAction: {error:?}");
+            return;
+        }
+        let Some(index) = response
+            .result
+            .as_ref()
+            .and_then(|value| value.as_i64())
+        else {
+            debug!("chooseAction dismissed; session {session_id} left unanswered");
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping chooseAction reply");
+            return;
+        };
+        let params = lsp_types::ExecuteCommandParams {
+            command: lsp_ext::CHOOSE_MOD_COMMAND_ACTION.to_string(),
+            arguments: vec![session_id.into(), index.into()],
+            work_done_progress_params: Default::default(),
+        };
+        tokio::spawn(async move {
+            if let Err(err) = language_server
+                .request::<lsp_types::request::ExecuteCommand>(params)
+                .await
+            {
+                warn!("chooseModCommandAction failed: {err}");
+            }
+        });
+    }
+
     fn on_show_message_response(&mut self, response: msg::Response) {
         let Some((server_id, server_request_id)) =
             self.pending_editor_choices.remove(&response.id)

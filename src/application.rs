@@ -39,6 +39,11 @@ pub(crate) struct Application {
     /// bare `fn` and cannot capture, so the correlation has to live here.
     pub(crate) pending_editor_choices:
         std::collections::HashMap<crate::msg::RequestId, (usize, crate::msg::RequestId)>,
+    /// Editor request id → (language server, `sessionId`) for a pending
+    /// `intellij/chooseAction`. Separate from `pending_editor_choices` because the
+    /// answer is a new request to the server, not a reply to one of its requests.
+    pub(crate) pending_choose_actions:
+        std::collections::HashMap<crate::msg::RequestId, (usize, i64)>,
     pub editor: Editor,
     pub jobs: Jobs,
     pub shutdown_requested: bool,
@@ -60,6 +65,7 @@ impl Application {
             sender,
             req_queue: ReqQueue::default(),
             pending_editor_choices: std::collections::HashMap::new(),
+            pending_choose_actions: std::collections::HashMap::new(),
             editor,
             jobs: Jobs::new(),
             shutdown_requested: false,

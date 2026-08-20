@@ -472,7 +472,12 @@ picked up on the next `lsp-proxy-restart'."
     (lsp-proxy--dbind (:url url) msg
       (browse-url url)))
   (when (eql method 'window/showMessageRequest)
-    (lsp-proxy--handle-show-message-request msg)))
+    (lsp-proxy--handle-show-message-request msg))
+  ;; IntelliJ ModCommand action picker. `lsp-proxy-java' is optional, so guard the
+  ;; same way the other java-specific hooks do.
+  (when (and (eql method 'emacs/chooseAction)
+             (fboundp 'lsp-proxy-java--handle-choose-action))
+    (lsp-proxy-java--handle-choose-action msg)))
 
 (defun lsp-proxy--handle-show-message-request (msg)
   "Let the user pick one of MSG's actions, per `window/showMessageRequest'.

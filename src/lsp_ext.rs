@@ -195,6 +195,56 @@ impl Notification for ImportLog {
     const METHOD: &'static str = "intellij/importLog";
 }
 
+// intellij/chooseAction  →  emacs/chooseAction  →  workspace/executeCommand
+//
+// The IntelliJ server asks the user to pick one of several ModCommand actions. It
+// arrives as a *notification*, and the answer goes back as a fresh
+// `workspace/executeCommand` request rather than as a reply — so the session id has
+// to be held across the editor round trip.
+//
+// Note this is not `window/showMessageRequest`: that one is a request the proxy
+// replies to. Here the server expects a command invocation, which is why the two
+// cannot share a code path.
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChooseActionEntry {
+    /// Index the server identifies this entry by; not necessarily its position.
+    pub index: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChooseActionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub entries: Vec<ChooseActionEntry>,
+}
+
+#[derive(Debug)]
+pub enum ChooseAction {}
+
+impl Notification for ChooseAction {
+    type Params = ChooseActionParams;
+    const METHOD: &'static str = "intellij/chooseAction";
+}
+
+/// The editor-facing half. Result is the chosen `index`, or `None` when the user
+/// dismissed the prompt — in which case nothing is sent back to the server.
+#[derive(Debug)]
+pub enum EmacsChooseAction {}
+
+impl Request for EmacsChooseAction {
+    type Params = ChooseActionParams;
+    type Result = Option<i64>;
+    const METHOD: &'static str = "emacs/chooseAction";
+}
+
+/// Server-side command the picked entry is delivered through.
+pub const CHOOSE_MOD_COMMAND_ACTION: &str = "chooseModCommandAction";
+
 // emacs/getFiles
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -588,6 +638,87 @@ impl Request for ForwardRequest {
     type Params = ForwardRequestParams;
     type Result = serde_json::Value;
     const METHOD: &'static str = "emacs/forwardRequest";
+}
+
+#[cfg(test)]
+mod choose_action_tests {
+    use super::{ChooseAction, ChooseActionParams, EmacsChooseAction, CHOOSE_MOD_COMMAND_ACTION};
+    use lsp_types::notification::Notification;
+    use lsp_types::request::Request;
+
+    #[test]
+    fn method_names_match_the_protocol() {
+        assert_eq!(ChooseAction::METHOD, "intellij/chooseAction");
+        assert_eq!(EmacsChooseAction::METHOD, "emacs/chooseAction");
+        assert_eq!(CHOOSE_MOD_COMMAND_ACTION, "chooseModCommandAction");
+    }
+
+    /// The payload as the server sends it.
+    #[test]
+    fn parses_the_server_payload() {
+        let json = r#"{
+          "sessionId": 42,
+          "title": "Choose an action",
+          "entries": [{"index": 0, "name": "Introduce variable"},
+                      {"index": 1, "name": "Introduce constant"}]
+        }"#;
+        let p: ChooseActionParams = serde_json::from_str(json).unwrap();
+        assert_eq!(p.session_id, 42);
+        assert_eq!(p.title, "Choose an action");
+        assert_eq!(p.entries.len(), 2);
+        // Index 0 is a legitimate answer, not "absent".
+        assert_eq!(p.entries[0].index, 0);
+        assert_eq!(p.entries[1].name, "Introduce constant");
+    }
+
+    /// Forwarded to the editor with camelCase keys, since the Emacs handler
+    /// destructures `:entries` and each entry's `:index` / `:name`.
+    #[test]
+    fn forwards_as_camel_case() {
+        let p: ChooseActionParams =
+            serde_json::from_str(r#"{"sessionId":7,"entries":[{"index":3,"name":"x"}]}"#).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["sessionId"], 7);
+        assert!(json.get("session_id").is_none());
+        assert_eq!(json["entries"][0]["index"], 3);
+    }
+
+    /// Missing title/entries must not fail the parse and drop the notification.
+    #[test]
+    fn tolerates_a_minimal_payload() {
+        let p: ChooseActionParams = serde_json::from_str(r#"{"sessionId":1}"#).unwrap();
+        assert_eq!(p.title, "");
+        assert!(p.entries.is_empty());
+    }
+
+    #[test]
+    fn registry_routes_the_notification() {
+        let serde_json::Value::Object(map) = serde_json::json!({
+            "sessionId": 5,
+            "entries": [{"index": 0, "name": "a"}]
+        }) else {
+            unreachable!()
+        };
+        let params = crate::lsp::jsonrpc::Params::Map(map);
+        match crate::registry::NotificationFromServer::parse(ChooseAction::METHOD, params) {
+            Ok(crate::registry::NotificationFromServer::ChooseAction(p)) => {
+                assert_eq!(p.session_id, 5);
+            }
+            other => panic!("expected ChooseAction, got {other:?}"),
+        }
+    }
+
+    /// The editor answers with the index or null; null means dismissed and must
+    /// deserialize rather than error, because the proxy then sends nothing.
+    #[test]
+    fn editor_result_accepts_index_or_null() {
+        let picked: Option<i64> = serde_json::from_str("3").unwrap();
+        assert_eq!(picked, Some(3));
+        let zero: Option<i64> = serde_json::from_str("0").unwrap();
+        assert_eq!(zero, Some(0), "index 0 must survive as a real choice");
+        let dismissed: Option<i64> = serde_json::from_str("null").unwrap();
+        assert_eq!(dismissed, None);
+    }
 }
 
 #[cfg(test)]
