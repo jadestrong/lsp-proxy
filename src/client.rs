@@ -435,17 +435,20 @@ impl Client {
                 Some(OneOf::Left(true) | OneOf::Right(InlayHintServerCapabilities::Options(_)))
             ),
             LanguageServerFeature::PullDiagnostics => capabilities.diagnostic_provider.is_some(),
+            LanguageServerFeature::CodeLens => capabilities.code_lens_provider.is_some(),
         }
     }
 
     pub fn supports_registered_feature(&self, feature: LanguageServerFeature) -> bool {
         let registered_capabilities = self.registered_capabilities.lock();
-        if feature == LanguageServerFeature::Format {
-            return registered_capabilities
-                .iter()
-                .any(|cap| cap.method == lsp_types::request::Formatting::METHOD);
-        }
-        false
+        let method = match feature {
+            LanguageServerFeature::Format => lsp_types::request::Formatting::METHOD,
+            LanguageServerFeature::CodeLens => lsp_types::request::CodeLensRequest::METHOD,
+            _ => return false,
+        };
+        registered_capabilities
+            .iter()
+            .any(|cap| cap.method == method)
     }
 
     pub(crate) async fn request<R: lsp::request::Request>(
@@ -768,6 +771,9 @@ impl Client {
                     inlay_hint: Some(lsp::InlayHintClientCapabilities {
                         dynamic_registration: Some(false),
                         resolve_support: None,
+                    }),
+                    code_lens: Some(lsp::CodeLensClientCapabilities {
+                        dynamic_registration: Some(true),
                     }),
                     definition: Some(lsp::GotoCapability {
                         dynamic_registration: Some(true),

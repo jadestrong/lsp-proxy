@@ -16,6 +16,7 @@ use crate::{
     code_action::{
         action_category, action_fixes_diagnostics, action_preferred, CodeActionOrCommandItem,
     },
+    code_lens::CodeLensItem,
     completion_cache::CompletionCache,
     config::{self, DEFAULT_MAX_DIAGNOSTICS_PUSH, MAX_COMPLETION_ITEMS},
     document::{DiagnosticItem, DiagnosticProvider, DocumentId},
@@ -1181,6 +1182,68 @@ pub(crate) async fn handle_document_highlight(
     )
     .await
     .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
+}
+
+pub(crate) async fn handle_code_lens(
+    req: msg::Request,
+    params: lsp_types::CodeLensParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    let language_server = language_servers
+        .iter()
+        .find(|ls| ls.with_feature(LanguageServerFeature::CodeLens));
+    let Some(ls) = language_server else {
+        return Ok(Response::new_ok(req.id, Vec::<CodeLensItem>::new()));
+    };
+    let language_server_id = ls.id();
+    let language_server_name = ls.name().to_string();
+
+    let json = ls
+        .call::<lsp_types::request::CodeLensRequest>(req.id.clone(), params)
+        .await?;
+    let lenses: Option<Vec<lsp_types::CodeLens>> = serde_json::from_value(json)?;
+    let items = lenses
+        .unwrap_or_default()
+        .into_iter()
+        .map(|lsp_item| CodeLensItem {
+            lsp_item,
+            language_server_id,
+            language_server_name: language_server_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(Response::new_ok(req.id, items))
+}
+
+pub(crate) async fn handle_code_lens_resolve(
+    req: msg::Request,
+    code_lens: lsp_types::CodeLens,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    if let Some(Context::Common(context)) = &req.params.context {
+        call_single_language_server::<lsp_types::request::CodeLensResolve>(
+            &req,
+            code_lens,
+            &language_servers,
+            None,
+            Some(context.language_server_id),
+        )
+        .await
+        .map(|(resolved, language_server_name)| {
+            Response::new_ok(
+                req.id,
+                CodeLensItem {
+                    lsp_item: resolved,
+                    language_server_id: context.language_server_id,
+                    language_server_name,
+                },
+            )
+        })
+    } else {
+        Err(anyhow::Error::msg(format!(
+            "No CodeLens Resolve Context {:?}",
+            req.params
+        )))
+    }
 }
 
 pub(crate) async fn handle_rename(

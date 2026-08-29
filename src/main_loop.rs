@@ -299,6 +299,31 @@ impl Application {
                                             },
                                         );
                                     }
+                                    lsp_types::request::CodeLensRequest::METHOD => {
+                                        let Some(options) = reg.register_options else {
+                                            continue;
+                                        };
+                                        // `CodeLensRegistrationOptions` flattens
+                                        // `TextDocumentRegistrationOptions` at the top level and adds
+                                        // an unused (here) `resolveProvider` field, so deserializing
+                                        // into the smaller struct works the same way `Formatting`
+                                        // does above.
+                                        let ops: lsp_types::TextDocumentRegistrationOptions =
+                                            match serde_json::from_value(options) {
+                                                Ok(ops) => ops,
+                                                Err(err) => {
+                                                    warn!("Failed to deserialize TextDocumentRegistrationOptions for CodeLens: {err}");
+                                                    continue;
+                                                }
+                                            };
+                                        client.registered_capabilities.lock().push(
+                                            RegisteredCapability {
+                                                id: reg.id,
+                                                method: reg.method,
+                                                register_options: Some(ops),
+                                            },
+                                        );
+                                    }
                                     _ => {
                                         // Language Servers based on the `vscode-languageserver-node` library often send
                                         // client/registerCapability even though we do not enable dynamic registration
@@ -901,6 +926,10 @@ impl Application {
             .on::<lsp_types::request::InlayHintRequest, _, _>(handlers::request::handle_inlay_hints)
             .on::<lsp_types::request::DocumentHighlightRequest, _, _>(
                 handlers::request::handle_document_highlight,
+            )
+            .on::<lsp_types::request::CodeLensRequest, _, _>(handlers::request::handle_code_lens)
+            .on::<lsp_types::request::CodeLensResolve, _, _>(
+                handlers::request::handle_code_lens_resolve,
             )
             .on::<lsp_types::request::DocumentSymbolRequest, _, _>(
                 handlers::request::handle_document_symbols,

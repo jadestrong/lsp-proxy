@@ -31,6 +31,7 @@ pub struct CustomServerCapabilitiesParams {
     pub support_inline_completion: bool,
     pub text_document_sync_kind: String, // "full" or "incremental"
     pub support_hover: bool,
+    pub support_code_lens: bool,
     pub has_any_servers: bool,
     /// Workspace root of every language server serving this document.
     ///
@@ -821,6 +822,7 @@ mod server_capabilities_tests {
             support_inline_completion: false,
             text_document_sync_kind: "incremental".to_string(),
             support_hover: false,
+            support_code_lens: false,
             has_any_servers: true,
             workspace_roots: vec!["/w/initial".to_string(), "/w/complete".to_string()],
         }

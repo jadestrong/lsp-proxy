@@ -100,6 +100,10 @@ that support `textDocument/diagnostic' request.")
   "Is there any server associated with this buffer
 that support `textDocument/hover' request.")
 
+(defvar-local lsp-proxy--support-code-lens nil
+  "Is there any server associated with this buffer
+that support `textDocument/codeLens' request.")
+
 (defvar-local lsp-proxy--has-any-servers nil
   "Whether this buffer has any language servers available.
 This is used to determine if LSP requests should be sent.")
@@ -172,6 +176,7 @@ This is used to determine if LSP requests should be sent.")
 (declare-function lsp-proxy-diagnostics--request-pull-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-diagnostics--handle-publish-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-activate-inlay-hints-mode "lsp-proxy-inlay-hints")
+(declare-function lsp-proxy-activate-codelens-mode "lsp-proxy-codelens")
 (declare-function lsp-proxy-inline-completion-mode "lsp-proxy")
 (declare-function lsp-proxy--set-work-done-token "lsp-proxy")
 (declare-function lsp-proxy--rem-work-done-token "lsp-proxy")
@@ -416,6 +421,7 @@ picked up on the next `lsp-proxy-restart'."
                        :supportPullDiagnostic support-pull-diagnostic
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
+                       :supportCodeLens support-code-lens
                        :textDocumentSyncKind text-document-sync-kind
                        :hasAnyServers has-any-servers
                        :workspaceRoots workspace-roots)
@@ -430,6 +436,7 @@ picked up on the next `lsp-proxy-restart'."
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
+            (setq-local lsp-proxy--support-code-lens (not (eq support-code-lens :json-false)))
             (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
             ;; Normalised here, once, so every later comparison is against the same
             ;; shape as the keys `$/progress' is filed under.
@@ -440,6 +447,7 @@ picked up on the next `lsp-proxy-restart'."
                                 (append workspace-roots nil)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
+            (lsp-proxy-activate-codelens-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
             (if (not (eq support-inline-completion :json-false))
                 (lsp-proxy-inline-completion-mode)))))))

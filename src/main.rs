@@ -3,6 +3,7 @@ mod args;
 mod bytecode;
 mod client;
 mod code_action;
+mod code_lens;
 mod completion_cache;
 mod config;
 mod connection;
