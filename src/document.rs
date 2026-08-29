@@ -244,6 +244,7 @@ impl Document {
             support_pull_diagnostic: false,
             support_inline_completion: false,
             support_hover: false,
+            support_code_lens: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
             has_any_servers: false,
             workspace_roots: vec![],
@@ -299,6 +300,10 @@ impl Document {
             if ls.supports_feature(LanguageServerFeature::Hover) {
                 server_capabilities.support_hover = true;
             }
+
+            if ls.supports_feature(LanguageServerFeature::CodeLens) {
+                server_capabilities.support_code_lens = true;
+            }
         });
 
         // Set has_any_servers flag
@@ -326,6 +331,7 @@ impl Document {
             support_pull_diagnostic: false,
             support_inline_completion: false,
             support_hover: false,
+            support_code_lens: false,
             text_document_sync_kind: "incremental".to_string(),
             has_any_servers: false,
             workspace_roots: vec![],
