@@ -857,6 +857,201 @@ Used to insert a heading when output starts coming from a different module.")
       (erase-buffer))
     (setq lsp-proxy-java--import-log-root nil)))
 
+;;; Debugging (dape)
+;;
+;; Wires `dape' (if installed — soft dependency, see the `when' below) to
+;; the IntelliJ backend's own DAP endpoint.
+;;
+;; The backend hosts IntelliJ's XDebugger behind a DAP server: a plain
+;; `workspace/executeCommand' with command `start_debug_server' (no
+;; arguments) returns a fresh TCP port; connecting to it and sending a DAP
+;; `initialize' with `adapterID = "intellij_debugger"' gets you a real
+;; debug session (breakpoints, stepping, variables) with no VS Code
+;; pieces involved.
+;;
+;; `launch' does NOT rely on the DAP endpoint to resolve
+;; `:cwd'/`:classPaths'/`:javaExec' on its own — empirically it doesn't (or
+;; doesn't reliably): omitting them produced a JVM that started but
+;; couldn't find the main class at all (wrong/empty classpath). The VS
+;; Code extension's `resolveLaunchConfig' (`dap.ts') resolves these
+;; explicitly via three `workspace/executeCommand' calls before launching,
+;; and that DOES work (verified: matching a real `cwd'/JDK/`@argfile'
+;; classpath in the launched process). This mirrors that exactly instead
+;; of trusting the adapter to self-resolve.
+;;
+;; `attach' is unaffected — a plain JDWP `:hostName'/`:port' still needs
+;; no resolution.
+;;
+;; `dape' config plists mix two key conventions: bare symbols (`host',
+;; `port', `command', `modes', `ensure', `fn') are dape's own bookkeeping
+;; and never reach the wire; keyword symbols (`:type', `:request',
+;; `:mainClass', ...) are sent verbatim as the DAP `launch'/`attach'
+;; request body (`:type' additionally becomes the `initialize' request's
+;; `adapterID'). The bare `port' is dape's *own* connection to the
+;; server's DAP endpoint; a keyword `:port' (attach only) is the JDWP
+;; target port sent to the adapter — same-looking, different keys,
+;; deliberately both present in the attach config. The scratch key
+;; `lsp-proxy-uri' (also bare) smuggles an already-known source URI into
+;; `lsp-proxy-java--dape-populate-launch-config' without leaking into the
+;; DAP body, for the same reason.
+
+;; A bare top-level `require' (not nested in the `when' below) so the
+;; byte-compiler actually loads `dape' when compiling on a machine that has
+;; it, instead of merely deciding at runtime whether to call it — a
+;; `require' buried inside a conditional's test is not given that
+;; compile-time treatment, and every reference below would otherwise warn
+;; "not known to be defined" even when `dape' is genuinely installed.
+(require 'dape nil t)
+
+;; Same reasoning applies to `defun': one nested inside the `when' below
+;; isn't given top-level treatment either, so a later function in the same
+;; block calling an earlier one still warns "not known to be defined".
+;; These four declarations are only about silencing that; the real
+;; definitions are the ones below, conditionally, same as everything else
+;; in this section.
+(declare-function lsp-proxy-java--dape-execute-command "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-start-debug-server "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-resolve-uri "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-populate-launch-config "lsp-proxy-java")
+
+(when (featurep 'dape)
+
+  (defconst lsp-proxy-java--dape-type "intellij_debugger"
+    "The `:type'/DAP `adapterID' the backend's debug endpoint requires.
+Anything else gets \"No debugger adapter found for given adapter id\".")
+
+  (defun lsp-proxy-java--dape-execute-command (command &optional argument)
+    "Send `workspace/executeCommand' COMMAND, synchronously, and return its result.
+ARGUMENT, if given, is wrapped as the command's single positional
+argument, matching the shape every `intellij.java.*'/
+`start_debug_server' custom command expects. Signals a `user-error' if
+the request fails."
+    (condition-case err
+        (lsp-proxy--request
+         'workspace/executeCommand
+         (lsp-proxy--build-params
+          (list :command command
+               :arguments (if argument (vector argument) (vector))))
+         :timeout 10)
+      (jsonrpc-error
+       (user-error "lsp-proxy-java: `%s' failed: %s" command (error-message-string err)))))
+
+  (defun lsp-proxy-java--dape-start-debug-server ()
+    "Ask the language server for a fresh DAP endpoint port."
+    (let ((port (lsp-proxy-java--dape-execute-command "start_debug_server")))
+      (unless (numberp port)
+        (user-error "lsp-proxy-java: `start_debug_server' returned %S, expected a port number" port))
+      port))
+
+  (defun lsp-proxy-java--dape-resolve-uri (main-class)
+    "Resolve the source file URI for MAIN-CLASS via the language server."
+    (or (plist-get
+         (lsp-proxy-java--dape-execute-command
+          "intellij.java.resolveClassDocument" (list :fqn main-class))
+         :uri)
+        (user-error "lsp-proxy-java: could not resolve a source file for `%s'" main-class)))
+
+  (defun lsp-proxy-java--dape-populate-launch-config (config)
+    "`fn' for the `intellij_debugger' launch/attach configs.
+
+Always fetches a fresh debug-server `port'. For `:request \"launch\"'
+also resolves `:cwd', `:classPaths'/`:modulePaths'/`:moduleName' and
+`:javaExec' for the module owning `:mainClass', mirroring the VS Code
+extension's `resolveLaunchConfig' (`dap.ts') — see this section's
+Commentary for why that resolution can't be skipped. `:request
+\"attach\"' needs none of this (a plain JDWP host/port), so only the
+port gets added.
+
+Uses the bare-symbol scratch key `lsp-proxy-uri' for an
+already-known source URI (from a CodeLens click) to skip the extra
+`resolveClassDocument' round-trip; harmless to omit."
+    (setq config (plist-put config 'port (lsp-proxy-java--dape-start-debug-server)))
+    (if (not (equal (plist-get config :request) "launch"))
+        config
+      (let* ((main-class (or (plist-get config :mainClass)
+                             (user-error "lsp-proxy-java: no `:mainClass' to resolve a launch config for")))
+             (uri (or (plist-get config 'lsp-proxy-uri)
+                     (lsp-proxy-java--dape-resolve-uri main-class))))
+        (unless (plist-get config :classPaths)
+          (let ((cp (lsp-proxy-java--dape-execute-command
+                     "intellij.java.resolveClasspath" (list :uri uri))))
+            (setq config (plist-put config :classPaths (plist-get cp :classpath)))
+            ;; For a JPMS launch the server also returns the module path and
+            ;; owning module name, so the main class runs from the module path
+            ;; (`-m moduleName/mainClass') instead of the classpath.
+            (when-let* ((mp (plist-get cp :modulePath))
+                        ((> (length mp) 0)))
+              (setq config (plist-put config :modulePaths mp)))
+            (when-let* ((mn (plist-get cp :moduleName)))
+              (setq config (plist-put config :moduleName mn)))))
+        (unless (plist-get config :cwd)
+          ;; Optional: defaults to the module's project directory server-side.
+          ;; Without it the launched process would inherit lsp-proxy's own
+          ;; directory instead.
+          (condition-case err
+              (when-let* ((wd (lsp-proxy-java--dape-execute-command
+                               "intellij.java.resolveWorkingDirectory" (list :uri uri)))
+                          (cwd (plist-get wd :workingDirectory)))
+                (setq config (plist-put config :cwd cwd)))
+            (error
+             (message "lsp-proxy-java: working directory resolution failed, using default: %s"
+                      (error-message-string err)))))
+        (unless (plist-get config :javaExec)
+          (let ((java (lsp-proxy-java--dape-execute-command
+                       "intellij.java.resolveJavaExecutable" (list :uri uri))))
+            (setq config (plist-put config :javaExec (plist-get java :javaExec)))))
+        config)))
+
+  ;; Named templates for `M-x dape'. `:mainClass''s form is only evaluated by
+  ;; `dape' when reading a config by name (`dape--config-eval'); by the time
+  ;; `fn' (`lsp-proxy-java--dape-populate-launch-config') runs, it's already a
+  ;; concrete string.
+  (with-eval-after-load 'dape
+    (add-to-list 'dape-configs
+                `(intellij-launch
+                  modes (java-mode java-ts-mode kotlin-mode)
+                  host "127.0.0.1"
+                  fn lsp-proxy-java--dape-populate-launch-config
+                  :type ,lsp-proxy-java--dape-type
+                  :request "launch"
+                  :mainClass (read-string "Main class (fully qualified): ")))
+    (add-to-list 'dape-configs
+                `(intellij-attach
+                  modes (java-mode java-ts-mode kotlin-mode)
+                  host "127.0.0.1"
+                  fn lsp-proxy-java--dape-populate-launch-config
+                  :type ,lsp-proxy-java--dape-type
+                  :request "attach"
+                  :hostName "127.0.0.1"
+                  :port (read-number "JDWP port: " 5005))))
+
+  ;;;###autoload
+  (defun lsp-proxy-java-dape-run-main (arguments)
+    "Handle the `intellij_debugger.runMain' command's ARGUMENTS.
+ARGUMENTS is the command's raw `:arguments' vector as delivered by the
+proxy — its first element is `{mainClass, uri?, noDebug?}', mirroring
+the VS Code extension's `RunMainArgs'. Builds a minimal config
+(`:mainClass' plus the already-known `uri', stashed under the bare
+`lsp-proxy-uri' key) and lets `lsp-proxy-java--dape-populate-launch-config'
+\(via `fn') resolve the rest, same as the named `dape-configs'
+templates. Meant to be called from `lsp-proxy-codelens.el' when a
+CodeLens command matches \"intellij_debugger.runMain\"."
+    (let* ((args (and (vectorp arguments) (> (length arguments) 0) (aref arguments 0)))
+           (main-class (and args (plist-get args :mainClass)))
+           (uri (and args (plist-get args :uri)))
+           (no-debug (and args (eq (plist-get args :noDebug) t))))
+      (unless main-class
+        (user-error "lsp-proxy-java: `intellij_debugger.runMain' had no mainClass in its arguments"))
+      (dape
+       (append
+        (list 'host "127.0.0.1"
+              :type lsp-proxy-java--dape-type
+              :request "launch"
+              :mainClass main-class
+              'fn #'lsp-proxy-java--dape-populate-launch-config)
+        (when uri (list 'lsp-proxy-uri uri))
+        (when no-debug (list :noDebug t)))))))
+
 ;;; Setup
 
 (add-to-list 'file-name-handler-alist
