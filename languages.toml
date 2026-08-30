@@ -661,3 +661,11 @@ projects = []
 # Newer builds accept this; omit it to use the server's own default. Sent as an
 # explicit false by the VS Code client, so setting it here is only needed to opt in.
 # disableRocksDBWriteAheadLog = false
+# The VS Code extension's DAP integration sends this so the server's CodeLens
+# provider emits "Run"/"Debug" lenses above `main` methods; it declares that the
+# client can handle the `intellij_debugger.runMain` command those lenses carry.
+# Without it the server silently omits those lenses (they were the reason
+# `textDocument/codeLens` came back empty on a Spring Boot `*Application.java`).
+# lsp-proxy doesn't yet wire up that command, so the lens's `command` will be
+# present but running it will just report "no command handler" until that's added.
+runMainCodeLens = true

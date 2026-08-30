@@ -284,7 +284,7 @@ CODELENS-CELL is a cons cell \(ITEM . OVERLAY)."
                             (goto-char line-start)
                             (make-string (current-indentation) ? ))
                         ""))
-         (separator (if is-last "\n" "|")))
+         (separator (if is-last "\n" " | ")))
     (concat
      indentation
      (propertize (lsp-proxy-codelens--format-text codelens-cell)
@@ -587,6 +587,15 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
                             (overlay-get ov 'lsp-proxy-codelens-command)))
          (command (or item-command overlay-command)))
     (cond
+     ;; `intellij_debugger.runMain' is a client-side-only command in the VS
+     ;; Code extension (its DAP integration registers a matching local
+     ;; command and never forwards it to the server) — sending it through
+     ;; `workspace/executeCommand' just gets back "Unknown command". Route
+     ;; it to `lsp-proxy-dape' (dape) instead, when available.
+     ((and command (equal (plist-get command :command) "intellij_debugger.runMain"))
+      (if (fboundp 'lsp-proxy-dape-run-main)
+          (lsp-proxy-dape-run-main (plist-get command :arguments))
+        (lsp-proxy--error "%s" "Run/Debug from CodeLens needs `lsp-proxy-dape' (and dape) loaded; see lsp-proxy-dape.el")))
      ;; Execute resolved command
      (command
       (lsp-proxy--execute-command
@@ -670,6 +679,8 @@ line need delta adjustment."
                    (when (timerp lsp-proxy-codelens--update-timer)
                      (cancel-timer lsp-proxy-codelens--update-timer))
                    (setq lsp-proxy-codelens--update-timer nil)
+                   (message "[lsp-proxy DEBUG] codelens--update-timer FIRING (buffer=%s time=%s)"
+                            (buffer-name buf) (current-time-string))
                    (lsp-proxy-codelens--fetch-codelens))))
              (current-buffer))))))
 
