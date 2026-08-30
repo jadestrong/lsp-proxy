@@ -70,6 +70,27 @@ to avoid overwhelming the language server."
   :type 'float
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-codelens-icon-height 0.8
+  "Height (relative to the frame's default) for nerd-icons codicon glyphs.
+Passed as `nerd-icons-codicon''s :height in
+`lsp-proxy-codelens--codicons-to-nerd-icons'. Kept smaller than 1.0 by
+default so the icon doesn't dominate the (already shrunk,
+`lsp-proxy-codelens-face') label text next to it."
+  :type 'float
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-codelens-icon-v-adjust 0.2
+  "Vertical shift for nerd-icons codicon glyphs, as a fraction of line height.
+Passed as `nerd-icons-codicon''s :v-adjust (an Emacs `(raise N)' display
+property: positive raises the glyph, negative lowers it) in
+`lsp-proxy-codelens--codicons-to-nerd-icons'. Shrinking the glyph via
+`lsp-proxy-codelens-icon-height' without also nudging this tends to
+leave it looking off-baseline next to the label text; there's no
+value that's exactly right for every font/height combination, so
+adjust to taste if the default doesn't look centered for you."
+  :type 'float
+  :group 'lsp-proxy)
+
 ;;; Faces
 
 (defface lsp-proxy-codelens-face
@@ -287,15 +308,20 @@ CODELENS-CELL is a cons cell \(ITEM . OVERLAY)."
          (separator (if is-last "\n" " | ")))
     (concat
      indentation
-     (propertize (lsp-proxy-codelens--format-text codelens-cell)
-                 'face 'lsp-proxy-codelens-face
-                 'mouse-face 'lsp-proxy-codelens-mouse-face
-                 'help-echo "Click to execute this CodeLens command"
-                 'keymap (let ((map (make-sparse-keymap)))
-                           (define-key map [mouse-1]
-                             (lambda () (interactive)
-                               (lsp-proxy-codelens-execute codelens-cell)))
-                           map))
+     (let ((text (propertize (lsp-proxy-codelens--format-text codelens-cell)
+                             'mouse-face 'lsp-proxy-codelens-mouse-face
+                             'help-echo "Click to execute this CodeLens command"
+                             'keymap (let ((map (make-sparse-keymap)))
+                                       (define-key map [mouse-1]
+                                         (lambda () (interactive)
+                                           (lsp-proxy-codelens-execute codelens-cell)))
+                                       map))))
+       ;; `append' so this only fills in what the icon glyph (if any) didn't
+       ;; already set on its own characters — a plain `propertize' 'face
+       ;; would instead clobber the icon's smaller :height from
+       ;; `lsp-proxy-codelens--codicons-to-nerd-icons'.
+       (add-face-text-property 0 (length text) 'lsp-proxy-codelens-face t text)
+       text)
      separator)))
 
 (defun lsp-proxy-codelens--make-overlay (line-start codelens-cell index total-codelens docver)
@@ -338,17 +364,22 @@ Returns the created overlay."
 (defun lsp-proxy-codelens--codicons-to-nerd-icons (title)
   "Convert VS Code icon placeholders in TITLE to nerd icons.
 VS Code icon placeholder syntax: $(icon-name)
-Converts to nerd icons using `nerd-icons-codicon'.
-If the icon is not recognized, returns the original placeholder."
+Converts to nerd icons using `nerd-icons-codicon'. Also swallows one
+trailing space after the placeholder, so the icon glyph sits directly
+against the label instead of VS Code's \"$(icon) Label\" spacing.
+If the icon is not recognized, returns the original placeholder
+\(including that trailing space, so the raw text still reads fine)."
   (if (featurep 'nerd-icons)
       (replace-regexp-in-string
-       "\\$(\\([^)]+\\))"
+       "\\$(\\([^)]+\\)) ?"
        (lambda (match)
          (let* ((icon-name (match-string 1 match))
                 (nerd-icon-name (replace-regexp-in-string "-" "_" icon-name))
                 (icon-code (format "nf-cod-%s" nerd-icon-name)))
            (condition-case _
-               (nerd-icons-codicon icon-code)
+               (nerd-icons-codicon icon-code
+                                   :height lsp-proxy-codelens-icon-height
+                                   :v-adjust lsp-proxy-codelens-icon-v-adjust)
              (error
               ;; If nerd-icons-codicon fails, return the original placeholder
               match))))
@@ -591,11 +622,11 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
      ;; Code extension (its DAP integration registers a matching local
      ;; command and never forwards it to the server) — sending it through
      ;; `workspace/executeCommand' just gets back "Unknown command". Route
-     ;; it to `lsp-proxy-dape' (dape) instead, when available.
+     ;; it to `lsp-proxy-java''s dape integration instead, when available.
      ((and command (equal (plist-get command :command) "intellij_debugger.runMain"))
-      (if (fboundp 'lsp-proxy-dape-run-main)
-          (lsp-proxy-dape-run-main (plist-get command :arguments))
-        (lsp-proxy--error "%s" "Run/Debug from CodeLens needs `lsp-proxy-dape' (and dape) loaded; see lsp-proxy-dape.el")))
+      (if (fboundp 'lsp-proxy-java-dape-run-main)
+          (lsp-proxy-java-dape-run-main (plist-get command :arguments))
+        (lsp-proxy--error "%s" "Run/Debug from CodeLens needs `dape' installed; see the Debugging section in lsp-proxy-java.el")))
      ;; Execute resolved command
      (command
       (lsp-proxy--execute-command
