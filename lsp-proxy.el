@@ -49,6 +49,10 @@
 (require 'lsp-proxy-imenu)
 (require 'lsp-proxy-inlay-hints)
 (require 'lsp-proxy-codelens)
+;; Optional: only wires up if `dape' is installed. Nothing else in
+;; lsp-proxy depends on it; `lsp-proxy-codelens.el' checks `fboundp' before
+;; calling into it.
+(require 'lsp-proxy-dape nil t)
 (require 'lsp-proxy-inline-completion)
 (require 'lsp-proxy-java)
 (require 'lsp-proxy-org)
