@@ -310,9 +310,18 @@ eglot functions."
                                    (+ (line-beginning-position)
                                       (min end-char (- (line-end-position) (line-beginning-position))))))))
 
-                ;; Handle zero-width ranges
+                ;; Let Flymake infer a useful region when the server reports a
+                ;; zero-width range, e.g. diagnostics at end of line.
                 (when (= start-point end-point)
-                  (setq end-point (min (1+ start-point) line-end)))
+                  (if-let* ((diag-region
+                             (flymake-diag-region (current-buffer)
+                                                  (1+ start-line)
+                                                  start-char)))
+                      (setq start-point (car diag-region)
+                            end-point (cdr diag-region))
+                    (if (> start-point line-start)
+                        (setq start-point (1- start-point))
+                      (setq end-point (min (1+ start-point) line-end)))))
 
                 ;; Create diagnostic and cache with position key
                 (let ((flymake-diag
