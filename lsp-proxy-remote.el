@@ -133,12 +133,14 @@ MODE-LABEL is a short string describing the current deploy mode (e.g.
             (format "✓ Deploy succeeded. Binary: %s" (or path ""))
           (format "✗ Deploy failed: %s" msg)))
        (lsp-proxy-remote--show-deploy-buffer)
+       (lsp-proxy--clear-global-status)
        (if ok
            (message "[lsp-proxy] Deploy succeeded. Re-open the remote file to connect.")
          (message "[lsp-proxy] Deploy failed — see %s for details."
                   lsp-proxy-remote--deploy-buffer-name))))
    :error-fn
    (lambda (err)
+     (lsp-proxy--clear-global-status)
      (lsp-proxy-remote--log (format "✗ Error: %s" err))
      (lsp-proxy-remote--show-deploy-buffer)
      (message "[lsp-proxy] Deploy error — see %s for details."
@@ -172,7 +174,12 @@ Behaviour depends on `lsp-proxy-remote-deploy-mode':
 
 (defun lsp-proxy-remote--handle-deploy-progress (params)
   "Handle `emacs/remoteDeployProgress' notification with PARAMS."
-  (lsp-proxy-remote--log (plist-get params :message)))
+  (let ((message (plist-get params :message)))
+    (lsp-proxy-remote--log message)
+    ;; The upload is long and started from an arbitrary buffer, so it also gets
+    ;; the mode-line slot; the deploy buffer keeps the full transcript. No
+    ;; percentage: the deploy protocol reports messages only.
+    (lsp-proxy--set-global-status "deploy" message)))
 
 ;;; Remote info query
 

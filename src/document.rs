@@ -109,6 +109,31 @@ impl VirtualDocumentInfo {
     }
 }
 
+/// Resolve a document URI to a filesystem path.
+///
+/// `None` for virtual documents — `jar:`/`jrt:` decompiled sources, whose content
+/// the language server produced and which have no location on disk.
+///
+/// The scheme check is load-bearing. `Url::to_file_path` does **not** verify the
+/// scheme on non-Windows targets, so `jrt:///<jdk>!/modules/java.base/java/lang/
+/// System.class` otherwise succeeds and hands back the URI's path component
+/// verbatim — `!` and all — as if it were a real file.
+///
+/// That fabricated path is worse than no path, because it keeps the archive's
+/// real prefix: walking it upwards reaches genuine directories, so workspace
+/// resolution "succeeds" and roots a language server at whatever repository
+/// happens to contain the JDK or jar. That is how opening a decompiled JDK source
+/// spawned a second, mis-rooted server instead of reusing the project's own.
+///
+/// `jar:` URIs are cannot-be-a-base and already failed to convert, which is why
+/// the two schemes used to behave differently for no stated reason.
+pub(crate) fn uri_to_local_path(uri: &Url) -> Option<PathBuf> {
+    if uri.scheme() != "file" {
+        return None;
+    }
+    Url::to_file_path(uri).ok()
+}
+
 #[derive(Debug)]
 pub struct Document {
     pub(crate) id: DocumentId,
@@ -120,6 +145,11 @@ pub struct Document {
     pub version: i32,
 
     pub previous_diagnostic_id: Option<String>,
+
+    /// Monotonic counter of pull-diagnostic batches issued for this document.
+    pull_generation: u64,
+    /// Generation of the most recently applied pull-diagnostic response.
+    applied_pull_generation: u64,
 
     // If the document is a Org file, contains virtual document information
     pub virtual_doc: Option<VirtualDocumentInfo>,
@@ -135,10 +165,9 @@ impl Document {
         config_loader: Option<Arc<syntax::Loader>>,
         language: Option<&str>,
     ) -> Self {
-        // Pre-compute is_org_file
-        let is_org_file = uri
-            .to_file_path()
-            .ok()
+        // Pre-compute is_org_file. Goes through `uri_to_local_path` so a virtual
+        // document cannot be classified from a fabricated path.
+        let is_org_file = uri_to_local_path(uri)
             .and_then(|path| path.extension().map(|ext| ext == "org"))
             .unwrap_or(false);
 
@@ -150,6 +179,8 @@ impl Document {
             version: 0,
             diagnostics: None,
             previous_diagnostic_id: None,
+            pull_generation: 0,
+            applied_pull_generation: 0,
             virtual_doc: None,
             language_servers_of_virtual_doc: HashMap::new(),
             is_org_file,
@@ -172,9 +203,34 @@ impl Document {
         &self.uri
     }
 
-    /// A Url to file path
+    /// A Url to file path. `None` for virtual documents; see [`uri_to_local_path`].
     pub fn path(&self) -> Option<PathBuf> {
-        Url::to_file_path(self.uri()).ok()
+        uri_to_local_path(self.uri())
+    }
+
+    /// Reserve a generation for a pull-diagnostic batch about to be issued.
+    pub fn next_pull_generation(&mut self) -> u64 {
+        self.pull_generation += 1;
+        self.pull_generation
+    }
+
+    /// Whether a pull-diagnostic response tagged GENERATION may be applied.
+    ///
+    /// Pull requests are idle-debounced, but the debounce is shorter than a slow
+    /// server's turnaround, so two batches can be in flight at once. Responses are
+    /// then not guaranteed to arrive in issue order, and without this guard the
+    /// older batch's result would overwrite the newer one and stay until the next
+    /// idle tick.
+    ///
+    /// Rejects only *strictly older* generations: one batch issues a request per
+    /// language server and they all share a generation, so several responses
+    /// legitimately carry the same value.
+    pub fn accept_pull_generation(&mut self, generation: u64) -> bool {
+        if generation < self.applied_pull_generation {
+            return false;
+        }
+        self.applied_pull_generation = generation;
+        true
     }
 
     pub fn get_server_capabilities(&self) -> CustomServerCapabilitiesParams {
@@ -188,8 +244,10 @@ impl Document {
             support_pull_diagnostic: false,
             support_inline_completion: false,
             support_hover: false,
+            support_code_lens: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
             has_any_servers: false,
+            workspace_roots: vec![],
         };
 
         let mut has_any_servers = false;
@@ -197,6 +255,11 @@ impl Document {
 
         self.language_servers().for_each(|ls| {
             has_any_servers = true;
+
+            let root = ls.root_path.to_string_lossy().to_string();
+            if !server_capabilities.workspace_roots.contains(&root) {
+                server_capabilities.workspace_roots.push(root);
+            }
 
             // Check text document sync capability
             let sync_kind = ls.get_text_document_sync_kind();
@@ -237,6 +300,10 @@ impl Document {
             if ls.supports_feature(LanguageServerFeature::Hover) {
                 server_capabilities.support_hover = true;
             }
+
+            if ls.supports_feature(LanguageServerFeature::CodeLens) {
+                server_capabilities.support_code_lens = true;
+            }
         });
 
         // Set has_any_servers flag
@@ -264,8 +331,10 @@ impl Document {
             support_pull_diagnostic: false,
             support_inline_completion: false,
             support_hover: false,
+            support_code_lens: false,
             text_document_sync_kind: "incremental".to_string(),
             has_any_servers: false,
+            workspace_roots: vec![],
         };
 
         let mut has_any_servers = false;
@@ -274,6 +343,11 @@ impl Document {
         for entry in self.language_servers_of_virtual_doc.values() {
             let ls = &entry.client;
             has_any_servers = true;
+
+            let root = ls.root_path.to_string_lossy().to_string();
+            if !server_capabilities.workspace_roots.contains(&root) {
+                server_capabilities.workspace_roots.push(root);
+            }
 
             let sync_kind = ls.get_text_document_sync_kind();
             if sync_kind == "full" {
@@ -308,9 +382,16 @@ impl Document {
     }
 
     fn set_language_config(&mut self, config_loader: Arc<syntax::Loader>, language: Option<&str>) {
-        let language_config = self.path().and_then(|path| {
-            config_loader.language_config_for_file_name(path.as_ref(), language)
-        });
+        let language_config = match self.path() {
+            Some(path) => config_loader.language_config_for_file_name(path.as_ref(), language),
+            // A virtual document has no file name to match a glob or extension
+            // against, so the client-supplied `languageId` is the only thing that
+            // can identify it. Previously this fallback sat inside an `and_then`
+            // on `path()` and was therefore unreachable for pathless documents,
+            // leaving them with no language config at all — which meant no
+            // language server was ever launched for them.
+            None => language.and_then(|lang| config_loader.language_config_for_language_id(lang)),
+        };
         self.language_config = language_config;
     }
 
@@ -503,5 +584,139 @@ impl Document {
     /// Remove and return a virtual document server entry.
     pub fn remove_virtual_doc_server(&mut self, language: &str) -> Option<VirtualDocServerEntry> {
         self.language_servers_of_virtual_doc.remove(language)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::uri_to_local_path;
+    use lsp_types::Url;
+    use std::path::PathBuf;
+
+    fn path_of(uri: &str) -> Option<PathBuf> {
+        uri_to_local_path(&Url::parse(uri).expect("valid url"))
+    }
+
+    fn doc(uri: &str) -> super::Document {
+        super::Document::new(&Url::parse(uri).unwrap(), None, None)
+    }
+
+    #[test]
+    fn pull_generations_are_monotonic() {
+        let mut d = doc("file:///tmp/a.java");
+        assert_eq!(d.next_pull_generation(), 1);
+        assert_eq!(d.next_pull_generation(), 2);
+        assert_eq!(d.next_pull_generation(), 3);
+    }
+
+    #[test]
+    fn in_order_pull_responses_are_all_accepted() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2) = (d.next_pull_generation(), d.next_pull_generation());
+        assert!(d.accept_pull_generation(g1));
+        assert!(d.accept_pull_generation(g2));
+    }
+
+    /// The bug this guard exists for: two batches in flight, the newer one lands
+    /// first, and the older response must not overwrite it.
+    #[test]
+    fn out_of_order_pull_response_is_rejected() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2) = (d.next_pull_generation(), d.next_pull_generation());
+        assert!(d.accept_pull_generation(g2), "newer batch lands first");
+        assert!(
+            !d.accept_pull_generation(g1),
+            "older batch must not overwrite the newer result"
+        );
+    }
+
+    /// One batch issues a request per language server, all sharing a generation,
+    /// so repeats of the same value must keep being accepted.
+    #[test]
+    fn same_generation_accepted_repeatedly_for_multiple_servers() {
+        let mut d = doc("file:///tmp/a.java");
+        let g = d.next_pull_generation();
+        assert!(d.accept_pull_generation(g));
+        assert!(d.accept_pull_generation(g));
+        assert!(d.accept_pull_generation(g));
+    }
+
+    /// A rejected batch must not advance the applied watermark, or the batch that
+    /// legitimately follows it would be rejected too.
+    #[test]
+    fn rejection_does_not_advance_the_watermark() {
+        let mut d = doc("file:///tmp/a.java");
+        let (g1, g2, g3) = (
+            d.next_pull_generation(),
+            d.next_pull_generation(),
+            d.next_pull_generation(),
+        );
+        assert!(d.accept_pull_generation(g2));
+        assert!(!d.accept_pull_generation(g1));
+        assert!(d.accept_pull_generation(g3), "g3 still accepted after g1 was rejected");
+    }
+
+    #[test]
+    fn resolves_plain_file_uris() {
+        assert_eq!(
+            path_of("file:///tmp/proj/src/Main.java"),
+            Some(PathBuf::from("/tmp/proj/src/Main.java"))
+        );
+    }
+
+    #[test]
+    fn resolves_percent_encoded_file_uris() {
+        assert_eq!(
+            path_of("file:///tmp/a%20b/Main.java"),
+            Some(PathBuf::from("/tmp/a b/Main.java"))
+        );
+    }
+
+    #[test]
+    fn jar_uri_has_no_path() {
+        assert_eq!(
+            path_of("jar:file:///home/u/.m2/repo/foo/bar-1.0-sources.jar!/com/foo/Bar.java"),
+            None
+        );
+    }
+
+    /// The regression this guard exists for: without the scheme check a `jrt:`
+    /// URI resolves to a fabricated absolute path that keeps the archive's real
+    /// path prefix, so it looks entirely plausible and workspace resolution
+    /// happily walks up it.
+    #[test]
+    fn jrt_uri_has_no_path() {
+        let uri = "jrt:///Users/u/proj/jbr/Contents/Home!/modules/java.base/java/lang/System.class";
+        assert_eq!(path_of(uri), None);
+
+        // Pin the upstream behaviour we are guarding against, so this test starts
+        // failing (rather than silently passing) if the `url` crate ever changes.
+        // Note the fabricated path is the URI's whole path component, `!` and all:
+        // walking it upwards reaches real directories, which is how a decompiled
+        // JDK source ended up resolving to whatever repository happens to contain
+        // the JDK.
+        assert_eq!(
+            Url::parse(uri).unwrap().to_file_path().ok(),
+            Some(PathBuf::from(
+                "/Users/u/proj/jbr/Contents/Home!/modules/java.base/java/lang/System.class"
+            )),
+            "url crate no longer fabricates a path for jrt:; the scheme guard may be redundant"
+        );
+    }
+
+    #[test]
+    fn other_non_file_schemes_have_no_path() {
+        assert_eq!(path_of("untitled:Untitled-1"), None);
+        assert_eq!(path_of("jdt://contents/java.base/java.lang/String.class"), None);
+    }
+
+    /// Remote documents are still plain `file:` URIs (the TRAMP prefix lives
+    /// inside the path), so they must keep resolving.
+    #[test]
+    fn tramp_style_remote_file_uri_still_resolves() {
+        assert_eq!(
+            path_of("file:///ssh:host:/home/u/proj/Main.java"),
+            Some(PathBuf::from("/ssh:host:/home/u/proj/Main.java"))
+        );
     }
 }

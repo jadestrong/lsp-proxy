@@ -55,6 +55,28 @@ pub struct RegisteredCapability {
     pub register_options: Option<lsp_types::TextDocumentRegistrationOptions>,
 }
 
+/// The `textDocument/publishDiagnostics` capabilities we advertise.
+///
+/// `versionSupport` states whether we *interpret* the `version` field of a
+/// `publishDiagnostics` notification. We do not — matching
+/// vscode-languageclient, which advertises `false` and whose `handleDiagnostics`
+/// reads only `uri` and `diagnostics`.
+///
+/// This used to be `true` while `main_loop` enforced `version == doc.version`,
+/// which made the push channel unusable. A server that stamps the version it
+/// analysed rather than the client's newest is behaving correctly, but under
+/// continuous typing its notifications never match, so every one was discarded —
+/// and because nothing re-requests a push, the final analysis was lost for good.
+///
+/// Extracted from the `initialize` capabilities literal purely so this decision
+/// is covered by a test.
+fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabilities {
+    lsp::PublishDiagnosticsClientCapabilities {
+        version_support: Some(false),
+        ..Default::default()
+    }
+}
+
 #[derive(Debug)]
 pub struct Client {
     id: usize,
@@ -88,7 +110,7 @@ impl Client {
         let file_root = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&file_root).ok();
 
@@ -185,7 +207,7 @@ impl Client {
         let root_path = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
@@ -413,20 +435,26 @@ impl Client {
                 Some(OneOf::Left(true) | OneOf::Right(InlayHintServerCapabilities::Options(_)))
             ),
             LanguageServerFeature::PullDiagnostics => capabilities.diagnostic_provider.is_some(),
+            LanguageServerFeature::CodeLens => capabilities.code_lens_provider.is_some(),
         }
     }
 
     pub fn supports_registered_feature(&self, feature: LanguageServerFeature) -> bool {
         let registered_capabilities = self.registered_capabilities.lock();
-        if feature == LanguageServerFeature::Format {
-            return registered_capabilities
-                .iter()
-                .any(|cap| cap.method == lsp_types::request::Formatting::METHOD);
-        }
-        false
+        let method = match feature {
+            LanguageServerFeature::Format => lsp_types::request::Formatting::METHOD,
+            LanguageServerFeature::CodeLens => lsp_types::request::CodeLensRequest::METHOD,
+            _ => return false,
+        };
+        registered_capabilities
+            .iter()
+            .any(|cap| cap.method == method)
     }
 
-    async fn request<R: lsp::request::Request>(&self, params: R::Params) -> Result<R::Result>
+    pub(crate) async fn request<R: lsp::request::Request>(
+        &self,
+        params: R::Params,
+    ) -> Result<R::Result>
     where
         R::Params: serde::Serialize,
         R::Result: core::fmt::Debug, // TODO temporary
@@ -457,7 +485,7 @@ impl Client {
     ) -> impl Future<Output = Result<Value>> {
         let server_tx = self.server_tx.clone();
         let timeout_secs = self.req_timeout;
-        
+
         async move {
             use std::time::Duration;
             use tokio::time::timeout;
@@ -468,7 +496,7 @@ impl Client {
                 method,
                 params: Self::value_into_params(params),
             };
-            
+
             let (tx, mut rx) = channel::<Result<Value>>(1);
             server_tx
                 .send(Payload::Request {
@@ -739,13 +767,13 @@ impl Client {
                         dynamic_registration: Some(false),
                         related_document_support: Some(true),
                     }),
-                    publish_diagnostics: Some(lsp::PublishDiagnosticsClientCapabilities {
-                        version_support: Some(true),
-                        ..Default::default()
-                    }),
+                    publish_diagnostics: Some(publish_diagnostics_capabilities()),
                     inlay_hint: Some(lsp::InlayHintClientCapabilities {
                         dynamic_registration: Some(false),
                         resolve_support: None,
+                    }),
+                    code_lens: Some(lsp::CodeLensClientCapabilities {
+                        dynamic_registration: Some(true),
                     }),
                     definition: Some(lsp::GotoCapability {
                         dynamic_registration: Some(true),
@@ -1015,5 +1043,23 @@ impl Client {
             },
             None => "none".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_diagnostics_capabilities;
+
+    /// Guards the fix for "diagnostics always dropped": advertising
+    /// `versionSupport: true` is only honest if we actually interpret the field,
+    /// and we deliberately do not (see `publish_diagnostics_capabilities` and the
+    /// `PublishDianostics` arm in `main_loop`). Flipping this back to `true`
+    /// without also adding real version handling reintroduces the bug.
+    #[test]
+    fn does_not_advertise_publish_diagnostics_version_support() {
+        assert_eq!(
+            publish_diagnostics_capabilities().version_support,
+            Some(false)
+        );
     }
 }

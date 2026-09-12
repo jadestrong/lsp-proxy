@@ -100,6 +100,10 @@ that support `textDocument/diagnostic' request.")
   "Is there any server associated with this buffer
 that support `textDocument/hover' request.")
 
+(defvar-local lsp-proxy--support-code-lens nil
+  "Is there any server associated with this buffer
+that support `textDocument/codeLens' request.")
+
 (defvar-local lsp-proxy--has-any-servers nil
   "Whether this buffer has any language servers available.
 This is used to determine if LSP requests should be sent.")
@@ -172,6 +176,7 @@ This is used to determine if LSP requests should be sent.")
 (declare-function lsp-proxy-diagnostics--request-pull-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-diagnostics--handle-publish-diagnostics "lsp-proxy-diagnostics")
 (declare-function lsp-proxy-activate-inlay-hints-mode "lsp-proxy-inlay-hints")
+(declare-function lsp-proxy-activate-codelens-mode "lsp-proxy-codelens")
 (declare-function lsp-proxy-inline-completion-mode "lsp-proxy")
 (declare-function lsp-proxy--set-work-done-token "lsp-proxy")
 (declare-function lsp-proxy--rem-work-done-token "lsp-proxy")
@@ -307,6 +312,36 @@ Only sends requests if servers are available."
 
 ;;; Connection
 
+(defvar-local lsp-proxy--workspace-roots nil
+  "Workspace roots of the language servers serving this buffer.
+
+Kept per buffer because `$/progress' is filed by *server* root, while
+`lsp-proxy-project-root' reports what project.el thinks the project is.  Those
+disagree in a monorepo — the server root is the module, project.el's is the
+repository — so progress must be looked up by these instead.
+
+Normalised on arrival to match the keys used when progress is stored.")
+
+(defun lsp-proxy--managed-server-path-environment ()
+  "Return `process-environment' with managed language servers on PATH.
+
+Servers this package installs itself live in versioned directories no
+user would want to name in `languages.toml'.  Putting their `bin/' on the
+proxy's PATH instead means a config entry can just say
+`command = \"intellij-server\"' and the proxy's own `which' lookup finds it.
+
+PATH is fixed when the process starts, so a server installed afterwards is only
+picked up on the next `lsp-proxy-restart'."
+  (let ((dirs (delq nil (list (when (fboundp 'lsp-proxy-java-server-bin-directory)
+                                (lsp-proxy-java-server-bin-directory))))))
+    (if (null dirs)
+        process-environment
+      (cons (concat "PATH="
+                    (mapconcat (lambda (d) (directory-file-name d)) dirs path-separator)
+                    path-separator
+                    (or (getenv "PATH") ""))
+            process-environment))))
+
 (defun lsp-proxy--make-connection ()
   "Establish proxy jsonrpc connection."
   (let ((make-fn (apply-partially
@@ -318,7 +353,7 @@ Only sends requests if servers are available."
                   :process (let ((process-environment
                                   (cons (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
                                                 lsp-proxy-remote-binary-path)
-                                        process-environment)))
+                                        (lsp-proxy--managed-server-path-environment))))
                               (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file
@@ -365,6 +400,17 @@ Only sends requests if servers are available."
   (when  (eql method 'window/showMessage)
     (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
+  ;; Progress for a long-running install. Reported on its own channel rather than
+  ;; `$/progress' because that one is filed by project root and only rendered in a
+  ;; buffer inside that project with the minor mode on — an install can be started
+  ;; from anywhere, so it needs somewhere always visible.
+  (when (eql method 'emacs/installProgress)
+    (lsp-proxy--dbind (:message message :percentage percentage) msg
+      ;; Mode line only. These arrive every 700ms for several minutes; see the
+      ;; commentary on `lsp-proxy--set-global-status'. The percentage is not
+      ;; appended to MESSAGE — it is rendered from the structured field, and the
+      ;; server deliberately leaves it out of the prose.
+      (lsp-proxy--set-global-status "IntelliJ" message percentage)))
   (when (eql method 'emacs/serverCapabilities)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters
@@ -375,8 +421,10 @@ Only sends requests if servers are available."
                        :supportPullDiagnostic support-pull-diagnostic
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
+                       :supportCodeLens support-code-lens
                        :textDocumentSyncKind text-document-sync-kind
-                       :hasAnyServers has-any-servers)
+                       :hasAnyServers has-any-servers
+                       :workspaceRoots workspace-roots)
         msg
       (let* ((filepath (lsp-proxy--uri-to-path uri)))
         (when (file-exists-p filepath)
@@ -388,9 +436,18 @@ Only sends requests if servers are available."
             (setq-local lsp-proxy--support-signature-help (not (eq support-signature-help :json-false)))
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
+            (setq-local lsp-proxy--support-code-lens (not (eq support-code-lens :json-false)))
             (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
+            ;; Normalised here, once, so every later comparison is against the same
+            ;; shape as the keys `$/progress' is filed under.
+            (setq-local lsp-proxy--workspace-roots
+                        (mapcar (lambda (root)
+                                  (lsp-proxy--fix-path-casing
+                                   (lsp-proxy--normalize-path root)))
+                                (append workspace-roots nil)))
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
+            (lsp-proxy-activate-codelens-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
             (if (not (eq support-inline-completion :json-false))
                 (lsp-proxy-inline-completion-mode)))))))
@@ -404,6 +461,11 @@ Only sends requests if servers are available."
           ("begin" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
           ("report" (lsp-proxy--set-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token value))
           ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token))))))
+  ;; Build-tool import output. `lsp-proxy-java' is an optional module, so this is
+  ;; guarded the same way its server path lookup is.
+  (when (and (eql method 'intellij/importLog)
+             (fboundp 'lsp-proxy-java--handle-import-log))
+    (lsp-proxy-java--handle-import-log msg))
   (when (eql method 'emacs/remoteDeployNeeded)
     (lsp-proxy-remote--handle-deploy-needed msg))
   (when (eql method 'emacs/remoteDeployProgress)
@@ -416,7 +478,45 @@ Only sends requests if servers are available."
       (lsp-proxy--apply-workspace-edit edit last-command)))
   (when (eql method 'eslint/openDoc)
     (lsp-proxy--dbind (:url url) msg
-      (browse-url url))))
+      (browse-url url)))
+  (when (eql method 'window/showMessageRequest)
+    (lsp-proxy--handle-show-message-request msg))
+  ;; IntelliJ ModCommand action picker. `lsp-proxy-java' is optional, so guard the
+  ;; same way the other java-specific hooks do.
+  (when (and (eql method 'emacs/chooseAction)
+             (fboundp 'lsp-proxy-java--handle-choose-action))
+    (lsp-proxy-java--handle-choose-action msg)))
+
+(defun lsp-proxy--handle-show-message-request (msg)
+  "Let the user pick one of MSG's actions, per `window/showMessageRequest'.
+
+Returns the chosen `MessageActionItem', or nil.  Nil serializes to JSON
+null, which is how LSP spells \"the user dismissed the prompt\".
+
+The whole original action object is returned rather than a freshly built
+`(:title ...)': the spec lets a server carry extra fields in an action and
+rely on getting them back.
+
+`completing-read' (via `lsp-proxy--completing-read', which detaches the
+prompt from `this-command') is what eglot uses here as well.  It suits arbitrary
+server-supplied strings of any number, works with whatever completion UI
+the user has, and `C-g' maps cleanly onto dismissal.  It also blocks
+Emacs, which is what keeps the server from waiting indefinitely: the user
+cannot wander off mid-prompt."
+  (lsp-proxy--dbind (:message message :actions actions) msg
+    ;; `actions' arrives as a vector.
+    (let* ((actions (append actions nil))
+           (choices (mapcar (lambda (action)
+                              (cons (plist-get action :title) action))
+                            actions)))
+      (when choices
+        (condition-case nil
+            (let ((title (lsp-proxy--completing-read
+                          message
+                          (mapcar #'car choices))))
+              (cdr (assoc title choices)))
+          ;; C-g while choosing is a dismissal, not an error to propagate.
+          (quit nil))))))
 
 ;;; Change tracking
 
