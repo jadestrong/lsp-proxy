@@ -608,6 +608,7 @@ terminated even when Emacs exits without calling `lsp-proxy-restart'."
     (with-temp-buffer lsp-proxy--log-file))
   (find-file lsp-proxy--log-file))
 
+;;;###autoload
 (defun lsp-proxy-open-config-file ()
   "Open the configuration file. If it does not exist, create it first."
   (interactive)
