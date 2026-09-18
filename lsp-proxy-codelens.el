@@ -618,12 +618,13 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
                             (overlay-get ov 'lsp-proxy-codelens-command)))
          (command (or item-command overlay-command)))
     (cond
-     ;; `intellij_debugger.runMain' is a client-side-only command in the VS
+     ;; The IntelliJ Run/Debug lens is a client-side-only command in the VS
      ;; Code extension (its DAP integration registers a matching local
      ;; command and never forwards it to the server) — sending it through
      ;; `workspace/executeCommand' just gets back "Unknown command". Route
      ;; it to `lsp-proxy-java''s dape integration instead, when available.
-     ((and command (equal (plist-get command :command) "intellij_debugger.runMain"))
+     ;;
+     ((and command (equal (plist-get command :command) "intellij.jvm.runMain"))
       (if (fboundp 'lsp-proxy-java-dape-run-main)
           (lsp-proxy-java-dape-run-main (plist-get command :arguments))
         (lsp-proxy--error "%s" "Run/Debug from CodeLens needs `dape' installed; see the Debugging section in lsp-proxy-java.el")))

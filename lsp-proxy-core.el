@@ -466,6 +466,12 @@ picked up on the next `lsp-proxy-restart'."
   (when (and (eql method 'intellij/importLog)
              (fboundp 'lsp-proxy-java--handle-import-log))
     (lsp-proxy-java--handle-import-log msg))
+  ;; The IntelliJ server asking the editor to run one of its own commands (an
+  ;; inline rename, say) — a ModCommand that drives the UI rather than the
+  ;; document.  Optional module, so guarded like the rest.
+  (when (and (eql method 'intellij/runEditorCommand)
+             (fboundp 'lsp-proxy-java--handle-run-editor-command))
+    (lsp-proxy-java--handle-run-editor-command msg))
   (when (eql method 'emacs/remoteDeployNeeded)
     (lsp-proxy-remote--handle-deploy-needed msg))
   (when (eql method 'emacs/remoteDeployProgress)

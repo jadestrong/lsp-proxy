@@ -54,6 +54,7 @@ pub enum NotificationFromServer {
     ForwardRequest(lsp_ext::TsserverRequestParams),
     ImportLog(lsp_ext::ImportLogParams),
     ChooseAction(lsp_ext::ChooseActionParams),
+    RunEditorCommand(lsp_ext::RunEditorCommandParams),
 }
 
 impl NotificationFromServer {
@@ -88,6 +89,10 @@ impl NotificationFromServer {
             lsp_ext::ChooseAction::METHOD => {
                 let params: lsp_ext::ChooseActionParams = params.parse()?;
                 Self::ChooseAction(params)
+            }
+            lsp_ext::RunEditorCommand::METHOD => {
+                let params: lsp_ext::RunEditorCommandParams = params.parse()?;
+                Self::RunEditorCommand(params)
             }
             _ => {
                 return Err(Error::Unhandled);

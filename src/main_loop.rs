@@ -572,6 +572,11 @@ impl Application {
                     NotificationFromServer::ChooseAction(params) => {
                         self.forward_choose_action(server_id, params);
                     }
+                    NotificationFromServer::RunEditorCommand(params) => {
+                        // Relayed verbatim: the command ids are VS Code's, and which
+                        // Emacs command each maps to is the editor's decision.
+                        self.send_notification::<lsp_ext::RunEditorCommand>(params)
+                    }
                     NotificationFromServer::ImportLog(mut params) => {
                         // Stamped with the server's root rather than the editor's project
                         // root: in a monorepo each module imports separately and the two
