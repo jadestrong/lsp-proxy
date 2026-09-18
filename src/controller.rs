@@ -23,6 +23,8 @@ type ReqQueue = req_queue::ReqQueue<(String, Instant, Request), ReqHandler>;
 const REQUEST_WHITELIST: &[&str] = &[
     "textDocument/signatureHelp",
     "emacs/workspaceRestart",
+    "emacs/listWorkspaces",
+    "emacs/shutdownWorkspace",
     "textDocument/diagnostic",
 ];
 

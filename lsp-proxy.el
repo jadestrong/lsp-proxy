@@ -58,6 +58,8 @@
 ;; Declare functions from lsp-proxy-org to avoid compiler warnings
 (declare-function lsp-proxy-org-edit-special-advice "lsp-proxy-org")
 (declare-function lsp-proxy-org-edit-src-exit-advice "lsp-proxy-org")
+(declare-function lsp-proxy-diagnostics--flymake-update-diagnostics "lsp-proxy-diagnostics")
+(declare-function flycheck-buffer "ext:flycheck")
 
 ;;; Configuration
 
@@ -500,6 +502,157 @@ Skip reopening notifications for buffers not currently visible."
     (display-buffer debug-buffer)))
 
 ;;; Workspace restart
+
+(defun lsp-proxy--management-request (method params)
+  "Send server-management request METHOD with PARAMS.
+Unlike `lsp-proxy--request', this is not scoped to the current buffer."
+  (lsp-proxy--ensure-connection)
+  (jsonrpc-request lsp-proxy--connection method params))
+
+(defun lsp-proxy--json-array-to-list (value)
+  "Convert JSON array VALUE to a list when necessary."
+  (if (vectorp value)
+      (append value nil)
+    value))
+
+(defun lsp-proxy--path-in-workspace-p (path workspace-root)
+  "Return non-nil if PATH is WORKSPACE-ROOT or inside it."
+  (let* ((path (expand-file-name path))
+         (workspace-root (expand-file-name workspace-root))
+         (workspace-dir (file-name-as-directory workspace-root)))
+    (or (string= path (directory-file-name workspace-dir))
+        (file-in-directory-p path workspace-dir))))
+
+(defun lsp-proxy--remove-diagnostics-in-workspace (workspace-root)
+  "Remove cached diagnostics whose files belong to WORKSPACE-ROOT."
+  (let (empty-projects)
+    (maphash
+     (lambda (project-root diagnostics)
+       (when (hash-table-p diagnostics)
+         (let (files-to-remove)
+           (maphash
+            (lambda (file _)
+              (when (lsp-proxy--path-in-workspace-p file workspace-root)
+                (push file files-to-remove)))
+            diagnostics)
+           (dolist (file files-to-remove)
+             (remhash file diagnostics))
+           (when (= (hash-table-count diagnostics) 0)
+             (push project-root empty-projects)))))
+     lsp-proxy--diagnostics-map)
+    (dolist (project-root empty-projects)
+      (remhash project-root lsp-proxy--diagnostics-map))))
+
+(defun lsp-proxy--remove-progress-in-workspace (workspace-root)
+  "Remove cached progress entries whose project root belongs to WORKSPACE-ROOT."
+  (let (projects-to-remove)
+    (maphash
+     (lambda (project-root _)
+       (when (and project-root
+                  (lsp-proxy--path-in-workspace-p project-root workspace-root))
+         (push project-root projects-to-remove)))
+     lsp-proxy--project-hashmap)
+    (dolist (project-root projects-to-remove)
+      (remhash project-root lsp-proxy--project-hashmap))))
+
+(defun lsp-proxy--workspace-server-summary (workspace)
+  "Return a short server summary for WORKSPACE."
+  (let* ((servers (lsp-proxy--json-array-to-list
+                   (plist-get workspace :languageServers)))
+         (names (mapcar
+                 (lambda (server)
+                   (let ((name (plist-get server :name))
+                         (shared (not (eq (plist-get server :shared) :json-false))))
+                     (if shared
+                         (format "%s*" name)
+                       name)))
+                 servers)))
+    (mapconcat #'identity names ",")))
+
+(defun lsp-proxy--workspace-display-name (workspace)
+  "Return completion display string for WORKSPACE."
+  (format "%s  [%s docs]  %s"
+          (abbreviate-file-name (plist-get workspace :workspaceRoot))
+          (plist-get workspace :documentCount)
+          (lsp-proxy--workspace-server-summary workspace)))
+
+(defun lsp-proxy--read-workspace (workspaces)
+  "Prompt for one workspace from WORKSPACES."
+  (let* ((candidates
+          (mapcar (lambda (workspace)
+                    (cons (lsp-proxy--workspace-display-name workspace) workspace))
+                  workspaces))
+         (choice (completing-read "Shutdown workspace: " candidates nil t)))
+    (cdr (assoc choice candidates))))
+
+(defun lsp-proxy--cleanup-shutdown-workspace-state (workspace-root closed-documents)
+  "Clean local state for WORKSPACE-ROOT and CLOSED-DOCUMENTS."
+  (let ((closed-documents (mapcar #'expand-file-name
+                                  (lsp-proxy--json-array-to-list closed-documents))))
+    (lsp-proxy--remove-diagnostics-in-workspace workspace-root)
+    (lsp-proxy--remove-progress-in-workspace workspace-root)
+    (dolist (buf (buffer-list))
+      (when (and (buffer-live-p buf)
+                 (buffer-local-value 'lsp-proxy-mode buf))
+        (with-current-buffer buf
+          (when (and buffer-file-name
+                     (or (member (expand-file-name buffer-file-name) closed-documents)
+                         (lsp-proxy--path-in-workspace-p buffer-file-name workspace-root)))
+            (setq-local lsp-proxy--buffer-opened nil)
+            (setq-local lsp-proxy--has-any-servers nil)
+            (setq-local lsp-proxy--completion-trigger-characters nil)
+            (setq-local lsp-proxy--support-inlay-hints nil)
+            (setq-local lsp-proxy--support-document-highlight nil)
+            (setq-local lsp-proxy--support-document-symbols nil)
+            (setq-local lsp-proxy--support-signature-help nil)
+            (setq-local lsp-proxy--support-pull-diagnostic nil)
+            (setq-local lsp-proxy--support-inline-completion nil)
+            (setq-local lsp-proxy--support-hover nil)
+            (when (and (boundp 'lsp-proxy-diagnostics--flymake-report-fn)
+                       lsp-proxy-diagnostics--flymake-report-fn)
+              (lsp-proxy-diagnostics--flymake-update-diagnostics))
+            (when (and (bound-and-true-p flycheck-mode)
+                       (fboundp 'flycheck-buffer))
+              (flycheck-buffer))))))))
+
+;;;###autoload
+(defun lsp-proxy-shutdown-workspace ()
+  "Select and shut down one workspace known by the lsp-proxy server."
+  (interactive)
+  (when (and (bound-and-true-p lsp-proxy-mode)
+             buffer-file-name
+             (not lsp-proxy--buffer-opened))
+    (lsp-proxy--on-doc-open))
+  (let* ((workspaces
+          (lsp-proxy--json-array-to-list
+           (lsp-proxy--management-request 'emacs/listWorkspaces '(:params nil)))))
+    (when (seq-empty-p workspaces)
+      (user-error "No workspaces found"))
+    (let* (
+         (workspace (lsp-proxy--read-workspace workspaces))
+         (workspace-root (plist-get workspace :workspaceRoot)))
+      (unless workspace
+        (user-error "No workspace selected"))
+      (when (or (not (plist-get workspace :languageServers))
+                (yes-or-no-p (format "Shutdown workspace %s? " workspace-root)))
+        (let* ((result
+                (lsp-proxy--management-request
+                 'emacs/shutdownWorkspace
+                 `(:params (:workspaceRoot ,workspace-root))))
+               (closed-documents (plist-get result :closedDocuments))
+               (shutdown-servers (lsp-proxy--json-array-to-list
+                                  (plist-get result :shutdownServers)))
+               (preserved-servers (lsp-proxy--json-array-to-list
+                                   (plist-get result :preservedServers))))
+          (lsp-proxy--cleanup-shutdown-workspace-state
+           workspace-root
+           closed-documents)
+          (message
+           "Shutdown workspace %s: closed %d files, stopped %d servers, preserved %d shared servers"
+           (abbreviate-file-name workspace-root)
+           (length (lsp-proxy--json-array-to-list closed-documents))
+           (length shutdown-servers)
+           (length preserved-servers)))))))
 
 ;;;###autoload
 (defun lsp-proxy-workspace-restart ()

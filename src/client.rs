@@ -291,6 +291,20 @@ impl Client {
         self.workspace_folders.lock()
     }
 
+    pub fn remove_workspace_folder(
+        &self,
+        root_path: &std::path::Path,
+    ) -> Option<lsp_types::WorkspaceFolder> {
+        let mut workspace_folders = self.workspace_folders.lock();
+        let position = workspace_folders.iter().position(|workspace| {
+            workspace.uri.to_file_path().is_ok_and(|path| {
+                crate::utils::path::canonicalize(path)
+                    == crate::utils::path::canonicalize(root_path)
+            })
+        })?;
+        Some(workspace_folders.remove(position))
+    }
+
     fn next_request_id(&self) -> RequestId {
         let id = self.request_counter.fetch_add(1, Ordering::Relaxed);
         // avoid duplicate with emacs request

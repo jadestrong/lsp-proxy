@@ -12,8 +12,9 @@ use crate::{
     handlers::{
         self,
         request::{
-            create_error_response, create_error_response_with_uri, handle_code_action, handle_inline_completion,
-            handle_pull_diagnostic_response, pull_diagnostics_for_document,
+            create_error_response, create_error_response_with_uri, handle_code_action,
+            handle_inline_completion, handle_pull_diagnostic_response,
+            pull_diagnostics_for_document,
         },
     },
     lsp::{
@@ -37,8 +38,12 @@ use futures_util::StreamExt;
 use log::{debug, error, info, warn};
 use lsp_types::{notification::Notification, request::Request, LogMessageParams};
 use serde_json::{json, Value};
-use std::sync::Arc;
 use std::time::Duration;
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
@@ -813,6 +818,12 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
             }
+            Message::Request(req) if req.method == lsp_ext::ListWorkspaces::METHOD => {
+                self.handle_list_workspaces(&req);
+            }
+            Message::Request(req) if req.method == lsp_ext::ShutdownWorkspace::METHOD => {
+                self.handle_shutdown_workspace(&req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -978,6 +989,313 @@ impl Application {
         .finish();
 
         Ok(())
+    }
+
+    fn handle_list_workspaces(&mut self, req: &msg::Request) {
+        self.respond(Response::new_ok(
+            req.id.clone(),
+            self.collect_workspace_items(),
+        ));
+    }
+
+    fn handle_shutdown_workspace(&mut self, req: &msg::Request) {
+        let params = match from_json::<lsp_ext::ShutdownWorkspaceParams>(
+            lsp_ext::ShutdownWorkspace::METHOD,
+            &req.params.params,
+        ) {
+            Ok(params) => params,
+            Err(error) => {
+                self.respond(Response::new_err(
+                    req.id.clone(),
+                    jsonrpc::ErrorCode::InvalidParams,
+                    error.to_string(),
+                ));
+                return;
+            }
+        };
+
+        let workspace_root = crate::utils::path::canonicalize(&params.workspace_root);
+        let workspace_root_string = workspace_root.to_string_lossy().to_string();
+
+        let document_ids_to_remove: Vec<DocumentId> = self
+            .editor
+            .documents()
+            .filter_map(|doc| {
+                if Self::document_workspace_roots(doc)
+                    .into_iter()
+                    .any(|root| crate::utils::path::canonicalize(root) == workspace_root)
+                {
+                    Some(doc.id())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if document_ids_to_remove.is_empty() {
+            self.respond(Response::new_ok(
+                req.id.clone(),
+                lsp_ext::ShutdownWorkspaceResult {
+                    workspace_root: workspace_root_string,
+                    closed_documents: Vec::new(),
+                    shutdown_servers: Vec::new(),
+                    preserved_servers: Vec::new(),
+                },
+            ));
+            return;
+        }
+
+        let mut affected_client_ids = BTreeSet::new();
+        let mut closed_documents = Vec::new();
+
+        for document_id in &document_ids_to_remove {
+            if let Some(doc) = self.editor.document_mut(*document_id) {
+                let close_params = lsp_types::DidCloseTextDocumentParams {
+                    text_document: lsp_types::TextDocumentIdentifier {
+                        uri: doc.uri.clone(),
+                    },
+                };
+                closed_documents.push(
+                    doc.path()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .unwrap_or_else(|| doc.uri.to_string()),
+                );
+
+                let mut closed_for_client = HashSet::new();
+                for client in Self::document_clients(doc) {
+                    affected_client_ids.insert(client.id());
+                    if closed_for_client.insert(client.id()) {
+                        if let Err(error) = client.text_document_did_close(close_params.clone()) {
+                            error!("Failed to send didClose to {}: {error}", client.name());
+                        }
+                    }
+                }
+            }
+        }
+
+        for document_id in &document_ids_to_remove {
+            self.editor.remove_document_by_id(*document_id);
+        }
+
+        let remaining_client_ids: HashSet<usize> = self
+            .editor
+            .documents()
+            .flat_map(|doc| {
+                Self::document_clients(doc)
+                    .into_iter()
+                    .map(|client| client.id())
+            })
+            .collect();
+
+        let mut shutdown_servers = Vec::new();
+        let mut preserved_servers = Vec::new();
+
+        for client_id in affected_client_ids {
+            let Some(client) = self.editor.language_servers.get_by_id(client_id) else {
+                continue;
+            };
+
+            let roots_before = Self::client_workspace_roots(&client);
+            let remaining_workspace_count = roots_before
+                .iter()
+                .filter(|root| crate::utils::path::canonicalize(root) != workspace_root)
+                .count();
+            let shared = remaining_client_ids.contains(&client_id) || remaining_workspace_count > 0;
+
+            if shared {
+                if let Some(removed_workspace) = client.remove_workspace_folder(&workspace_root) {
+                    if let Err(error) =
+                        client.did_change_workspace(Vec::new(), vec![removed_workspace])
+                    {
+                        warn!(
+                            "Failed to remove workspace folder from {}: {error}",
+                            client.name()
+                        );
+                    }
+                }
+                preserved_servers.push(Self::workspace_language_server_info(
+                    &client,
+                    true,
+                    remaining_workspace_count.max(1),
+                ));
+            } else {
+                shutdown_servers.push(Self::workspace_language_server_info(&client, false, 0));
+                self.editor.language_servers.remove_by_id(client_id);
+                tokio::spawn(async move {
+                    let _ = client.shutdown_and_exit().await;
+                });
+            }
+        }
+
+        handlers::request::clear_completion_cache();
+
+        self.respond(Response::new_ok(
+            req.id.clone(),
+            lsp_ext::ShutdownWorkspaceResult {
+                workspace_root: workspace_root_string,
+                closed_documents,
+                shutdown_servers,
+                preserved_servers,
+            },
+        ));
+    }
+
+    fn collect_workspace_items(&self) -> Vec<lsp_ext::WorkspaceListItem> {
+        struct WorkspaceAccumulator {
+            document_paths: BTreeSet<String>,
+            server_ids: BTreeSet<usize>,
+        }
+
+        let mut workspaces: BTreeMap<String, WorkspaceAccumulator> = BTreeMap::new();
+        let mut clients: HashMap<usize, Arc<Client>> = HashMap::new();
+        let mut client_workspace_roots: HashMap<usize, BTreeSet<String>> = HashMap::new();
+
+        for doc in self.editor.documents() {
+            let Some(doc_path) = doc.path() else {
+                continue;
+            };
+            let doc_path_string = doc_path.to_string_lossy().to_string();
+
+            let clients_for_doc = Self::document_clients(doc);
+
+            for client in clients_for_doc {
+                clients.entry(client.id()).or_insert_with(|| client.clone());
+                let roots = Self::workspace_roots_for_doc(&client, &doc_path);
+                for root in roots {
+                    client_workspace_roots
+                        .entry(client.id())
+                        .or_default()
+                        .insert(root.clone());
+                    let workspace =
+                        workspaces
+                            .entry(root)
+                            .or_insert_with(|| WorkspaceAccumulator {
+                                document_paths: BTreeSet::new(),
+                                server_ids: BTreeSet::new(),
+                            });
+                    workspace.document_paths.insert(doc_path_string.clone());
+                    workspace.server_ids.insert(client.id());
+                }
+            }
+        }
+
+        workspaces
+            .into_iter()
+            .map(|(workspace_root, workspace)| {
+                let language_servers = workspace
+                    .server_ids
+                    .into_iter()
+                    .filter_map(|client_id| {
+                        let client = clients.get(&client_id)?;
+                        let workspace_count = client_workspace_roots
+                            .get(&client_id)
+                            .map(|roots| roots.len())
+                            .unwrap_or(1);
+                        Some(Self::workspace_language_server_info(
+                            client,
+                            workspace_count > 1,
+                            workspace_count,
+                        ))
+                    })
+                    .collect();
+
+                lsp_ext::WorkspaceListItem {
+                    workspace_root,
+                    document_count: workspace.document_paths.len(),
+                    language_servers,
+                }
+            })
+            .collect()
+    }
+
+    fn document_clients(doc: &Document) -> Vec<Arc<Client>> {
+        doc.language_servers
+            .values()
+            .cloned()
+            .into_iter()
+            .chain(
+                doc.language_servers_of_virtual_doc
+                    .values()
+                    .map(|entry| entry.client.clone()),
+            )
+            .collect()
+    }
+
+    fn document_workspace_roots(doc: &Document) -> BTreeSet<PathBuf> {
+        let Some(doc_path) = doc.path() else {
+            return BTreeSet::new();
+        };
+
+        Self::document_clients(doc)
+            .into_iter()
+            .flat_map(|client| Self::workspace_roots_for_doc(&client, &doc_path))
+            .map(PathBuf::from)
+            .collect()
+    }
+
+    fn workspace_roots_for_doc(client: &Arc<Client>, doc_path: &Path) -> Vec<String> {
+        let workspace_roots: Vec<PathBuf> = client
+            .workspace_folders
+            .lock()
+            .iter()
+            .filter_map(|workspace| workspace.uri.to_file_path().ok())
+            .collect();
+        let matching_roots: Vec<PathBuf> = workspace_roots
+            .iter()
+            .filter(|root| Self::path_is_in_workspace(doc_path, root))
+            .map(crate::utils::path::canonicalize)
+            .collect();
+
+        if matching_roots.is_empty() && Self::path_is_in_workspace(doc_path, &client.root_path) {
+            vec![crate::utils::path::canonicalize(&client.root_path)
+                .to_string_lossy()
+                .to_string()]
+        } else {
+            let max_component_count = matching_roots
+                .iter()
+                .map(|root| root.components().count())
+                .max()
+                .unwrap_or_default();
+            matching_roots
+                .into_iter()
+                .filter(|root| root.components().count() == max_component_count)
+                .map(|root| root.to_string_lossy().to_string())
+                .collect()
+        }
+    }
+
+    fn client_workspace_roots(client: &Arc<Client>) -> Vec<PathBuf> {
+        let roots: Vec<PathBuf> = client
+            .workspace_folders
+            .lock()
+            .iter()
+            .filter_map(|workspace| workspace.uri.to_file_path().ok())
+            .collect();
+        if roots.is_empty() {
+            vec![client.root_path.clone()]
+        } else {
+            roots
+        }
+    }
+
+    fn workspace_language_server_info(
+        client: &Arc<Client>,
+        shared: bool,
+        workspace_count: usize,
+    ) -> lsp_ext::WorkspaceLanguageServerInfo {
+        lsp_ext::WorkspaceLanguageServerInfo {
+            id: client.id(),
+            name: client.name().to_string(),
+            root_path: client.root_path.to_string_lossy().to_string(),
+            shared,
+            workspace_count,
+        }
+    }
+
+    fn path_is_in_workspace(path: &Path, workspace_root: &Path) -> bool {
+        let path = crate::utils::path::canonicalize(path);
+        let workspace_root = crate::utils::path::canonicalize(workspace_root);
+        path == workspace_root || path.starts_with(workspace_root)
     }
 
     fn handle_workspace_restart(&mut self, req: &msg::Request) {

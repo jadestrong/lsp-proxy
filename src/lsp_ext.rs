@@ -135,6 +135,7 @@ pub struct WorkspaceInfo {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LanguageServerInfo {
+    pub id: usize,
     pub name: String,
     pub root_path: String,
     pub support_workspace: syntax::SupportWorkspace,
@@ -144,6 +145,59 @@ impl Request for GetWorkspaceInfo {
     type Params = ();
     type Result = Option<WorkspaceInfo>;
     const METHOD: &'static str = "emacs/getWorkspaceInfo";
+}
+
+// emacs/listWorkspaces
+#[derive(Debug)]
+pub enum ListWorkspaces {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceListItem {
+    pub workspace_root: String,
+    pub document_count: usize,
+    pub language_servers: Vec<WorkspaceLanguageServerInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceLanguageServerInfo {
+    pub id: usize,
+    pub name: String,
+    pub root_path: String,
+    pub shared: bool,
+    pub workspace_count: usize,
+}
+
+impl Request for ListWorkspaces {
+    type Params = ();
+    type Result = Vec<WorkspaceListItem>;
+    const METHOD: &'static str = "emacs/listWorkspaces";
+}
+
+// emacs/shutdownWorkspace
+#[derive(Debug)]
+pub enum ShutdownWorkspace {}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownWorkspaceParams {
+    pub workspace_root: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShutdownWorkspaceResult {
+    pub workspace_root: String,
+    pub closed_documents: Vec<String>,
+    pub shutdown_servers: Vec<WorkspaceLanguageServerInfo>,
+    pub preserved_servers: Vec<WorkspaceLanguageServerInfo>,
+}
+
+impl Request for ShutdownWorkspace {
+    type Params = ShutdownWorkspaceParams;
+    type Result = ShutdownWorkspaceResult;
+    const METHOD: &'static str = "emacs/shutdownWorkspace";
 }
 
 // emacs/getLanguagesConfig
