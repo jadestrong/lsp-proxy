@@ -710,8 +710,6 @@ line need delta adjustment."
                    (when (timerp lsp-proxy-codelens--update-timer)
                      (cancel-timer lsp-proxy-codelens--update-timer))
                    (setq lsp-proxy-codelens--update-timer nil)
-                   (message "[lsp-proxy DEBUG] codelens--update-timer FIRING (buffer=%s time=%s)"
-                            (buffer-name buf) (current-time-string))
                    (lsp-proxy-codelens--fetch-codelens))))
              (current-buffer))))))
 
