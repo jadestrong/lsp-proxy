@@ -1,5 +1,5 @@
 use serde_json::Value;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::fmt::time;
 
 /// A structured logger for LSP server communication
@@ -103,15 +103,31 @@ impl LspLogger {
         }
     }
 
-    /// Log LSP server errors
-    pub fn log_error(&self, error: &str) {
-        error!(
-            server = %self.server_name,
-            server_id = self.server_id,
-            message_type = "error",
-            "LSP Server Error: {}",
-            error
-        );
+    /// Log output written by an LSP server to stderr.
+    pub fn log_stderr(&self, message: &str) {
+        match stderr_level(message) {
+            StderrLevel::Error => error!(
+                server = %self.server_name,
+                server_id = self.server_id,
+                message_type = "stderr",
+                "LSP Server stderr: {}",
+                message
+            ),
+            StderrLevel::Warning => warn!(
+                server = %self.server_name,
+                server_id = self.server_id,
+                message_type = "stderr",
+                "LSP Server stderr: {}",
+                message
+            ),
+            StderrLevel::Info => info!(
+                server = %self.server_name,
+                server_id = self.server_id,
+                message_type = "stderr",
+                "LSP Server stderr: {}",
+                message
+            ),
+        }
     }
 
     /// Log general debug information
@@ -150,6 +166,46 @@ impl LspLogger {
         } else {
             None
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum StderrLevel {
+    Error,
+    Warning,
+    Info,
+}
+
+fn stderr_level(message: &str) -> StderrLevel {
+    let message = message.trim_start().to_ascii_uppercase();
+    if message.starts_with("ERROR") || message.starts_with("FATAL") {
+        StderrLevel::Error
+    } else if message.starts_with("WARN") || message.starts_with("WARNING") {
+        StderrLevel::Warning
+    } else {
+        StderrLevel::Info
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{stderr_level, StderrLevel};
+
+    #[test]
+    fn classifies_server_stderr_by_explicit_prefix() {
+        assert_eq!(stderr_level("ERROR failed"), StderrLevel::Error);
+        assert_eq!(stderr_level("FATAL failed"), StderrLevel::Error);
+        assert_eq!(
+            stderr_level("WARNING: kotlin-lsp.sh is deprecated"),
+            StderrLevel::Warning
+        );
+        assert_eq!(stderr_level("WARN deprecated"), StderrLevel::Warning);
+        assert_eq!(stderr_level("IJ_JAVA_OPTIONS="), StderrLevel::Info);
+        assert_eq!(
+            stderr_level("idea.config.path=/tmp/config"),
+            StderrLevel::Info
+        );
+        assert_eq!(stderr_level("Log file: /tmp/server.log"), StderrLevel::Info);
     }
 }
 

@@ -319,7 +319,7 @@ impl Transport {
         if err.read_line(buffer).await? == 0 {
             return Err(Error::StreamClosed);
         };
-        logger.log_error(buffer.trim());
+        logger.log_stderr(buffer.trim());
         Ok(())
     }
 
