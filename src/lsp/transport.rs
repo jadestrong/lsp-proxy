@@ -50,6 +50,7 @@ impl Transport {
         UnboundedReceiver<(usize, jsonrpc::Call)>,
         UnboundedSender<Payload>,
         Arc<Notify>,
+        UnboundedSender<(usize, jsonrpc::Call)>,
     ) {
         let (client_tx, rx) = unbounded_channel();
         // 发送给 server ，接收要发生给 server 的消息
@@ -77,12 +78,12 @@ impl Transport {
         tokio::spawn(Self::send(
             transport,
             server_stdin,
-            client_tx,
+            client_tx.clone(),
             client_rx,
             notify.clone(),
         ));
 
-        (rx, tx, notify)
+        (rx, tx, notify, client_tx)
     }
 
     async fn recv(

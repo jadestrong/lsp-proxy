@@ -167,7 +167,9 @@ pub(crate) fn handle_did_open_text_document(
                     error!("Failed to send didOpen to {}: {e}", ls.name());
                 }
             }
-            if doc.language_servers.values().any(|ls| ls.is_initialized()) {
+            if doc.language_servers.is_empty()
+                || doc.language_servers.values().any(|ls| ls.is_initialized())
+            {
                 app.send_notification::<lsp_ext::CustomServerCapabilities>(
                     doc.get_server_capabilities(),
                 );
