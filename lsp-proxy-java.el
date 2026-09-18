@@ -44,6 +44,9 @@
 (require 'lsp-proxy-core)
 
 (declare-function jsonrpc-request "jsonrpc")
+;; Defined in `lsp-proxy.el', which requires this file rather than the other
+;; way round; only ever reached through `lsp-proxy-java-editor-command-alist'.
+(declare-function lsp-proxy-rename "lsp-proxy")
 (defvar lsp-proxy-mode)
 
 ;;; State
@@ -718,6 +721,50 @@ point your `languages.toml' at it."
               (alist-get name choices nil nil #'equal))
           (quit nil))))))
 
+;;; Editor commands driven by the server
+;;
+;; `intellij/runEditorCommand' arrives when a ModCommand needs the *editor* to do
+;; something rather than the document: the motivating case is a refactoring whose
+;; last step is an inline rename, which LSP cannot express at all — a server may not
+;; send `workspace/executeCommand' to a client, and it cannot start a rename session
+;; itself. (Live templates need none of this; they travel as a `SnippetTextEdit',
+;; which is ordinary LSP.)
+;;
+;; The ids are VS Code's, so this is a translation table rather than a dispatcher:
+;; only commands with a sensible Emacs equivalent are run, and anything unknown is
+;; logged and dropped. Dropping is the right failure here — the document edits of
+;; the ModCommand have already been applied by the time this arrives, so refusing
+;; the follow-up leaves the buffer correct, just not with a rename prompt open.
+
+(defcustom lsp-proxy-java-editor-command-alist
+  '(("editor.action.rename" . lsp-proxy-rename))
+  "How `intellij/runEditorCommand' ids map onto Emacs commands.
+Each entry is (VSCODE-COMMAND-ID . EMACS-COMMAND).  EMACS-COMMAND is
+called interactively, so a command that prompts (like
+`lsp-proxy-rename') prompts as usual.  Ids with no entry are ignored."
+  :type '(alist :key-type (string :tag "VS Code command id")
+                :value-type (function :tag "Emacs command"))
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java--handle-run-editor-command (msg)
+  "Run the editor command MSG asks for, if it maps onto one we have.
+MSG is the `intellij/runEditorCommand' payload: `{command, arguments?}'.
+The arguments are not passed on — every id mapped so far acts on point,
+which the server cannot move and does not try to."
+  (lsp-proxy--dbind (:command command) msg
+    (let ((mapped (alist-get command lsp-proxy-java-editor-command-alist nil nil #'equal)))
+      (cond
+       ((null mapped)
+        (lsp-proxy--message "Ignoring unmapped editor command `%s' (see `lsp-proxy-java-editor-command-alist')"
+                            command))
+       ((not (commandp mapped))
+        (lsp-proxy--warn "`%s' maps to `%s', which is not a command" command mapped))
+       (t
+        ;; Deferred so the notification handler returns before a prompting
+        ;; command takes over the minibuffer; reading input from inside the
+        ;; filter would block the connection until the user answered.
+        (run-at-time 0 nil (lambda () (call-interactively mapped))))))))
+
 ;;; Import log
 ;;
 ;; `intellij/importLog' reports the build tool (Maven/Gradle/Bazel) resolving the
@@ -865,7 +912,7 @@ Used to insert a heading when output starts coming from a different module.")
 ;; The backend hosts IntelliJ's XDebugger behind a DAP server: a plain
 ;; `workspace/executeCommand' with command `start_debug_server' (no
 ;; arguments) returns a fresh TCP port; connecting to it and sending a DAP
-;; `initialize' with `adapterID = "intellij_debugger"' gets you a real
+;; `initialize' with `adapterID = "intellij_jvm"' gets you a real
 ;; debug session (breakpoints, stepping, variables) with no VS Code
 ;; pieces involved.
 ;;
@@ -873,11 +920,27 @@ Used to insert a heading when output starts coming from a different module.")
 ;; `:cwd'/`:classPaths'/`:javaExec' on its own — empirically it doesn't (or
 ;; doesn't reliably): omitting them produced a JVM that started but
 ;; couldn't find the main class at all (wrong/empty classpath). The VS
-;; Code extension's `resolveLaunchConfig' (`dap.ts') resolves these
-;; explicitly via three `workspace/executeCommand' calls before launching,
-;; and that DOES work (verified: matching a real `cwd'/JDK/`@argfile'
-;; classpath in the launched process). This mirrors that exactly instead
-;; of trusting the adapter to self-resolve.
+;; Code extension resolves these explicitly with `workspace/executeCommand'
+;; before launching, and that DOES work (verified: matching a real
+;; `cwd'/JDK/`@argfile' classpath in the launched process). This mirrors
+;; that exactly instead of trusting the adapter to self-resolve.
+;;
+;; That resolution is one `intellij.java.resolveLaunch' call, which answers
+;; the whole launch — `javaExec', classpath, module path, module content
+;; roots, working directory — with the config's own values sent as
+;; `overrides' so the server decides how they combine. It replaced three
+;; per-fragment commands (`resolveClasspath', `resolveWorkingDirectory',
+;; `resolveJavaExecutable') that no longer exist, so there is nothing to
+;; fall back to: a backend that does not know it is too old for this file.
+;;
+;; The same rename swept the rest of this integration — the Run/Debug
+;; CodeLens command `intellij_debugger.runMain' → `intellij.jvm.runMain',
+;; and the adapter id `intellij_debugger' → `intellij_jvm'. Launching
+;; *through* a build tool (`intellij_gradle',
+;; `intellij.java.resolveBuildToolLaunch', the `intellij: build'
+;; pre-launch task) is a separate feature and is not wired up here: it
+;; needs a whole second launch shape, and a JVM launch behaves as it
+;; always has — it runs whatever is already compiled.
 ;;
 ;; `attach' is unaffected — a plain JDWP `:hostName'/`:port' still needs
 ;; no resolution.
@@ -910,15 +973,33 @@ Used to insert a heading when output starts coming from a different module.")
 ;; definitions are the ones below, conditionally, same as everything else
 ;; in this section.
 (declare-function lsp-proxy-java--dape-execute-command "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-compact "lsp-proxy-java")
 (declare-function lsp-proxy-java--dape-start-debug-server "lsp-proxy-java")
 (declare-function lsp-proxy-java--dape-resolve-uri "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-resolve-launch "lsp-proxy-java")
 (declare-function lsp-proxy-java--dape-populate-launch-config "lsp-proxy-java")
+
+(defcustom lsp-proxy-java-dape-adapter-id "intellij_jvm"
+  "The `:type'/DAP `adapterID' the backend's debug endpoint is addressed by.
+Anything the backend does not know gets \"No debugger adapter found for
+given adapter id\".
+
+`intellij_jvm' is the current name.  `intellij_debugger' is what it was
+called before, kept working by the backend as an alias, so it is the one
+to set if the server predates the rename.  `intellij_gradle' — a launch
+that runs *through* the build tool — needs a differently shaped config
+than this file builds and is not usable by setting this alone.
+
+The named `dape-configs' templates capture this when `dape' loads, so
+set it before then; `lsp-proxy-java-dape-run-main' (the Run/Debug
+CodeLens) reads it afresh on every launch."
+  :type '(choice (const :tag "intellij_jvm (current)" "intellij_jvm")
+                 (const :tag "intellij_debugger (pre-rename alias)" "intellij_debugger")
+                 (string :tag "Other adapter id"))
+  :group 'lsp-proxy)
 
 (when (featurep 'dape)
 
-  (defconst lsp-proxy-java--dape-type "intellij_debugger"
-    "The `:type'/DAP `adapterID' the backend's debug endpoint requires.
-Anything else gets \"No debugger adapter found for given adapter id\".")
 
   (defun lsp-proxy-java--dape-execute-command (command &optional argument)
     "Send `workspace/executeCommand' COMMAND, synchronously, and return its result.
@@ -951,16 +1032,73 @@ the request fails."
          :uri)
         (user-error "lsp-proxy-java: could not resolve a source file for `%s'" main-class)))
 
-  (defun lsp-proxy-java--dape-populate-launch-config (config)
-    "`fn' for the `intellij_debugger' launch/attach configs.
+  (defun lsp-proxy-java--dape-compact (plist)
+    "Return PLIST without the keys whose value is nil.
+Absent and nil are the same thing to the backend's optional fields, but
+they are not the same on the wire: a nil plist value would be sent as
+JSON null, which is a value rather than an omission."
+    (let (out)
+      (while plist
+        (when (cadr plist)
+          (setq out (append out (list (car plist) (cadr plist)))))
+        (setq plist (cddr plist)))
+      out))
 
-Always fetches a fresh debug-server `port'. For `:request \"launch\"'
+  (defun lsp-proxy-java--dape-resolve-launch (config uri)
+    "Fill CONFIG with the runtime paths for URI's module, and return it.
+
+One `intellij.java.resolveLaunch' call answers the whole launch in a
+single read action — `javaExec', classpath, module path, module content
+roots and working directory — with CONFIG's own values passed along as
+`overrides' so the *server* decides how they combine.  This is what the
+VS Code extension's `resolveJvmLaunchConfig' (`dap.ts') does, and the
+reason it is one call rather than several: every fragment a client has
+to remember to copy is a fragment it can silently drop."
+    (let ((paths (lsp-proxy-java--dape-execute-command
+                  "intellij.java.resolveLaunch"
+                  (lsp-proxy-java--dape-compact
+                   (list :uri uri
+                         :cwd (plist-get config :cwd)
+                         :overrides
+                         (lsp-proxy-java--dape-compact
+                          (list :classPaths (plist-get config :classPaths)
+                                :modulePaths (plist-get config :modulePaths)
+                                :moduleName (plist-get config :moduleName)
+                                :javaExec (plist-get config :javaExec))))))))
+      ;; Already merged with the overrides sent above, so this is copied
+      ;; rather than combined with whatever CONFIG had.
+      (setq config (plist-put config :classPaths (or (plist-get paths :classpath) [])))
+      ;; For a JPMS launch the answer carries the module path and the owning
+      ;; module name, so the main class runs from the module path
+      ;; (`-m moduleName/mainClass') instead of the classpath.
+      (setq config (plist-put config :modulePaths (or (plist-get paths :modulePath) [])))
+      (when-let* ((mn (plist-get paths :moduleName)))
+        (setq config (plist-put config :moduleName mn)))
+      ;; A build tool may compile one module into several directories and only
+      ;; the one holding `module-info.class' is the module; the adapter patches
+      ;; the rest back in with `--patch-module' once they exist on disk.
+      (setq config (plist-put config :moduleContentPaths
+                              (or (plist-get paths :moduleContentPaths) [])))
+      ;; The module's project directory, unless CONFIG named one. Without
+      ;; either, the launched process inherits lsp-proxy's own directory.
+      (when-let* ((wd (plist-get paths :workingDirectory)))
+        (setq config (plist-put config :cwd wd)))
+      ;; Never absent: a launch with neither a configured nor a project JDK is
+      ;; refused by the server, which is the only side that can tell the two
+      ;; apart.
+      (when-let* ((java (plist-get paths :javaExec)))
+        (setq config (plist-put config :javaExec java)))
+      config))
+
+  (defun lsp-proxy-java--dape-populate-launch-config (config)
+    "`fn' for the IntelliJ launch/attach configs.
+
+Always fetches a fresh debug-server `port'.  For `:request \"launch\"'
 also resolves `:cwd', `:classPaths'/`:modulePaths'/`:moduleName' and
 `:javaExec' for the module owning `:mainClass', mirroring the VS Code
-extension's `resolveLaunchConfig' (`dap.ts') — see this section's
-Commentary for why that resolution can't be skipped. `:request
-\"attach\"' needs none of this (a plain JDWP host/port), so only the
-port gets added.
+extension's launch resolution (`dap.ts') — see this section's Commentary
+for why that resolution can't be skipped.  `:request \"attach\"' needs
+none of this (a plain JDWP host/port), so only the port gets added.
 
 Uses the bare-symbol scratch key `lsp-proxy-uri' for an
 already-known source URI (from a CodeLens click) to skip the extra
@@ -971,36 +1109,8 @@ already-known source URI (from a CodeLens click) to skip the extra
       (let* ((main-class (or (plist-get config :mainClass)
                              (user-error "lsp-proxy-java: no `:mainClass' to resolve a launch config for")))
              (uri (or (plist-get config 'lsp-proxy-uri)
-                     (lsp-proxy-java--dape-resolve-uri main-class))))
-        (unless (plist-get config :classPaths)
-          (let ((cp (lsp-proxy-java--dape-execute-command
-                     "intellij.java.resolveClasspath" (list :uri uri))))
-            (setq config (plist-put config :classPaths (plist-get cp :classpath)))
-            ;; For a JPMS launch the server also returns the module path and
-            ;; owning module name, so the main class runs from the module path
-            ;; (`-m moduleName/mainClass') instead of the classpath.
-            (when-let* ((mp (plist-get cp :modulePath))
-                        ((> (length mp) 0)))
-              (setq config (plist-put config :modulePaths mp)))
-            (when-let* ((mn (plist-get cp :moduleName)))
-              (setq config (plist-put config :moduleName mn)))))
-        (unless (plist-get config :cwd)
-          ;; Optional: defaults to the module's project directory server-side.
-          ;; Without it the launched process would inherit lsp-proxy's own
-          ;; directory instead.
-          (condition-case err
-              (when-let* ((wd (lsp-proxy-java--dape-execute-command
-                               "intellij.java.resolveWorkingDirectory" (list :uri uri)))
-                          (cwd (plist-get wd :workingDirectory)))
-                (setq config (plist-put config :cwd cwd)))
-            (error
-             (message "lsp-proxy-java: working directory resolution failed, using default: %s"
-                      (error-message-string err)))))
-        (unless (plist-get config :javaExec)
-          (let ((java (lsp-proxy-java--dape-execute-command
-                       "intellij.java.resolveJavaExecutable" (list :uri uri))))
-            (setq config (plist-put config :javaExec (plist-get java :javaExec)))))
-        config)))
+                      (lsp-proxy-java--dape-resolve-uri main-class))))
+        (lsp-proxy-java--dape-resolve-launch config uri))))
 
   ;; Named templates for `M-x dape'. `:mainClass''s form is only evaluated by
   ;; `dape' when reading a config by name (`dape--config-eval'); by the time
@@ -1012,7 +1122,7 @@ already-known source URI (from a CodeLens click) to skip the extra
                   modes (java-mode java-ts-mode kotlin-mode)
                   host "127.0.0.1"
                   fn lsp-proxy-java--dape-populate-launch-config
-                  :type ,lsp-proxy-java--dape-type
+                  :type ,lsp-proxy-java-dape-adapter-id
                   :request "launch"
                   :mainClass (read-string "Main class (fully qualified): ")))
     (add-to-list 'dape-configs
@@ -1020,14 +1130,14 @@ already-known source URI (from a CodeLens click) to skip the extra
                   modes (java-mode java-ts-mode kotlin-mode)
                   host "127.0.0.1"
                   fn lsp-proxy-java--dape-populate-launch-config
-                  :type ,lsp-proxy-java--dape-type
+                  :type ,lsp-proxy-java-dape-adapter-id
                   :request "attach"
                   :hostName "127.0.0.1"
                   :port (read-number "JDWP port: " 5005))))
 
   ;;;###autoload
   (defun lsp-proxy-java-dape-run-main (arguments)
-    "Handle the `intellij_debugger.runMain' command's ARGUMENTS.
+    "Handle the IntelliJ Run/Debug lens command's ARGUMENTS.
 ARGUMENTS is the command's raw `:arguments' vector as delivered by the
 proxy — its first element is `{mainClass, uri?, noDebug?}', mirroring
 the VS Code extension's `RunMainArgs'. Builds a minimal config
@@ -1035,17 +1145,17 @@ the VS Code extension's `RunMainArgs'. Builds a minimal config
 `lsp-proxy-uri' key) and lets `lsp-proxy-java--dape-populate-launch-config'
 \(via `fn') resolve the rest, same as the named `dape-configs'
 templates. Meant to be called from `lsp-proxy-codelens.el' when a
-CodeLens command matches \"intellij_debugger.runMain\"."
+CodeLens command matches \"intellij.jvm.runMain\"."
     (let* ((args (and (vectorp arguments) (> (length arguments) 0) (aref arguments 0)))
            (main-class (and args (plist-get args :mainClass)))
            (uri (and args (plist-get args :uri)))
            (no-debug (and args (eq (plist-get args :noDebug) t))))
       (unless main-class
-        (user-error "lsp-proxy-java: `intellij_debugger.runMain' had no mainClass in its arguments"))
+        (user-error "lsp-proxy-java: the Run/Debug lens had no mainClass in its arguments"))
       (dape
        (append
         (list 'host "127.0.0.1"
-              :type lsp-proxy-java--dape-type
+              :type lsp-proxy-java-dape-adapter-id
               :request "launch"
               :mainClass main-class
               'fn #'lsp-proxy-java--dape-populate-launch-config)

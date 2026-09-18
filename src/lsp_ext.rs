@@ -246,6 +246,36 @@ impl Request for EmacsChooseAction {
 /// Server-side command the picked entry is delivered through.
 pub const CHOOSE_MOD_COMMAND_ACTION: &str = "chooseModCommandAction";
 
+// intellij/runEditorCommand
+//
+// The IntelliJ server asks the editor to run one of *its own* commands, as if the
+// user had invoked it. Some ModCommands drive the editor UI rather than the
+// document — starting an inline rename is the motivating case — and LSP cannot
+// express that: a server may not send `workspace/executeCommand` to a client, and
+// it cannot start such a session itself.
+//
+// The command ids are VS Code's (`editor.action.rename`), so the mapping onto
+// Emacs commands is the editor's business; the proxy only relays. Unknown ids are
+// dropped on the Emacs side rather than here, so that adding a mapping needs no
+// new proxy build.
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunEditorCommandParams {
+    pub command: String,
+    /// Positional arguments, verbatim. Left as raw JSON because their shape is
+    /// per-command and the proxy never inspects them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<Vec<serde_json::Value>>,
+}
+
+#[derive(Debug)]
+pub enum RunEditorCommand {}
+
+impl Notification for RunEditorCommand {
+    type Params = RunEditorCommandParams;
+    const METHOD: &'static str = "intellij/runEditorCommand";
+}
+
 // emacs/getFiles
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -697,7 +727,10 @@ impl Request for ForwardRequest {
 
 #[cfg(test)]
 mod choose_action_tests {
-    use super::{ChooseAction, ChooseActionParams, EmacsChooseAction, CHOOSE_MOD_COMMAND_ACTION};
+    use super::{
+        ChooseAction, ChooseActionParams, EmacsChooseAction, RunEditorCommand,
+        RunEditorCommandParams, CHOOSE_MOD_COMMAND_ACTION,
+    };
     use lsp_types::notification::Notification;
     use lsp_types::request::Request;
 
@@ -706,6 +739,24 @@ mod choose_action_tests {
         assert_eq!(ChooseAction::METHOD, "intellij/chooseAction");
         assert_eq!(EmacsChooseAction::METHOD, "emacs/chooseAction");
         assert_eq!(CHOOSE_MOD_COMMAND_ACTION, "chooseModCommandAction");
+        assert_eq!(RunEditorCommand::METHOD, "intellij/runEditorCommand");
+    }
+
+    /// `arguments` is optional, and absent is not the same as empty: a command
+    /// invoked with no arguments at all must not grow a `[]` on the way through.
+    #[test]
+    fn parses_run_editor_command_with_and_without_arguments() {
+        let bare: RunEditorCommandParams =
+            serde_json::from_str(r#"{"command":"editor.action.rename"}"#).unwrap();
+        assert_eq!(bare.command, "editor.action.rename");
+        assert_eq!(bare.arguments, None);
+
+        let with_args: RunEditorCommandParams =
+            serde_json::from_str(r#"{"command":"some.command","arguments":[1,"x"]}"#).unwrap();
+        assert_eq!(
+            with_args.arguments,
+            Some(vec![serde_json::json!(1), serde_json::json!("x")])
+        );
     }
 
     /// The payload as the server sends it.
