@@ -232,6 +232,10 @@ lazy_static! {
     static ref COMPLETION_CACHE: Mutex<CompletionCache> = Mutex::new(CompletionCache::new());
 }
 
+pub(crate) fn clear_completion_cache() {
+    COMPLETION_CACHE.try_lock().unwrap().clear_cache();
+}
+
 pub(crate) async fn handle_completion(
     req: msg::Request,
     params: lsp_types::CompletionParams,
@@ -811,6 +815,7 @@ pub(crate) async fn handle_get_workspace_info(
     let language_server_infos: Vec<LanguageServerInfo> = language_servers
         .iter()
         .map(|ls| LanguageServerInfo {
+            id: ls.id(),
             name: ls.name().to_string(),
             root_path: ls.root_path.to_string_lossy().to_string(),
             support_workspace: ls.support_workspace(),
