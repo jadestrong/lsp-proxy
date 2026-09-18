@@ -396,6 +396,76 @@ impl Application {
                                 )
                             });
                     }
+                    NotificationFromServer::InitializationFailed(message) => {
+                        let failed_server_id = server_id;
+                        let failed_server_name = self
+                            .editor
+                            .documents()
+                            .flat_map(|doc| {
+                                doc.language_servers.values().chain(
+                                    doc.language_servers_of_virtual_doc
+                                        .values()
+                                        .map(|entry| &entry.client),
+                                )
+                            })
+                            .find(|ls| ls.id() == failed_server_id)
+                            .map(|ls| ls.name().to_string())
+                            .unwrap_or_else(|| format!("#{failed_server_id}"));
+                        let affected_documents = self
+                            .editor
+                            .documents()
+                            .filter_map(|doc| {
+                                let regular = doc
+                                    .language_servers
+                                    .values()
+                                    .any(|ls| ls.id() == failed_server_id);
+                                let virtual_doc = doc
+                                    .language_servers_of_virtual_doc
+                                    .values()
+                                    .any(|entry| entry.client.id() == failed_server_id);
+                                (regular || virtual_doc)
+                                    .then(|| (doc.uri.clone(), regular, virtual_doc))
+                            })
+                            .collect::<Vec<_>>();
+
+                        for doc in self.editor.documents_mut() {
+                            doc.language_servers
+                                .retain(|_, ls| ls.id() != failed_server_id);
+                            doc.language_servers_of_virtual_doc
+                                .retain(|_, entry| entry.client.id() != failed_server_id);
+                        }
+                        self.editor.language_servers.remove_by_id(failed_server_id);
+
+                        for (uri, regular, virtual_doc) in affected_documents {
+                            if let Some(doc) = self.editor.document_by_uri(&uri) {
+                                if regular {
+                                    let has_pending_server = doc
+                                        .language_servers
+                                        .values()
+                                        .any(|ls| !ls.is_initialized());
+                                    if !has_pending_server {
+                                        self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                            doc.get_server_capabilities(),
+                                        );
+                                    }
+                                }
+                                if virtual_doc {
+                                    self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                        doc.get_virtual_doc_server_capabilities(),
+                                    );
+                                }
+                            }
+                        }
+
+                        self.send_notification::<lsp_types::notification::ShowMessage>(
+                            lsp_types::ShowMessageParams {
+                                typ: lsp_types::MessageType::ERROR,
+                                message: format!(
+                                    "Language server {failed_server_name} failed to initialize: {message}"
+                                ),
+                            },
+                        );
+                    }
                     NotificationFromServer::Exit => {
                         let language_server = language_server!();
                         for doc in self.editor.documents_mut() {
