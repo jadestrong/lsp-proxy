@@ -99,6 +99,31 @@ You can download the prebuilt binary from [releases](https://github.com/jadestro
 
 ## How to use
 
+### Project activation
+
+Run `M-x lsp-proxy-enable-project` in a file buffer to start a project
+session for its major mode. The session is registered only after LSP-Proxy
+confirms that a language server is available. Existing and future matching
+buffers in the project are then activated automatically for the current Emacs
+session, following Eglot's project activation model. No `.dir-locals.el` file
+is required.
+
+Run `M-x lsp-proxy-disable-project` to stop that project session. Plain
+`M-x lsp-proxy-mode` remains buffer-local and does not register a project
+session. Major-mode hooks remain useful when LSP-Proxy should start in every
+project.
+
+By default a project session manages the major mode from which it was started.
+Set `lsp-proxy-major-mode-groups` when related modes should share a session:
+
+```emacs-lisp
+(setq lsp-proxy-major-mode-groups
+      '((typescript-mode typescript-ts-mode tsx-ts-mode)
+        (js-mode js-ts-mode)))
+```
+
+For global major-mode hooks:
+
 ```emacs-lisp
 (use-package lsp-proxy
   ;; :load-path "/path/to/lsp-proxy"

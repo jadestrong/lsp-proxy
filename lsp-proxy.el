@@ -96,6 +96,13 @@
   :type 'boolean
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-major-mode-groups nil
+  "Major modes that should share project activation.
+Each entry is a list of major modes handled as one language session.
+Modes not present in a group are registered individually."
+  :type '(repeat (repeat symbol))
+  :group 'lsp-proxy)
+
 (defcustom lsp-proxy-progress-prefix "⌛ "
   "Prefix for progress messages."
   :type 'string
@@ -109,10 +116,27 @@
 (defvar-local lsp-proxy--language nil
   "Guess language based on major-mode.")
 
+(defvar-local lsp-proxy--project-session nil
+  "Project session managing the current buffer, if any.")
+
+(defvar-local lsp-proxy--pending-project-activation nil
+  "Pending project session data awaiting server capabilities.")
+
+(defvar-local lsp-proxy--server-capabilities-received nil
+  "Non-nil after the proxy reports server capabilities for this buffer.")
+
 ;;; Hash tables for project management
 
 (defvar lsp-proxy--project-hashmap (make-hash-table :test 'equal)
   "Hash table for project work-done tokens.")
+
+(cl-defstruct (lsp-proxy--project-session
+               (:constructor lsp-proxy--make-project-session))
+  "Lsp-Proxy activation state for one project."
+  project languages managed-buffers)
+
+(defvar lsp-proxy--sessions-by-project (make-hash-table :test 'equal)
+  "Map project objects to active Lsp-Proxy project sessions.")
 
 ;;; Faces
 
@@ -297,6 +321,7 @@ Skip reopening notifications for buffers not currently visible."
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
       (with-current-buffer buf
+        (setq-local lsp-proxy--server-capabilities-received nil)
         (when (and (boundp 'lsp-proxy--buffer-opened) lsp-proxy--buffer-opened)
           (setq-local lsp-proxy--buffer-opened nil)))))
   ;; clear all progress in map
@@ -339,7 +364,15 @@ Skip reopening notifications for buffers not currently visible."
   (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
 
   ;; Send the close event for the active buffer
-  (lsp-proxy--on-doc-close))
+  (lsp-proxy--on-doc-close)
+  (setq-local lsp-proxy--pending-project-activation nil)
+  (when lsp-proxy--project-session
+    (setf (lsp-proxy--project-session-managed-buffers
+           lsp-proxy--project-session)
+          (delq (current-buffer)
+                (lsp-proxy--project-session-managed-buffers
+                 lsp-proxy--project-session)))
+    (setq-local lsp-proxy--project-session nil)))
 
 
 ;;; Doctor
@@ -831,6 +864,130 @@ Take the first part of the major-mode name before the first dash."
   (when major-mode
     (let ((mode-name (symbol-name major-mode)))
       (car (split-string mode-name "-")))))
+
+;;; Project activation
+
+(defun lsp-proxy--current-project ()
+  "Return the project object for the current buffer, if any."
+  (project-current))
+
+(defun lsp-proxy--language-for-mode (mode)
+  "Return the LSP language identifier inferred for MODE."
+  (car (split-string (symbol-name mode) "-")))
+
+(defun lsp-proxy--languages-for-mode (mode)
+  "Return the managed mode and language pairs for MODE."
+  (let ((modes (or (cl-find-if
+                    (lambda (group)
+                      (cl-some (lambda (candidate)
+                                 (provided-mode-derived-p mode candidate))
+                               group))
+                    lsp-proxy-major-mode-groups)
+                   (list mode))))
+    (mapcar (lambda (managed-mode)
+              (cons managed-mode
+                    (lsp-proxy--language-for-mode managed-mode)))
+            modes)))
+
+(defun lsp-proxy--session-language-id (session)
+  "Return SESSION's language identifier for the current buffer."
+  (cl-loop for (mode . language-id) in
+           (lsp-proxy--project-session-languages session)
+           when (provided-mode-derived-p major-mode mode)
+           return language-id))
+
+(defun lsp-proxy--current-session ()
+  "Return the active project session that can manage the current buffer."
+  (when-let* ((project (lsp-proxy--current-project)))
+    (cl-find-if #'lsp-proxy--session-language-id
+                (gethash project lsp-proxy--sessions-by-project))))
+
+(defun lsp-proxy--activate-session (session)
+  "Make the current buffer managed by SESSION."
+  (setq-local lsp-proxy--project-session session)
+  (unless lsp-proxy-mode
+    (lsp-proxy-mode 1))
+  (cl-pushnew (current-buffer)
+              (lsp-proxy--project-session-managed-buffers session)))
+
+(defun lsp-proxy--maybe-activate-project ()
+  "Activate `lsp-proxy-mode' when an active project session matches."
+  (when buffer-file-name
+    (when-let* ((session (lsp-proxy--current-session)))
+      (unless (eq lsp-proxy--project-session session)
+        (lsp-proxy--activate-session session)))))
+
+(defun lsp-proxy--register-project-session (session)
+  "Register SESSION and activate all matching existing buffers."
+  (let* ((project (lsp-proxy--project-session-project session))
+         (sessions (gethash project lsp-proxy--sessions-by-project)))
+    (unless (memq session sessions)
+      (puthash project (cons session sessions)
+               lsp-proxy--sessions-by-project))
+    (dolist (buffer (buffer-list))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (lsp-proxy--maybe-activate-project))))))
+
+(defun lsp-proxy--confirm-project-activation (has-any-servers)
+  "Finish pending project activation according to HAS-ANY-SERVERS."
+  (when lsp-proxy--pending-project-activation
+    (let ((session lsp-proxy--pending-project-activation))
+      (setq-local lsp-proxy--pending-project-activation nil)
+      (if has-any-servers
+          (progn
+            (lsp-proxy--activate-session session)
+            (lsp-proxy--register-project-session session))
+        (lsp-proxy-mode -1)
+        (message "[LSP-PROXY] No language server available for %s"
+                 major-mode)))))
+
+;;;###autoload
+(defun lsp-proxy-enable-project ()
+  "Start an Lsp-Proxy session for the current project and major mode.
+Once the proxy confirms that a language server is available, existing and
+future matching buffers in this project are managed for this Emacs session."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "Current buffer is not visiting a file"))
+  (let ((project (or (lsp-proxy--current-project)
+                     (user-error "Current buffer is not in a project"))))
+    (if-let* ((session (lsp-proxy--current-session)))
+        (lsp-proxy--activate-session session)
+      (setq-local lsp-proxy--pending-project-activation
+                  (lsp-proxy--make-project-session
+                   :project project
+                   :languages (lsp-proxy--languages-for-mode major-mode)))
+      (cond
+       ((and lsp-proxy-mode lsp-proxy--server-capabilities-received)
+        (lsp-proxy--confirm-project-activation lsp-proxy--has-any-servers))
+       ((not lsp-proxy-mode)
+        (setq-local lsp-proxy--server-capabilities-received nil)
+        (lsp-proxy-mode 1))
+       ((not lsp-proxy--buffer-opened)
+        (lsp-proxy--on-doc-focus (selected-window)))))))
+
+;;;###autoload
+(defun lsp-proxy-disable-project ()
+  "Stop the Lsp-Proxy session managing the current project and major mode."
+  (interactive)
+  (let* ((project (or (lsp-proxy--current-project)
+                      (user-error "Current buffer is not in a project")))
+         (session (or (lsp-proxy--current-session)
+                      (user-error "No Lsp-Proxy session for this project and mode")))
+         (sessions (delq session
+                         (gethash project lsp-proxy--sessions-by-project))))
+    (if sessions
+        (puthash project sessions lsp-proxy--sessions-by-project)
+      (remhash project lsp-proxy--sessions-by-project))
+    (dolist (buffer (copy-sequence
+                     (lsp-proxy--project-session-managed-buffers session)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (when (eq lsp-proxy--project-session session)
+            (lsp-proxy-mode -1)))))))
+
+(add-hook 'after-change-major-mode-hook #'lsp-proxy--maybe-activate-project)
 
 
 ;;; Mode definition
