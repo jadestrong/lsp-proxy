@@ -28,7 +28,7 @@ use crate::{
     thread,
     utils::{
         find_workspace_folder_for_uri, from_json, is_diagnostic_vectors_equal,
-        limit_diagnostics_for_push,
+        limit_diagnostics_for_push, log_diagnostics_mismatch,
     },
 };
 use anyhow::Result;
@@ -476,12 +476,19 @@ impl Application {
                         };
                         let version = doc.version;
                         let old_diagnostics = doc.get_diagnostics_by_provider(&provider);
-                        if old_diagnostics.is_none()
-                            || !is_diagnostic_vectors_equal(
-                                old_diagnostics.as_ref().unwrap(),
-                                &params.diagnostics,
-                            )
-                        {
+                        let diagnostics_changed = match &old_diagnostics {
+                            None => true,
+                            Some(old) => !is_diagnostic_vectors_equal(old, &params.diagnostics),
+                        };
+                        // Own a copy of the previous set now (only when there is a genuine
+                        // mismatch to explain, not on the first-ever publish) before
+                        // `doc.replace_diagnostics' below takes a `&mut doc' borrow that
+                        // would otherwise outlive `old_diagnostics'.
+                        let previous_diagnostics: Option<Vec<lsp_types::Diagnostic>> =
+                            old_diagnostics
+                                .filter(|_| diagnostics_changed)
+                                .map(|old| old.into_iter().cloned().collect());
+                        if diagnostics_changed {
                             let diagnostics: Vec<DiagnosticItem> = params
                                 .diagnostics
                                 .iter()
@@ -521,6 +528,14 @@ impl Application {
                                     limited_diagnostics.len(),
                                     max_diagnostics_push
                                 );
+                                if let Some(previous) = &previous_diagnostics {
+                                    log_diagnostics_mismatch(
+                                        &params.uri,
+                                        &previous.iter().collect::<Vec<_>>(),
+                                        &params.diagnostics,
+                                        max_diagnostics_push,
+                                    );
+                                }
                             }
 
                             self.send_notification::<lsp_types::notification::PublishDiagnostics>(

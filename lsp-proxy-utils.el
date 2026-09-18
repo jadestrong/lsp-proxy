@@ -595,6 +595,14 @@ fails to open on the remote FS)."
           (lsp-proxy--decompiled-uri-to-file-name uri)
         uri))))
 
+(defun lsp-proxy--goto-uri-position (uri line character &optional other-window)
+  "Open URI and move point to the 0-indexed LSP position LINE/CHARACTER.
+Goes through `lsp-proxy--uri-to-path', so `jar:'/`jrt:' URIs land on
+their virtual decompiled buffer exactly like any other xref target."
+  (let ((path (lsp-proxy--uri-to-path uri)))
+    (if other-window (find-file-other-window path) (find-file path))
+    (goto-char (eglot--lsp-position-to-point (list :line line :character character)))))
+
 ;;; Request parameters
 
 (declare-function lsp-proxy--make-virtual-doc-context "lsp-proxy-core")

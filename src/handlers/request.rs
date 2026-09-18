@@ -26,8 +26,8 @@ use crate::{
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::{
-        is_diagnostic_vectors_equal, limit_diagnostics_for_push, lsp_symbols_to_imenu,
-        sort_imenu_entries_grouped, truncate_completion_item,
+        is_diagnostic_vectors_equal, limit_diagnostics_for_push, log_diagnostics_mismatch,
+        lsp_symbols_to_imenu, sort_imenu_entries_grouped, truncate_completion_item,
     },
 };
 
@@ -1356,9 +1356,18 @@ pub(crate) async fn handle_pull_diagnostic_response(
                     doc.previous_diagnostic_id = result_id;
                     if let Some(diags) = diagnostics {
                         let old_diags = doc.get_diagnostics_by_provider(&provider);
-                        if old_diags.is_none()
-                            || !is_diagnostic_vectors_equal(old_diags.as_ref().unwrap(), &diags)
-                        {
+                        let diagnostics_changed = match &old_diags {
+                            None => true,
+                            Some(old) => !is_diagnostic_vectors_equal(old, &diags),
+                        };
+                        // Own a copy of the previous set now (only when there is a genuine
+                        // mismatch to explain, not on the first-ever publish) before
+                        // `doc.replace_diagnostics' below takes a `&mut doc' borrow that
+                        // would otherwise outlive `old_diags'.
+                        let previous_diagnostics: Option<Vec<lsp_types::Diagnostic>> = old_diags
+                            .filter(|_| diagnostics_changed)
+                            .map(|old| old.into_iter().cloned().collect());
+                        if diagnostics_changed {
                             let diagnostics: Vec<DiagnosticItem> = diags
                                 .iter()
                                 .map(|diag| DiagnosticItem {
@@ -1379,11 +1388,23 @@ pub(crate) async fn handle_pull_diagnostic_response(
                                 None => vec![],
                             };
 
+                            let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
+                                .get()
+                                .copied()
+                                .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
+                            let total_count = all_diagnostics.len();
+                            if limit_diagnostics && total_count > max_diagnostics_push {
+                                if let Some(previous) = &previous_diagnostics {
+                                    log_diagnostics_mismatch(
+                                        &doc.uri,
+                                        &previous.iter().collect::<Vec<_>>(),
+                                        &diags,
+                                        max_diagnostics_push,
+                                    );
+                                }
+                            }
+
                             let diagnostics = if limit_diagnostics {
-                                let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
-                                    .get()
-                                    .copied()
-                                    .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
                                 limit_diagnostics_for_push(&all_diagnostics, max_diagnostics_push)
                             } else {
                                 all_diagnostics

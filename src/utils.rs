@@ -333,25 +333,98 @@ pub fn from_json<T: DeserializeOwned>(
         .map_err(|e| anyhow::format_err!("Failed to deserialize {what}: {e}; {json}"))
 }
 
-fn are_diagnostic_equal(d1: &Diagnostic, d2: &Diagnostic) -> bool {
-    d1.range.start.eq(&d2.range.start)
-        && d1.range.end.eq(&d2.range.end)
-        && d1.message == d2.message
-        && d1.severity == d2.severity
-        && d1.code == d2.code
-        && d1.source == d2.source
+/// Canonical string key for the fields that decide diagnostic identity, used
+/// by `is_diagnostic_vectors_equal` to compare two diagnostic sets as
+/// multisets rather than as an ordered sequence. Language servers (the
+/// IntelliJ backend included) don't guarantee stable ordering across
+/// `textDocument/publishDiagnostics` publishes of an otherwise-unchanged
+/// diagnostic set — a positional/zipped comparison would call that a
+/// "change" on reordering alone, defeating the whole point of this check
+/// (skip re-pushing when nothing actually changed) and, downstream, causing
+/// lsp-proxy's diagnostics-limit warning to fire on every redundant publish.
+fn diagnostic_identity_key(d: &Diagnostic) -> String {
+    format!(
+        "{}:{}:{}:{}:{:?}:{:?}:{:?}:{}",
+        d.range.start.line,
+        d.range.start.character,
+        d.range.end.line,
+        d.range.end.character,
+        d.severity,
+        d.code,
+        d.source,
+        d.message,
+    )
 }
 
 pub fn is_diagnostic_vectors_equal(vec1: &[&Diagnostic], vec2: &[Diagnostic]) -> bool {
     if vec1.len() != vec2.len() {
         return false;
     }
-    for (d1, d2) in vec1.iter().zip(vec2.iter()) {
-        if !are_diagnostic_equal(d1, d2) {
-            return false;
-        }
-    }
-    true
+    let mut keys1: Vec<String> = vec1.iter().map(|d| diagnostic_identity_key(d)).collect();
+    let mut keys2: Vec<String> = vec2.iter().map(|d| diagnostic_identity_key(d)).collect();
+    keys1.sort_unstable();
+    keys2.sort_unstable();
+    keys1 == keys2
+}
+
+fn format_diagnostic_samples(diagnostics: &[&Diagnostic], limit: usize) -> String {
+    diagnostics
+        .iter()
+        .take(limit)
+        .map(|d| {
+            format!(
+                "[{}:{} {:?}] {}",
+                d.range.start.line, d.range.start.character, d.severity, d.message
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Log why OLD and NEW compared unequal for URI, once the document is over
+/// MAX_COUNT diagnostics. Call only after `is_diagnostic_vectors_equal`
+/// already returned false — this recomputes identity keys to find exactly
+/// which diagnostics were added/removed, so a genuine server-side change can
+/// be told apart from any remaining edge case in that comparison without
+/// having to reproduce it under server tracing.
+pub fn log_diagnostics_mismatch(
+    uri: &Url,
+    old: &[&Diagnostic],
+    new: &[Diagnostic],
+    max_count: usize,
+) {
+    use std::collections::HashSet;
+
+    let old_keys: HashSet<String> = old.iter().map(|d| diagnostic_identity_key(d)).collect();
+    let new_keys: HashSet<String> = new.iter().map(|d| diagnostic_identity_key(d)).collect();
+
+    let added: Vec<&Diagnostic> = new
+        .iter()
+        .filter(|d| !old_keys.contains(&diagnostic_identity_key(d)))
+        .collect();
+    let removed: Vec<&Diagnostic> = old
+        .iter()
+        .copied()
+        .filter(|d| !new_keys.contains(&diagnostic_identity_key(d)))
+        .collect();
+
+    error!(
+        "Diagnostics mismatch for {uri} while over push limit (max {max_count}): old={} new={} (+{} -{}){}{}",
+        old.len(),
+        new.len(),
+        added.len(),
+        removed.len(),
+        if added.is_empty() {
+            String::new()
+        } else {
+            format!("; added: {}", format_diagnostic_samples(&added, 5))
+        },
+        if removed.is_empty() {
+            String::new()
+        } else {
+            format!("; removed: {}", format_diagnostic_samples(&removed, 5))
+        },
+    );
 }
 
 pub fn truncate_completion_item(mut item: lsp_types::CompletionItem) -> lsp_types::CompletionItem {

@@ -1052,6 +1052,60 @@ CodeLens command matches \"intellij_debugger.runMain\"."
         (when uri (list 'lsp-proxy-uri uri))
         (when no-debug (list :noDebug t)))))))
 
+;;; Navigate to location (hover command links)
+
+;; The IntelliJ backend embeds navigation links directly in hover markdown —
+;; e.g. "Go to Super Method" on a method's hover — as a Markdown command URI
+;; `[label](command:jetbrains.navigateToLocation?ARGS)', ARGS being a
+;; percent-encoded JSON array `[uri, line, character]' (0-indexed). The VS
+;; Code extension only makes these clickable inside the hover popup; this
+;; command instead extracts and jumps to them directly from point, no popup
+;; or click required.
+
+(defconst lsp-proxy-java--navigate-link-regexp
+  "\\[\\([^]]+\\)\\](command:jetbrains\\.navigateToLocation\\?\\([^)]+\\))"
+  "Matches a `jetbrains.navigateToLocation' Markdown command link.
+Group 1 is the link label, group 2 the percent-encoded JSON
+`[uri, line, character]' argument array.")
+
+(defun lsp-proxy-java--navigate-links-in-string (markdown)
+  "Return each `jetbrains.navigateToLocation' link in MARKDOWN.
+Each element is (LABEL URI LINE CHARACTER)."
+  (let (links (start 0))
+    (while (string-match lsp-proxy-java--navigate-link-regexp markdown start)
+      (let* ((label (match-string 1 markdown))
+             (args (json-parse-string (url-unhex-string (match-string 2 markdown))
+                                      :array-type 'list)))
+        (push (cons label args) links))
+      (setq start (match-end 0)))
+    (nreverse links)))
+
+;;;###autoload
+(defun lsp-proxy-java-navigate-at-point ()
+  "Jump to the `jetbrains.navigateToLocation' hover link at point.
+Requests hover at point and, if its markdown embeds exactly one such
+link (e.g. \"Go to Super Method\"), jumps straight to it; with more
+than one, prompts to choose. Meant to be bound to a key so a method
+name can be navigated without opening the hover popup and clicking."
+  (interactive)
+  (unless lsp-proxy--support-hover
+    (lsp-proxy--error "%s" "Server doesn't support hover"))
+  (lsp-proxy--async-request
+   'textDocument/hover
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
+   :success-fn
+   (lambda (hover-help)
+     (let ((links (and hover-help (not (string-empty-p hover-help))
+                       (lsp-proxy-java--navigate-links-in-string hover-help))))
+       (pcase links
+         ('nil (lsp-proxy--message "%s" "No navigable link at point"))
+         (`(,only) (pcase-let ((`(,_ ,uri ,line ,character) only))
+                     (lsp-proxy--goto-uri-position uri line character)))
+         (_ (let* ((choice (completing-read "Go to: " (mapcar #'car links) nil t))
+                   (link (assoc choice links)))
+              (pcase-let ((`(,_ ,uri ,line ,character) link))
+                (lsp-proxy--goto-uri-position uri line character)))))))))
+
 ;;; Setup
 
 (add-to-list 'file-name-handler-alist
