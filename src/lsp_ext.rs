@@ -86,10 +86,15 @@ impl Request for WorkspaceRestart {
 
 // emacs/installJavaServer
 //
-// Downloads the JetBrains IntelliJ language server, which `lsp-proxy-java`
-// requires. Lives here rather than in Emacs Lisp because the proxy already has
-// tokio (so the ~370 MB download does not block the editor) and an established
-// `$/progress` pipeline; the Emacs side is only a thin command.
+// Downloads a Java language server backend — the JetBrains IntelliJ server or
+// Eclipse's jdtls — for `lsp-proxy-java`. Lives here rather than in Emacs Lisp
+// because the proxy already has tokio (so a download of tens to hundreds of MB does
+// not block the editor) and an established progress pipeline; the Emacs side is only
+// a thin command.
+//
+// The method name is backend-neutral and predates the `backend` field, so that field
+// defaults rather than being required: a client built before it still asks for, and
+// still gets, the IntelliJ server.
 //
 // The *proxy's own* installer stays in Emacs Lisp on purpose — that one cannot
 // run here, since the proxy does not exist yet when it runs.
@@ -99,10 +104,14 @@ pub enum InstallJavaServer {}
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallJavaServerParams {
-    /// Where to place `<version>/bin/intellij-server`. Chosen by the client so the
+    /// Where to place `<version>/bin/<launcher>`. Chosen by the client so the
     /// location stays next to everything else Emacs manages.
     pub install_dir: String,
-    /// Pin a build (e.g. "263.2689.0"); `None` resolves the latest via Open VSX.
+    /// Which server to install. Absent means IntelliJ, for the reason above.
+    #[serde(default)]
+    pub backend: crate::java_install::Backend,
+    /// Pin a build (e.g. "263.2689.0" or jdtls's "1.61.0"); `None` resolves the
+    /// latest for the selected backend.
     #[serde(default)]
     pub version: Option<String>,
     /// Reinstall even when this version is already present.
@@ -274,6 +283,234 @@ pub enum RunEditorCommand {}
 impl Notification for RunEditorCommand {
     type Params = RunEditorCommandParams;
     const METHOD: &'static str = "intellij/runEditorCommand";
+}
+
+// language/status
+//
+// jdtls's own project-status channel. Cannot reuse `window/logMessage`: this is a
+// *status* stream about one discrete operation (the project import) whose outcome
+// the user has to act on — until it finishes nothing resolves, and the reason it
+// failed is only ever in these lines. That is the same contract `intellij/importLog`
+// already serves, which is why the proxy translates onto that channel rather than
+// teaching the editor a second one.
+//
+// The method name is jdtls's own (`org.eclipse.jdt.ls` sends `language/status` with
+// a `ServiceStatus` name in `type`); it is not a standard LSP method and has no
+// standard equivalent.
+#[derive(Debug)]
+pub enum LanguageStatus {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct LanguageStatusParams {
+    /// A `ServiceStatus` *name*, not a severity: "Starting", "Started", "Error",
+    /// "Message", "ServiceReady", "ProjectStatus". Only `Error`/`Warning` carry any
+    /// severity information; the rest are lifecycle labels.
+    ///
+    /// Optional in practice — a payload missing `type` must still deliver its
+    /// message rather than failing the parse, for the same reason `ImportLogParams`
+    /// tolerates a missing one.
+    #[serde(rename = "type", default)]
+    pub typ: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+impl Notification for LanguageStatus {
+    type Params = LanguageStatusParams;
+    const METHOD: &'static str = "language/status";
+}
+
+// language/progressReport
+//
+// jdtls's own progress channel, predating (and independent of) `$/progress`: it is
+// gated on `extendedClientCapabilities.progressReportProvider` rather than on
+// `window.workDoneProgress`, carries its own `id` instead of a
+// `window/workDoneProgress/create` token, and reports `workDone`/`totalWork` as
+// plain counters rather than a percentage. A standard `$/progress` payload cannot
+// express it, which is why it needs its own type; the proxy translates it *onto*
+// `$/progress` so the editor keeps one progress renderer.
+#[derive(Debug)]
+pub enum LanguageProgressReport {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanguageProgressReportParams {
+    /// jdtls's own token for this operation. Reused verbatim as the `$/progress`
+    /// token so successive reports coalesce onto one mode-line entry.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub task: String,
+    #[serde(default)]
+    pub sub_task: String,
+    /// The line jdtls means for display, e.g. "37% Starting Java Language Server".
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub total_work: u32,
+    #[serde(default)]
+    pub work_done: u32,
+    #[serde(default)]
+    pub complete: bool,
+}
+
+impl Notification for LanguageProgressReport {
+    type Params = LanguageProgressReportParams;
+    const METHOD: &'static str = "language/progressReport";
+}
+
+/// Translate a jdtls `language/status` into the `intellij/importLog` payload.
+///
+/// Pure: `root_path` is left `None` here and stamped by the caller from the
+/// language server's own root, exactly as the IntelliJ path does.
+///
+/// Every field `ImportLogParams` has that `language/status` does not is decided
+/// here, deliberately and once (requirement FR4.3). The three booleans are the
+/// interesting ones, and all three are hard-wired `false`:
+///
+///  * `started`/`succeeded`/`failed` are *terminal* markers in the IntelliJ
+///    semantics — the editor renders `started` as a bare "<tool> import started"
+///    line that discards the message, and `failed` both steals a window
+///    (`lsp-proxy-java-import-log-auto-display`) and warns in the echo area.
+///  * jdtls has no terminal import event. `Starting`/`Started`/`ServiceReady`
+///    describe the *server's* lifecycle, not a build-tool import, and `Error` is a
+///    severity that arrives repeatedly during one import — mapping it onto `failed`
+///    would fire the warning and reveal the window several times per import.
+///
+/// What is given up by that choice: an import that goes wrong no longer reveals the
+/// log buffer by itself. The compensation is `typ`, which carries `Error` through as
+/// `MessageType::ERROR` so the line renders in the error face, and the buffer stays
+/// one `M-x lsp-proxy-java-open-import-log` away.
+///
+/// `tool` stays `None` because jdtls never says which build tool is running. Filling
+/// in "jdtls" would be a lie with visible consequences: the editor renders `tool` as
+/// the *build tool* name ("Maven import finished"), and `None` already falls back to
+/// "Build".
+pub fn language_status_to_import_log(params: &LanguageStatusParams) -> ImportLogParams {
+    ImportLogParams {
+        typ: Some(message_type_for_status(&params.typ)),
+        // An empty message would render as a blank line, indistinguishable from a
+        // rendering bug; the status name is the only other thing the payload has.
+        message: if params.message.is_empty() {
+            params.typ.clone()
+        } else {
+            params.message.clone()
+        },
+        tool: None,
+        failed: false,
+        succeeded: false,
+        started: false,
+        root_path: None,
+    }
+}
+
+/// `lsp_types::MessageType` for a jdtls `ServiceStatus` name: 1 = error,
+/// 2 = warning, 3 = info.
+///
+/// Anything that is not explicitly an error or a warning is info — including the
+/// lifecycle names and an absent `type`, neither of which says anything about
+/// severity.
+fn message_type_for_status(status: &str) -> u8 {
+    match status {
+        "Error" => 1,
+        "Warning" => 2,
+        _ => 3,
+    }
+}
+
+/// Translate a jdtls `language/progressReport` into a standard `$/progress` payload.
+///
+/// Pure: the caller wraps the result in `CustomProgressParams` with the server root.
+///
+/// Deliberately stateless — `Report` while running, `End` on completion, and never a
+/// synthesized `Begin`. Synthesizing one would mean holding a per-token set in the
+/// proxy for the sole benefit of a `title` field the editor never reaches: its
+/// renderer prefers `message` over `title`, and it treats `begin` and `report`
+/// identically (`lsp-proxy-core.el`, the `$/progress` pcase). The state would buy
+/// nothing and would have to be invalidated on server restart.
+pub fn progress_report_to_progress(
+    params: &LanguageProgressReportParams,
+) -> lsp_types::ProgressParams {
+    use lsp_types::{
+        NumberOrString, ProgressParamsValue, WorkDoneProgress, WorkDoneProgressEnd,
+        WorkDoneProgressReport,
+    };
+
+    let message = progress_message(params);
+    let value = if params.complete {
+        WorkDoneProgress::End(WorkDoneProgressEnd { message })
+    } else {
+        WorkDoneProgress::Report(WorkDoneProgressReport {
+            cancellable: None,
+            message,
+            percentage: progress_percentage(params),
+        })
+    };
+
+    lsp_types::ProgressParams {
+        token: NumberOrString::String(params.id.clone()),
+        value: ProgressParamsValue::WorkDone(value),
+    }
+}
+
+/// The line to show for a progress report.
+///
+/// `status` is what jdtls composes for display and is preferred; `subTask` then
+/// `task` are the fallbacks for builds that fill only those. `None` rather than an
+/// empty string when all three are blank, so the renderer falls through to its own
+/// default instead of printing nothing.
+fn progress_message(params: &LanguageProgressReportParams) -> Option<String> {
+    [&params.status, &params.sub_task, &params.task]
+        .into_iter()
+        .find(|s| !s.is_empty())
+        .cloned()
+}
+
+/// Completion percentage, or `None` when the operation has no measurable size.
+///
+/// `total_work` of 0 means "unknown", which is the common case early in an import —
+/// it must not divide, and it must not report 0% (which reads as "stuck at zero"
+/// rather than "size unknown"). The result is clamped because jdtls has been seen
+/// to report `workDone` past `totalWork` when a task grows mid-flight.
+fn progress_percentage(params: &LanguageProgressReportParams) -> Option<u32> {
+    if params.total_work == 0 {
+        return None;
+    }
+    Some(((params.work_done as u64 * 100) / params.total_work as u64).min(100) as u32)
+}
+
+// emacs/serverStartFailure
+//
+// A language server that `languages.toml` configures for a document but that could
+// not be started. Without this the failure is only an `error!` line in the proxy log
+// — invisible at the default log level — and the editor, seeing zero attached
+// servers, tells the user "No language server config found for this file", which is
+// the opposite of what happened.
+//
+// Structured rather than a `window/showMessage` string so the editor can attach an
+// install hint keyed on the server name; the proxy has no business knowing where any
+// particular server is distributed from.
+#[derive(Debug)]
+pub enum ServerStartFailure {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStartFailureParams {
+    /// The `languages.toml` server name, e.g. "jdtls".
+    pub name: String,
+    /// The configured `command`, which is what was looked up on PATH.
+    pub command: String,
+    /// True when the command simply is not on PATH, as opposed to any other
+    /// start-up failure. The editor phrases the two differently: only the first one
+    /// has "install it" as the next step.
+    pub not_on_path: bool,
+    /// The underlying error, for the cases `not_on_path` does not cover.
+    pub message: String,
+}
+
+impl Notification for ServerStartFailure {
+    type Params = ServerStartFailureParams;
+    const METHOD: &'static str = "emacs/serverStartFailure";
 }
 
 // emacs/getFiles
@@ -717,6 +954,20 @@ pub struct ForwardRequestParams {
     pub server_name: String,
     pub method: String,
     pub params: serde_json::Value,
+    /// Send `method` as a *notification* rather than a request.
+    ///
+    /// Needed because a server's extension surface is not all requests: jdtls
+    /// declares `java/projectConfigurationUpdate` as a notification, and sending it
+    /// as a request means waiting out the full request timeout for a reply that is
+    /// never coming.
+    ///
+    /// A flag on this channel rather than a second channel: the editor's problem is
+    /// "deliver this method to that server", and whether the method happens to be
+    /// request-shaped is a property of the method, not a different kind of routing.
+    /// `#[serde(default)]` keeps every existing caller — which sends no such key —
+    /// on exactly the behaviour it has today.
+    #[serde(default)]
+    pub notify: bool,
 }
 
 impl Request for ForwardRequest {
@@ -986,6 +1237,27 @@ mod install_java_server_tests {
         assert_eq!(params.version, None);
     }
 
+    /// The `backend` field was added after the method shipped, so an older client
+    /// that omits it must still get the IntelliJ server rather than an error or a
+    /// silently different backend.
+    #[test]
+    fn backend_defaults_to_intellij_on_the_wire() {
+        use crate::java_install::Backend;
+
+        let without = r#"{"installDir":"/tmp/i/","force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(without).unwrap();
+        assert_eq!(params.backend, Backend::Intellij);
+
+        let with = r#"{"installDir":"/tmp/j/","backend":"jdtls","version":"1.61.0","force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(with).unwrap();
+        assert_eq!(params.backend, Backend::Jdtls);
+        assert_eq!(params.version.as_deref(), Some("1.61.0"));
+
+        // An unknown backend must fail loudly rather than fall back to the default.
+        let bogus = r#"{"installDir":"/tmp/j/","backend":"eclipse","force":false}"#;
+        assert!(serde_json::from_str::<InstallJavaServerParams>(bogus).is_err());
+    }
+
     /// The full wire shape, end to end.
     ///
     /// The proxy wraps requests in a `{uri, context, params}` envelope and the
@@ -1037,5 +1309,425 @@ mod install_java_server_tests {
         assert_eq!(params.install_dir, "/tmp/i/");
         assert_eq!(params.version, None);
         assert!(!params.force);
+    }
+}
+
+#[cfg(test)]
+mod jdtls_notification_tests {
+    use super::{
+        language_status_to_import_log, progress_report_to_progress, LanguageProgressReport,
+        LanguageProgressReportParams, LanguageStatus, LanguageStatusParams, ServerStartFailure,
+        ServerStartFailureParams,
+    };
+    use lsp_types::notification::Notification;
+
+    fn report(params: serde_json::Value) -> LanguageProgressReportParams {
+        serde_json::from_value(params).unwrap()
+    }
+
+    fn work_done(params: &lsp_types::ProgressParams) -> &lsp_types::WorkDoneProgress {
+        match &params.value {
+            lsp_types::ProgressParamsValue::WorkDone(v) => v,
+        }
+    }
+
+    /// The methods jdtls actually sends. Getting either wrong means the notification
+    /// goes back to being dropped as unhandled, which is the whole point of the
+    /// whitelist entries.
+    #[test]
+    fn method_names_match_the_server() {
+        assert_eq!(LanguageStatus::METHOD, "language/status");
+        assert_eq!(LanguageProgressReport::METHOD, "language/progressReport");
+        assert_eq!(ServerStartFailure::METHOD, "emacs/serverStartFailure");
+    }
+
+    /// A full payload as jdtls sends it.
+    #[test]
+    fn parses_a_complete_status() {
+        let p: LanguageStatusParams =
+            serde_json::from_str(r#"{"type":"Started","message":"Ready"}"#).unwrap();
+        assert_eq!(p.typ, "Started");
+        assert_eq!(p.message, "Ready");
+    }
+
+    /// The minimal payload: only the status name. An absent `message` must read as
+    /// empty rather than failing the parse.
+    #[test]
+    fn parses_a_status_without_a_message() {
+        let p: LanguageStatusParams = serde_json::from_str(r#"{"type":"ServiceReady"}"#).unwrap();
+        assert_eq!(p.typ, "ServiceReady");
+        assert_eq!(p.message, "");
+    }
+
+    /// Losing a message because `type` was missing would be the worst outcome here:
+    /// the text is the only part the user reads.
+    #[test]
+    fn status_survives_a_missing_type() {
+        let p: LanguageStatusParams = serde_json::from_str(r#"{"message":"boom"}"#).unwrap();
+        assert_eq!(p.typ, "");
+        assert_eq!(p.message, "boom");
+    }
+
+    /// `type` is a reserved word in Rust; make sure the rename survives a round trip
+    /// in both directions.
+    #[test]
+    fn status_round_trips_through_the_wire_name() {
+        let p = LanguageStatusParams {
+            typ: "Error".to_string(),
+            message: "x".to_string(),
+        };
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["type"], "Error");
+        assert!(json.get("typ").is_none());
+        assert_eq!(serde_json::from_value::<LanguageStatusParams>(json).unwrap(), p);
+    }
+
+    /// Only `Error` and `Warning` say anything about severity; every lifecycle name
+    /// is info. Covers each `type` value jdtls is known to send.
+    #[test]
+    fn status_type_maps_onto_a_message_severity() {
+        let severity = |t: &str| {
+            language_status_to_import_log(&LanguageStatusParams {
+                typ: t.to_string(),
+                message: "m".to_string(),
+            })
+            .typ
+        };
+        assert_eq!(severity("Error"), Some(1));
+        assert_eq!(severity("Warning"), Some(2));
+        assert_eq!(severity("Starting"), Some(3));
+        assert_eq!(severity("Started"), Some(3));
+        assert_eq!(severity("Message"), Some(3));
+        assert_eq!(severity("ServiceReady"), Some(3));
+        assert_eq!(severity("ProjectStatus"), Some(3));
+        assert_eq!(severity(""), Some(3), "an absent type is not a severity");
+    }
+
+    /// Requirement FR4.3: every `ImportLogParams` field jdtls does not supply has a
+    /// decided value, and the decision is that none of the terminal markers fire.
+    /// Asserted one field at a time so a future change has to face each one.
+    #[test]
+    fn missing_import_log_fields_take_their_decided_values() {
+        let out = language_status_to_import_log(&LanguageStatusParams {
+            typ: "Error".to_string(),
+            message: "Error occurred while building".to_string(),
+        });
+        assert_eq!(out.tool, None, "jdtls never names the build tool");
+        assert!(
+            !out.failed,
+            "an Error status is a severity, not a terminal import failure"
+        );
+        assert!(!out.succeeded, "jdtls has no terminal import-succeeded event");
+        assert!(
+            !out.started,
+            "a started line discards the message, which is the only content here"
+        );
+        assert_eq!(
+            out.root_path, None,
+            "root_path is stamped by the caller, not by the translation"
+        );
+        assert_eq!(out.message, "Error occurred while building");
+    }
+
+    /// A blank line in the import log is indistinguishable from a rendering bug, so
+    /// an empty message falls back to the status name.
+    #[test]
+    fn an_empty_status_message_falls_back_to_the_status_name() {
+        let out = language_status_to_import_log(&LanguageStatusParams {
+            typ: "ServiceReady".to_string(),
+            message: String::new(),
+        });
+        assert_eq!(out.message, "ServiceReady");
+    }
+
+    /// The token has to be jdtls's own id, or successive reports would each open
+    /// their own mode-line entry instead of coalescing.
+    #[test]
+    fn progress_reuses_the_servers_own_id_as_the_token() {
+        let out = progress_report_to_progress(&report(
+            serde_json::json!({"id":"import-1","status":"Importing","totalWork":10,"workDone":3}),
+        ));
+        assert_eq!(
+            out.token,
+            lsp_types::NumberOrString::String("import-1".to_string())
+        );
+    }
+
+    /// An in-flight report carries the message and a percentage.
+    #[test]
+    fn an_incomplete_report_becomes_a_progress_report() {
+        let out = progress_report_to_progress(&report(
+            serde_json::json!({"id":"t","status":"Importing projects","totalWork":8,"workDone":2}),
+        ));
+        match work_done(&out) {
+            lsp_types::WorkDoneProgress::Report(r) => {
+                assert_eq!(r.message.as_deref(), Some("Importing projects"));
+                assert_eq!(r.percentage, Some(25));
+            }
+            other => panic!("expected Report, got {other:?}"),
+        }
+    }
+
+    /// Completion must end the token, or the mode-line indicator stays up for the
+    /// rest of the session.
+    #[test]
+    fn a_complete_report_ends_the_token() {
+        let out = progress_report_to_progress(&report(
+            serde_json::json!({"id":"t","status":"Done","totalWork":8,"workDone":8,"complete":true}),
+        ));
+        match work_done(&out) {
+            lsp_types::WorkDoneProgress::End(e) => assert_eq!(e.message.as_deref(), Some("Done")),
+            other => panic!("expected End, got {other:?}"),
+        }
+    }
+
+    /// `totalWork` is 0 early in an import, when the size is not known yet. It must
+    /// not divide, and it must not claim 0% — which reads as "stuck", not "unknown".
+    #[test]
+    fn unknown_total_work_yields_no_percentage() {
+        let out = progress_report_to_progress(&report(
+            serde_json::json!({"id":"t","status":"Starting","totalWork":0,"workDone":0}),
+        ));
+        match work_done(&out) {
+            lsp_types::WorkDoneProgress::Report(r) => assert_eq!(r.percentage, None),
+            other => panic!("expected Report, got {other:?}"),
+        }
+    }
+
+    /// jdtls has been seen to report more work done than the total when a task grows
+    /// mid-flight; "137%" in the mode line looks like a bug.
+    #[test]
+    fn percentage_is_clamped_at_one_hundred() {
+        let out = progress_report_to_progress(&report(
+            serde_json::json!({"id":"t","totalWork":10,"workDone":137}),
+        ));
+        match work_done(&out) {
+            lsp_types::WorkDoneProgress::Report(r) => assert_eq!(r.percentage, Some(100)),
+            other => panic!("expected Report, got {other:?}"),
+        }
+    }
+
+    /// `status` is what jdtls composes for display; `subTask` and `task` are the
+    /// fallbacks. All three blank yields None so the renderer uses its own default
+    /// rather than printing an empty line.
+    #[test]
+    fn progress_message_prefers_status_then_sub_task_then_task() {
+        let msg = |v: serde_json::Value| match work_done(&progress_report_to_progress(&report(v))) {
+            lsp_types::WorkDoneProgress::Report(r) => r.message.clone(),
+            other => panic!("expected Report, got {other:?}"),
+        };
+        assert_eq!(
+            msg(serde_json::json!({"id":"t","status":"S","subTask":"U","task":"T"})),
+            Some("S".to_string())
+        );
+        assert_eq!(
+            msg(serde_json::json!({"id":"t","subTask":"U","task":"T"})),
+            Some("U".to_string())
+        );
+        assert_eq!(
+            msg(serde_json::json!({"id":"t","task":"T"})),
+            Some("T".to_string())
+        );
+        assert_eq!(msg(serde_json::json!({"id":"t"})), None);
+    }
+
+    /// The bare payload: every field absent. jdtls omits the counters entirely for
+    /// indeterminate work, and a strict parse here would drop the whole report.
+    #[test]
+    fn parses_a_bare_progress_report() {
+        let p = report(serde_json::json!({}));
+        assert_eq!(p.id, "");
+        assert_eq!(p.total_work, 0);
+        assert!(!p.complete);
+    }
+
+    /// The editor destructures `notOnPath` by that name, so a snake_case key would
+    /// silently bind nil and the message would lose its "install it" branch.
+    #[test]
+    fn start_failure_serializes_as_camel_case() {
+        let json = serde_json::to_value(ServerStartFailureParams {
+            name: "jdtls".to_string(),
+            command: "jdtls".to_string(),
+            not_on_path: true,
+            message: "cannot find binary path".to_string(),
+        })
+        .unwrap();
+        assert_eq!(json["notOnPath"], true);
+        assert_eq!(json["name"], "jdtls");
+        assert!(json.get("not_on_path").is_none());
+    }
+
+    /// Every caller that predates the flag sends no `notify` key, and must keep
+    /// getting a request. A default of `true` would silently turn every forwarded
+    /// request into a notification and lose all their replies.
+    #[test]
+    fn forward_request_defaults_to_a_request_not_a_notification() {
+        let p: super::ForwardRequestParams = serde_json::from_str(
+            r#"{"uri":"file:///a/B.java","serverName":"copilot","method":"signIn","params":{}}"#,
+        )
+        .unwrap();
+        assert!(!p.notify);
+    }
+
+    /// The editor spells the flag `notify`; a rename would silently fall back to the
+    /// default and reintroduce the timeout this flag exists to avoid.
+    #[test]
+    fn forward_request_reads_the_notify_flag() {
+        let p: super::ForwardRequestParams = serde_json::from_str(
+            r#"{"uri":"file:///a/B.java","serverName":"jdtls","method":"java/projectConfigurationUpdate","params":{},"notify":true}"#,
+        )
+        .unwrap();
+        assert!(p.notify);
+        assert_eq!(p.method, "java/projectConfigurationUpdate");
+    }
+
+    /// The dispatch that would otherwise return `Unhandled`, for both methods.
+    #[test]
+    fn registry_routes_the_notifications() {
+        let params = |v: serde_json::Value| {
+            let serde_json::Value::Object(map) = v else {
+                unreachable!()
+            };
+            crate::lsp::jsonrpc::Params::Map(map)
+        };
+
+        match crate::registry::NotificationFromServer::parse(
+            LanguageStatus::METHOD,
+            params(serde_json::json!({"type":"Started","message":"Ready"})),
+        ) {
+            Ok(crate::registry::NotificationFromServer::LanguageStatus(p)) => {
+                assert_eq!(p.message, "Ready");
+            }
+            other => panic!("expected LanguageStatus, got {other:?}"),
+        }
+
+        match crate::registry::NotificationFromServer::parse(
+            LanguageProgressReport::METHOD,
+            params(serde_json::json!({"id":"t","status":"Importing","complete":false})),
+        ) {
+            Ok(crate::registry::NotificationFromServer::LanguageProgressReport(p)) => {
+                assert_eq!(p.status, "Importing");
+            }
+            other => panic!("expected LanguageProgressReport, got {other:?}"),
+        }
+    }
+
+    /// A malformed payload must NOT come back as `Unhandled`. The main loop
+    /// branches on exactly that variant: `Unhandled` is an `info!` and everything
+    /// else is an `error!`, so collapsing the two would make a renamed field
+    /// indistinguishable from a method the proxy does not support — and silent at
+    /// the default log level.
+    ///
+    /// Note the concrete variant is `Rpc`, not `Parse`: `Params::parse` wraps serde
+    /// failures as `jsonrpc::Error::invalid_params` before they reach this enum. That
+    /// is pre-existing behaviour shared with every other whitelisted notification;
+    /// what the main loop depends on is the `Unhandled`/not-`Unhandled` split, so
+    /// that is what is asserted.
+    #[test]
+    fn a_malformed_payload_is_not_reported_as_unhandled() {
+        let serde_json::Value::Object(map) = serde_json::json!({"type": 3}) else {
+            unreachable!()
+        };
+        let err = crate::registry::NotificationFromServer::parse(
+            LanguageStatus::METHOD,
+            crate::lsp::jsonrpc::Params::Map(map),
+        )
+        .expect_err("a numeric `type` is not a ServiceStatus name");
+        assert!(
+            !matches!(err, crate::registry::Error::Unhandled),
+            "a malformed payload must not masquerade as an unsupported method, got {err:?}"
+        );
+        assert!(
+            matches!(err, crate::registry::Error::Rpc(_)),
+            "expected Rpc (Params::parse wraps serde errors as invalid_params), got {err:?}"
+        );
+    }
+}
+
+/// Probe for assumption A4: the official `bin/jdtls` launcher derives its `-data`
+/// workspace directory from the project it is started in, rather than sharing one
+/// workspace across every project.
+///
+/// **Run this after upgrading jdtls, and only then.** It shells out to the real
+/// launcher, so it cannot run in a normal `cargo test`:
+///
+/// ```text
+/// cargo test -- --ignored jdtls_data_dir
+/// ```
+///
+/// Why it exists rather than being a one-off check in a debugging session: if the
+/// assumption stops holding, two Java projects silently share one index and
+/// cross-project symbol resolution goes wrong in a way that looks like a jdtls bug
+/// rather than a configuration one. Pinning it costs one command per upgrade.
+///
+/// Why it is `#[ignore]` and not wired into CI: this repository's CI runs no tests at
+/// all (`.github/workflows/main.yml` triggers on tags and only builds). The trigger
+/// is a human following the note above — which is exactly why the note is here, and
+/// not only in a commit message.
+///
+/// # Not yet executed against a real server
+///
+/// jdtls was not installed on the machine this was written on, so the *parsing*
+/// below has never seen real launcher output. It is written to fail loudly rather
+/// than to pass by accident: every path that cannot determine a workspace directory
+/// panics with what it saw. If the first real run fails, fix the extraction here —
+/// do not delete the assertion, which is the part that is known to be right.
+#[cfg(test)]
+mod jdtls_live_tests {
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    /// Absolute paths the launcher mentions when started in `dir`.
+    ///
+    /// The launcher echoes the command line it is about to run, `-data <dir>`
+    /// included, which is the value this probe is after. Started with `--help` so it
+    /// prints and exits instead of serving a session.
+    fn launcher_paths(dir: &Path) -> Vec<PathBuf> {
+        let out = Command::new("jdtls")
+            .arg("--help")
+            .current_dir(dir)
+            .output()
+            .expect("jdtls must be on PATH to run this probe");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let paths: Vec<PathBuf> = text
+            .split_whitespace()
+            .filter(|t| t.starts_with('/') && t.len() > 1)
+            .map(PathBuf::from)
+            .collect();
+        assert!(
+            !paths.is_empty(),
+            "could not find any absolute path in the launcher's output for {}. \
+             The extraction in this probe needs updating for this jdtls version; \
+             output was:\n{text}",
+            dir.display()
+        );
+        paths
+    }
+
+    #[test]
+    #[ignore]
+    fn jdtls_data_dir_varies_by_project() {
+        let a = std::env::temp_dir().join("lsp-proxy-jdtls-probe-a");
+        let b = std::env::temp_dir().join("lsp-proxy-jdtls-probe-b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+
+        let (pa, pb) = (launcher_paths(&a), launcher_paths(&b));
+        eprintln!("  project A paths: {pa:#?}");
+        eprintln!("  project B paths: {pb:#?}");
+
+        // A4 holds only if *something* the launcher resolves differs between the two
+        // projects. Identical output means one shared workspace, so the two projects'
+        // indexes would contaminate each other.
+        assert_ne!(
+            pa, pb,
+            "A4 no longer holds: the launcher resolves the same paths in two \
+             different projects, so they would share one jdtls workspace. Pass an \
+             explicit per-project `-data` in languages.toml, or drop the assumption."
+        );
     }
 }

@@ -197,3 +197,124 @@ fn timestamp_now() -> String {
     now.format(fmt)
         .unwrap_or_else(|_| "00000000-000000".to_string())
 }
+
+#[cfg(test)]
+mod builtin_config_tests {
+    use super::default_lang_config;
+
+    /// The built-in `languages.toml` must deserialize into the real configuration
+    /// types, not merely parse as TOML.
+    ///
+    /// `default_syntax_loader` panics on failure, and it runs before anything else,
+    /// so a malformed entry for one language takes down the proxy for every language
+    /// — with a message about serialization rather than about the block that is
+    /// wrong. `toml::from_str` succeeding is not enough to catch that: a field of the
+    /// wrong shape parses fine as TOML and only fails at `try_into`.
+    #[test]
+    fn the_builtin_config_deserializes() {
+        default_lang_config()
+            .try_into::<crate::syntax::Configuration>()
+            .expect("built-in languages.toml must deserialize");
+    }
+
+    /// Both Java backends must be defined, and defined the way they are launched.
+    ///
+    /// The `command` assertion is the load-bearing one: the official launcher derives
+    /// its per-project `-data` workspace from the directory it starts in, while `args`
+    /// here is a fixed list that cannot vary per project. Replacing it with a
+    /// hand-assembled `java -jar ...equinox.launcher...` would therefore pin every
+    /// project to one shared workspace.
+    #[test]
+    fn both_java_backends_are_configured() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let servers = &config.language_server;
+
+        let jdtls = servers
+            .get("jdtls")
+            .expect("jdtls must be defined as a language server");
+        assert_eq!(
+            jdtls.command, "jdtls",
+            "must invoke the official launcher, not a hand-assembled java command"
+        );
+        assert!(
+            !jdtls.args.iter().any(|a| a.contains("equinox.launcher")),
+            "args must not hand-assemble the launcher: {:?}",
+            jdtls.args
+        );
+        assert!(
+            servers.contains_key("intellij"),
+            "the existing backend must stay defined"
+        );
+    }
+
+    /// Every declared `extendedClientCapabilities` switch must have a client handler.
+    ///
+    /// Declaring one without its handler is worse than leaving it off: the server
+    /// then sends commands or notifications nothing can act on, and the feature looks
+    /// broken rather than absent. This pins the exact set so adding a switch has to be
+    /// a deliberate edit here as well as in the client.
+    #[test]
+    fn jdtls_declares_only_implemented_client_capabilities() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let caps = config
+            .language_server
+            .get("jdtls")
+            .and_then(|s| s.config.as_ref())
+            .and_then(|c| c.get("extendedClientCapabilities"))
+            .and_then(|c| c.as_object())
+            .expect("jdtls must declare extendedClientCapabilities");
+
+        let mut declared: Vec<&str> = caps
+            .iter()
+            .filter(|(_, v)| v.as_bool() == Some(true))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        declared.sort_unstable();
+
+        assert_eq!(
+            declared,
+            vec![
+                // goto-definition into a dependency; handled by the editor's
+                // `java/classFileContents` fetch.
+                "classFileContentsSupport",
+                // handled by `lsp-proxy-java--client-command-handlers`
+                "advancedGenerateAccessorsSupport",
+                "advancedOrganizeImportsSupport",
+                "overrideMethodsPromptSupport",
+                // import progress; handled by `progress_report_to_progress` here
+                "progressReportProvider",
+                // no prompt and no command: the ordinary completion path applies the
+                // extra edits already
+                "resolveAdditionalTextEditsSupport",
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>(),
+            "a switch here without a client handler makes the server send commands \
+             nothing can run"
+        );
+    }
+
+    /// Kotlin stays on the IntelliJ backend: jdtls does not serve Kotlin at all, so
+    /// switching it would leave Kotlin files with no server rather than a different
+    /// one.
+    #[test]
+    fn kotlin_is_not_switched_to_jdtls() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let kotlin = config
+            .language
+            .iter()
+            .find(|l| l.language_id == "kotlin")
+            .expect("kotlin must stay configured");
+        let names: Vec<&str> = kotlin
+            .language_servers
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"jdtls"),
+            "kotlin must not be routed to jdtls, got {names:?}"
+        );
+    }
+}

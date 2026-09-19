@@ -336,10 +336,24 @@ dispatching — `file-directory-p' routes `directory-file-name' first — so the
 handler is also asked about ancestor directories of the file.  Anchoring on
 more than the prefix makes those operations silently miss the handler.")
 
+(defconst lsp-proxy--decompiled-scheme-regexp
+  "\\`\\(?:jar\\|jrt\\|jdt\\):"
+  "Regexp matching a URI scheme whose contents are served by a language server.
+
+Deliberately a compile-time constant rather than a lookup of whatever backend is
+currently attached.  `lsp-proxy--uri-to-path' consults this once per location in
+results as large as a project-wide `textDocument/references', so a runtime query
+here would cost one lookup per result; and the set of schemes is a property
+of the protocol, not of the session.
+
+Adding a scheme is therefore an edit to this string.  The schemes are named for
+what produces them, not for who: `jar:'/`jrt:' come from JVM archive and runtime
+images, `jdt:' from an Eclipse-style opaque content identifier.")
+
 (defun lsp-proxy--decompiled-scheme-p (uri)
-  "Return non-nil when URI uses a scheme served via the `decompile' command."
+  "Return non-nil when URI names content a language server has to supply."
   (let ((u (if (keywordp uri) (substring (symbol-name uri) 1) uri)))
-    (and (stringp u) (string-match-p "\\`\\(?:jar\\|jrt\\):" u))))
+    (and (stringp u) (string-match-p lsp-proxy--decompiled-scheme-regexp u))))
 
 (defun lsp-proxy--decompiled-escape (uri)
   "Escape URI just enough to be usable as the tail of a virtual file name.
@@ -432,6 +446,21 @@ directory corresponds to, which is not itself a servable URI; use
     (lsp-proxy--decompiled-unescape
      (substring name (length lsp-proxy--decompiled-prefix)))))
 
+(defun lsp-proxy--decompiled-member-extension (name)
+  "Return the source extension of the member NAME encodes, or nil.
+
+Not `file-name-extension' on NAME itself: the payload is a URI, and a URI
+may end in a `?query' or `#fragment' that is part of the server's identifier
+rather than of the member path.  An opaque content URI shaped
+`jdt://contents/<module>/<pkg>/<Type>.class?=<query>' is the case that forced
+this — `file-name-extension' answers `class?=<query>\' there, which matches no
+known extension, so the name would be judged unservable.
+
+Pure string work, like everything else in this section."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name)))
+    (let ((path (car (split-string uri "[?#]"))))
+      (file-name-extension (file-name-nondirectory path)))))
+
 (defun lsp-proxy--decompiled-file-name-p (name)
   "Return non-nil when NAME denotes a servable decompiled member.
 Nil for the archive's intermediate directories and for probes at names we never
@@ -440,7 +469,7 @@ those as nonexistent instead of claiming everything under the prefix."
   (and (stringp name)
        (string-prefix-p lsp-proxy--decompiled-prefix name)
        (or (gethash name lsp-proxy--decompiled-known-names)
-           (member (file-name-extension name)
+           (member (lsp-proxy--decompiled-member-extension name)
                    lsp-proxy--decompiled-source-extensions))
        t))
 
