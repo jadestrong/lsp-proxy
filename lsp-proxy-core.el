@@ -330,10 +330,13 @@ user would want to name in `languages.toml'.  Putting their `bin/' on the
 proxy's PATH instead means a config entry can just say
 `command = \"intellij-server\"' and the proxy's own `which' lookup finds it.
 
+More than one may be present: a project can have Java on one backend and
+Kotlin on another, so each installed backend contributes its own `bin/'.
+
 PATH is fixed when the process starts, so a server installed afterwards is only
 picked up on the next `lsp-proxy-restart'."
-  (let ((dirs (delq nil (list (when (fboundp 'lsp-proxy-java-server-bin-directory)
-                                (lsp-proxy-java-server-bin-directory))))))
+  (let ((dirs (when (fboundp 'lsp-proxy-java-managed-bin-directories)
+                (lsp-proxy-java-managed-bin-directories))))
     (if (null dirs)
         process-environment
       (cons (concat "PATH="
@@ -472,10 +475,50 @@ picked up on the next `lsp-proxy-restart'."
   (when (and (eql method 'intellij/runEditorCommand)
              (fboundp 'lsp-proxy-java--handle-run-editor-command))
     (lsp-proxy-java--handle-run-editor-command msg))
+  ;; A language server `languages.toml' configures for this file that would not
+  ;; start. Worth interrupting for: nothing about the buffer will work, and the
+  ;; proxy's own log line for it is invisible at the default log level.
+  (when (eql method 'emacs/serverStartFailure)
+    (lsp-proxy--handle-server-start-failure msg))
   (when (eql method 'emacs/remoteDeployNeeded)
     (lsp-proxy-remote--handle-deploy-needed msg))
   (when (eql method 'emacs/remoteDeployProgress)
     (lsp-proxy-remote--handle-deploy-progress msg)))
+
+(defvar lsp-proxy-server-install-hint-functions nil
+  "Functions consulted for how to install a language server.
+
+Each is called with the server name from `languages.toml' and returns a
+string explaining where to get it, or nil when it knows nothing about that
+server.  The first non-nil answer wins.
+
+Kept as a hook so the knowledge lives with the language module that cares:
+the core has no business holding a table of download locations, and the
+proxy has even less — it never installs the servers it launches.")
+
+(defun lsp-proxy--handle-server-start-failure (msg)
+  "Report a configured language server that failed to start.
+
+MSG is the `emacs/serverStartFailure' payload, carrying `name', `command',
+`notOnPath' and `message'.
+
+Two phrasings, because the two cases have different next steps.  A command
+that is simply absent is an expected situation with an install to do; any
+other failure is a real error whose text the user needs to see.  Both
+mention the restart, because the proxy resolves PATH once at startup, so
+installing the server is not enough on its own."
+  (lsp-proxy--dbind (:name name :command command :notOnPath not-on-path
+                     :message text)
+      msg
+    (if (and not-on-path (not (eq not-on-path :json-false)))
+        (lsp-proxy--warn
+         "Language server `%s' is configured for this file but its command `%s' was not found on PATH. %sThen run M-x lsp-proxy-restart."
+         name command
+         (if-let* ((hint (run-hook-with-args-until-success
+                          'lsp-proxy-server-install-hint-functions name)))
+             (concat hint " ")
+           ""))
+      (lsp-proxy--error "Language server `%s' failed to start: %s" name text))))
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."

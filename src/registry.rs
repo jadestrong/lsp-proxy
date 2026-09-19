@@ -37,6 +37,13 @@ pub enum Error {
     StreamClosed,
     #[error("Unhandled")]
     Unhandled,
+    /// The configured `command` is not on PATH. Its own variant rather than a
+    /// stringly-typed `Other` because the caller has to match on it: this is the one
+    /// start-up failure with a specific, actionable next step for the user ("install
+    /// it, then restart the proxy"), and it is an expected path whenever a server is
+    /// configured but not installed.
+    #[error("language server executable {0:?} was not found on PATH")]
+    ExecutableNotFound(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -55,6 +62,10 @@ pub enum NotificationFromServer {
     ImportLog(lsp_ext::ImportLogParams),
     ChooseAction(lsp_ext::ChooseActionParams),
     RunEditorCommand(lsp_ext::RunEditorCommandParams),
+    /// jdtls's own status stream; translated onto `intellij/importLog` downstream.
+    LanguageStatus(lsp_ext::LanguageStatusParams),
+    /// jdtls's own progress stream; translated onto `$/progress` downstream.
+    LanguageProgressReport(lsp_ext::LanguageProgressReportParams),
 }
 
 impl NotificationFromServer {
@@ -93,6 +104,29 @@ impl NotificationFromServer {
             lsp_ext::RunEditorCommand::METHOD => {
                 let params: lsp_ext::RunEditorCommandParams = params.parse()?;
                 Self::RunEditorCommand(params)
+            }
+            // jdtls speaks its own status/progress channels instead of
+            // `window/logMessage` + `$/progress`. Both are translated onto the
+            // channels the editor already renders (see `lsp_ext`), so nothing on the
+            // Emacs side has to learn a new notification.
+            //
+            // The `?` on each parse matters: a payload whose shape drifted must
+            // surface as a parse failure rather than as `Error::Unhandled`. The main
+            // loop branches on exactly that variant — `Unhandled` is an `info!`,
+            // everything else an `error!` — so swallowing the difference would make a
+            // renamed field indistinguishable from a method the proxy does not
+            // support, and silent at the default log level.
+            //
+            // The concrete variant is `Error::Rpc`, not `Error::Parse`: `Params::parse`
+            // wraps serde failures as `jsonrpc::Error::invalid_params` first. That is
+            // pre-existing behaviour shared with every other arm here.
+            lsp_ext::LanguageStatus::METHOD => {
+                let params: lsp_ext::LanguageStatusParams = params.parse()?;
+                Self::LanguageStatus(params)
+            }
+            lsp_ext::LanguageProgressReport::METHOD => {
+                let params: lsp_ext::LanguageProgressReportParams = params.parse()?;
+                Self::LanguageProgressReport(params)
             }
             _ => {
                 return Err(Error::Unhandled);

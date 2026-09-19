@@ -151,7 +151,7 @@ pub(crate) fn handle_did_open_text_document(
     let doc_id = app.editor.document_by_uri(&uri).map(|doc| doc.id());
     if let Some(doc_id) = doc_id {
         let text = params.text_document.text.to_owned();
-        app.editor.launch_language_servers(doc_id);
+        let start_failures = app.editor.launch_language_servers(doc_id);
         let doc = app.editor.document_by_uri(&uri);
         if let Some(doc) = doc {
             let is_org_file = doc.is_org_file();
@@ -174,18 +174,32 @@ pub(crate) fn handle_did_open_text_document(
             }
             let configed_servers = doc.language_servers.keys().join("、");
 
+            // A server that is configured but would not start. Reported before the
+            // summary below so the specific cause arrives ahead of the generic
+            // "connected to ..." line, and reported on its own channel so the editor
+            // can attach an install hint keyed on the server name.
+            let had_start_failures = !start_failures.is_empty();
+            for failure in start_failures {
+                app.send_notification::<lsp_ext::ServerStartFailure>(failure);
+            }
+
             // Notify user about connected servers if it's not org file or configed servers is not empty
             if !is_org_file || !configed_servers.is_empty() {
-                app.send_notification::<lsp_types::notification::ShowMessage>(
-                    lsp_types::ShowMessageParams {
-                        typ: MessageType::INFO,
-                        message: if configed_servers.is_empty() {
-                            "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
-                        } else {
-                            format!("Connected to {configed_servers}.")
-                        }
-                    },
-                );
+                // Suppressed when a configured server failed to start: the config was
+                // found, so telling the user to go check it sends them to the wrong
+                // place. The failure notification above already says what happened.
+                if !(configed_servers.is_empty() && had_start_failures) {
+                    app.send_notification::<lsp_types::notification::ShowMessage>(
+                        lsp_types::ShowMessageParams {
+                            typ: MessageType::INFO,
+                            message: if configed_servers.is_empty() {
+                                "No language server config found for this file, please check your custom config by M-x lsp-proxy-open-config-file.".to_string()
+                            } else {
+                                format!("Connected to {configed_servers}.")
+                            }
+                        },
+                    );
+                }
             }
         }
     } else {

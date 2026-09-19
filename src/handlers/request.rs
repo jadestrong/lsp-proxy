@@ -1590,6 +1590,13 @@ pub(crate) async fn handle_forward_request(
 
     match target_server {
         Some(ls) => {
+            // Fire-and-forget for methods the server declares as notifications.
+            // Sending one as a request would block until the request timeout for a
+            // reply the server is never going to produce.
+            if params.notify {
+                ls.notify_method(params.method.clone(), params.params)?;
+                return Ok(Response::new_ok(req.id, serde_json::Value::Null));
+            }
             // Forward the request using the call_method
             let json = ls
                 .call_method(req.id.clone(), params.method.clone(), params.params)

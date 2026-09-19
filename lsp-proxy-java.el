@@ -84,25 +84,114 @@ server-known file of its own, so borrow one from another active buffer)."
                 (let ((u (project-file-uri buffer-file-name)))
                   (when u (throw 'found u))))))))))
 
+(defcustom lsp-proxy-java-class-file-contents-server-name "jdtls"
+  "Name of the language server that answers `java/classFileContents'.
+
+The same server answers this file's other forwarded extension methods
+\(`java/buildWorkspace', `java/organizeImports' and the rest), so this is
+the one place that names it.
+
+Must match the `[language-server.<name>]' section in `languages.toml'.
+A name is needed at all only because `emacs/forwardRequest' routes by
+server name — that is the proxy's generic forwarding channel and it has no
+other addressing.  Which backend serves a given URI is decided from the URI
+itself (see `lsp-proxy-java--content-provider'), never from a name."
+  :type 'string
+  :group 'lsp-proxy)
+
+;;; Content providers
+;;
+;; Two backends serve JVM sources through different protocols, so the fetch is one
+;; entry point (`lsp-proxy-java--content') with the protocol chosen underneath it,
+;; rather than two parallel paths the callers would have to choose between.
+;;
+;; The dispatch key is the *scheme of the URI the server itself minted*, not the name
+;; of a server:
+;;
+;;   jar:/jrt:  an archive or runtime-image member. The server that produced it
+;;              advertises a `decompile' command; the proxy already routes
+;;              `workspace/executeCommand' to whichever server advertises the
+;;              command, so nothing here has to know which one that is.
+;;   jdt:       an opaque content identifier. Only a server implementing
+;;              `java/classFileContents' can resolve one, and that request answers
+;;              with a bare string rather than a structured result.
+;;
+;; A scheme is a better key than a name for the same reason it is a cheaper one: the
+;; server that emitted the URI is by construction the server that can resolve it, and
+;; the answer needs no configuration to stay correct when a server is renamed.
+
+(defconst lsp-proxy-java--class-file-contents-scheme "jdt"
+  "URI scheme whose contents are fetched with `java/classFileContents'.")
+
+(defun lsp-proxy-java--uri-scheme (uri)
+  "Return URI's scheme as a string, or nil when it has none."
+  (when (and (stringp uri) (string-match "\\`\\([a-zA-Z][a-zA-Z0-9+.-]*\\):" uri))
+    (match-string 1 uri)))
+
+(defun lsp-proxy-java--fetch-via-decompile (uri doc-uri)
+  "Fetch URI with the `decompile' command, routed through DOC-URI.
+
+The command answers with `{code, language}'; `language' is authoritative for the
+buffer's major mode, because the member is often `.class' and its extension says
+nothing about what the source was decompiled into."
+  (let* ((result (jsonrpc-request
+                  lsp-proxy--connection 'workspace/executeCommand
+                  (list :uri doc-uri
+                        :params (list :command "decompile"
+                                      :arguments (vector uri)))))
+         (code (plist-get result :code)))
+    (unless (stringp code)
+      (error "decompile returned no content for %s" uri))
+    (list :code code :language (plist-get result :language))))
+
+(defun lsp-proxy-java--fetch-via-class-file-contents (uri doc-uri)
+  "Fetch URI with `java/classFileContents', routed through DOC-URI.
+
+Unlike `decompile', this answers with a *bare string* and names no language,
+so the result is wrapped into the same `(:code :language)' shape the rest of
+this file consumes. `java' is not a guess: `java/classFileContents' is a
+Java-only request, and Kotlin stays on the other backend by decision, so
+there is no second language this can return.
+
+An empty answer is not an error. A class with no attached source jar — most
+of the JDK internals — legitimately yields nothing, and reporting that as a
+failure would turn an expected outcome into a scary message; the buffer
+simply opens empty. A non-string answer *is* an error: it means the request
+did not land on a server that implements it."
+  (let ((result (jsonrpc-request
+                 lsp-proxy--connection 'emacs/forwardRequest
+                 (list :uri doc-uri
+                       :params (list :uri doc-uri
+                                     :serverName lsp-proxy-java-class-file-contents-server-name
+                                     :method "java/classFileContents"
+                                     :params (list :uri uri))))))
+    (unless (stringp result)
+      (error "java/classFileContents returned no content for %s" uri))
+    (list :code result :language "java")))
+
+(defun lsp-proxy-java--content-provider (uri)
+  "Return the function that fetches URI's content.
+Called with (URI DOC-URI) and returning a `(:code :language)' plist."
+  (if (equal (lsp-proxy-java--uri-scheme uri)
+             lsp-proxy-java--class-file-contents-scheme)
+      #'lsp-proxy-java--fetch-via-class-file-contents
+    #'lsp-proxy-java--fetch-via-decompile))
+
 (defun lsp-proxy-java--content (uri)
-  "Return the decompiled content plist for URI, fetching it if necessary."
+  "Return the decompiled content plist for URI, fetching it if necessary.
+
+The single entry point for decompiled content: callers never choose a backend,
+and the protocol difference is resolved by `lsp-proxy-java--content-provider'
+below this line."
   (or (gethash uri lsp-proxy-java--content-cache)
       (progn
         (unless lsp-proxy--connection
           (error "No lsp-proxy connection to decompile %s" uri))
         (let* ((doc-uri (or (lsp-proxy-java--routing-uri)
                             (error "No active lsp-proxy document to route decompile of %s" uri)))
-               (result (jsonrpc-request
-                        lsp-proxy--connection 'workspace/executeCommand
-                        (list :uri doc-uri
-                              :params (list :command "decompile"
-                                            :arguments (vector uri)))))
-               (code (plist-get result :code)))
-          (unless (stringp code)
-            (error "decompile returned no content for %s" uri))
-          (let ((content (list :code code :language (plist-get result :language))))
-            (puthash uri content lsp-proxy-java--content-cache)
-            content)))))
+               (content (funcall (lsp-proxy-java--content-provider uri) uri doc-uri)))
+          (puthash uri content lsp-proxy-java--content-cache)
+          content))))
 
 ;;; file-name-handler
 
@@ -547,11 +636,17 @@ what makes this a file being created rather than an empty file being browsed."
 
 ;;; Server installation
 ;;
-;; The IntelliJ backend is a required dependency of this file, so it needs an
-;; install path. The download itself lives in the proxy (`src/java_install.rs`):
-;; the archive is ~370 MB, and Rust already has tokio (so the editor stays
-;; responsive) plus an established `$/progress` pipeline that puts a percentage in
-;; the mode line. Everything below is the thin client half.
+;; Either Java backend is a dependency of this file, so both need an install path.
+;; The download itself lives in the proxy (`src/java_install.rs`): the archives run
+;; from ~50 MB (jdtls) to ~370 MB (IntelliJ), and Rust already has tokio (so the
+;; editor stays responsive) plus an established progress pipeline that puts a
+;; percentage in the mode line. Everything below is the thin client half.
+;;
+;; The two differ only in where the download comes from, which is entirely the
+;; proxy's problem; on this side they differ only by the rows of
+;; `lsp-proxy-java--backends'. Both land in `<install-dir>/<version>/bin/', and that
+;; `bin/' is what `lsp-proxy--managed-server-path-environment' puts on the proxy's
+;; PATH — which is why `languages.toml' never names a path.
 ;;
 ;; The proxy's *own* installer stays in Emacs Lisp (`lsp-proxy-install.el`) — that
 ;; one cannot run in the proxy, which does not exist yet when it runs.
@@ -575,39 +670,199 @@ platforms."
   :type '(choice (const :tag "Latest" nil) string)
   :group 'lsp-proxy)
 
-(defun lsp-proxy-java-server-launcher ()
-  "Return the newest managed IntelliJ server launcher, or nil if none.
+(defcustom lsp-proxy-java-jdtls-install-dir
+  (expand-file-name "servers/jdtls/" lsp-proxy-install-dir)
+  "Directory holding managed Eclipse JDT language server installs.
+
+Laid out exactly like `lsp-proxy-java-server-install-dir': one
+`<version>/' subdirectory per build.  The two are named asymmetrically
+only because the IntelliJ one predates this and is a user-settable
+option, so renaming it would silently discard an existing setting."
+  :type 'directory
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-jdtls-version nil
+  "jdtls milestone to install, e.g. \"1.61.0\", or nil for the latest.
+
+Unlike the IntelliJ backend, pinning costs nothing here: Eclipse
+publishes a checksum per milestone rather than only for the newest
+build, so a pinned version is still verified against it.  Nil resolves
+the newest milestone number from Homebrew's formula metadata; the
+archive name, the checksum and the download itself always come from
+Eclipse."
+  :type '(choice (const :tag "Latest" nil) string)
+  :group 'lsp-proxy)
+
+(defconst lsp-proxy-java--backends
+  '(("intellij"
+     :install-dir lsp-proxy-java-server-install-dir
+     :version     lsp-proxy-java-server-version
+     :exe         "intellij-server"
+     :exe-windows "intellij-server.exe"
+     :tag         "IntelliJ"
+     :label       "IntelliJ server"
+     ;; The bundle is self-contained, including its own JBR.
+     :runtime-requires nil)
+    ("jdtls"
+     :install-dir lsp-proxy-java-jdtls-install-dir
+     :version     lsp-proxy-java-jdtls-version
+     :exe         "jdtls"
+     ;; jdtls ships a Python script with a `.bat' shim beside it rather than a
+     ;; native binary, so this is NOT the Unix name plus `.exe'.  Getting it
+     ;; wrong does not fail loudly: the launcher is simply never found.
+     :exe-windows "jdtls.bat"
+     :tag         "jdtls"
+     :label       "Eclipse JDT language server"
+     :runtime-requires (lsp-proxy-java--check-python lsp-proxy-java--check-jdk)))
+  "Java language server backends the proxy can install, keyed by server name.
+
+The keys are the names `languages.toml' uses, so the value chosen here is
+also what ends up on PATH under that name.  Everything that differs
+between the backends is reachable from this table; adding a third means
+adding a row, not a parallel copy of the code below.
+
+`:install-dir' and `:version' hold the *symbols* of the corresponding
+options rather than their values, so customising either is picked up
+without reloading this file.  `:runtime-requires' is a list of functions,
+each returning nil when satisfied or a description of what is missing;
+they cover what the backend needs at run time but the install does not
+provide.")
+
+(defconst lsp-proxy-java--jdtls-min-java 21
+  "Lowest Java major version `bin/jdtls' will start on.
+
+Enforced by the launcher itself, not by us: `jdtls.py' raises
+\"jdtls requires at least Java 21\" and exits before a single LSP message is
+exchanged.  The symptom is therefore the server appearing to crash at
+startup, with the real reason only in the proxy log — which is exactly why
+this is checked up front instead.")
+
+(defun lsp-proxy-java--java-executable ()
+  "Return the `java' that `jdtls.py' would pick, or nil if there is none.
+
+Resolved in the launcher's own order — JAVA_HOME first, then PATH — so the
+answer is what jdtls will actually run, not merely what exists."
+  (let ((home (getenv "JAVA_HOME")))
+    (or (and home
+             (let ((exe (expand-file-name
+                         (if (eq system-type 'windows-nt) "bin/java.exe" "bin/java")
+                         home)))
+               (and (file-executable-p exe) exe)))
+        (executable-find "java"))))
+
+(defun lsp-proxy-java--java-major-version (exe)
+  "Return the major version of the Java at EXE, or nil if it cannot be read.
+Parses the same `version \"N' field `jdtls.py' matches, so a JDK this accepts
+is one the launcher will accept too."
+  (with-temp-buffer
+    ;; `java -version' writes to stderr, which `call-process' folds into the
+    ;; buffer along with stdout.
+    (when (eq 0 (ignore-errors (call-process exe nil t nil "-version")))
+      (goto-char (point-min))
+      (when (re-search-forward "version \"\\([0-9]+\\)" nil t)
+        (string-to-number (match-string 1))))))
+
+(defun lsp-proxy-java--check-python ()
+  "Return what is missing for `bin/jdtls' to run, or nil when nothing is.
+The launcher is a `#!/usr/bin/env python3' script; on Windows the `.bat'
+shim calls `python' instead."
+  (let ((exe (if (eq system-type 'windows-nt) "python" "python3")))
+    (unless (executable-find exe)
+      (format "%s (bin/jdtls is a Python script)" exe))))
+
+(defun lsp-proxy-java--check-jdk ()
+  "Return what is wrong with the JDK jdtls would use, or nil when nothing is."
+  (let* ((min lsp-proxy-java--jdtls-min-java)
+         (exe (lsp-proxy-java--java-executable))
+         (major (and exe (lsp-proxy-java--java-major-version exe))))
+    (cond
+     ((null exe) (format "a JDK %d+ on PATH or at JAVA_HOME" min))
+     ;; An unreadable version is not proof of a bad JDK, so say what happened
+     ;; rather than asserting a version that was never established.
+     ((null major) (format "a JDK whose version can be read (`%s -version' gave none)" exe))
+     ((< major min)
+      (format "a JDK %d+, but %s is Java %d" min exe major)))))
+
+
+
+(defun lsp-proxy-java--backend (name)
+  "Return the descriptor for backend NAME, or signal when it is unknown."
+  (or (assoc name lsp-proxy-java--backends)
+      (user-error "Unknown Java backend `%s'; expected one of %s"
+                  name
+                  (mapconcat #'car lsp-proxy-java--backends ", "))))
+
+(defun lsp-proxy-java--backend-get (name prop)
+  "Return PROP of backend NAME."
+  (plist-get (cdr (lsp-proxy-java--backend name)) prop))
+
+(defun lsp-proxy-java--backend-exe (name)
+  "Return the launcher file name backend NAME installs on this platform."
+  (lsp-proxy-java--backend-get
+   name (if (eq system-type 'windows-nt) :exe-windows :exe)))
+
+(defun lsp-proxy-java--backend-install-dir (name)
+  "Return the configured install directory for backend NAME."
+  (symbol-value (lsp-proxy-java--backend-get name :install-dir)))
+
+(defun lsp-proxy-java--managed-launcher (install-dir exe)
+  "Return the newest `<version>/bin/EXE' under INSTALL-DIR, or nil if none."
+  (car
+   (sort
+    (seq-filter
+     #'file-executable-p
+     ;; The proxy flattens every install to `<version>/bin/<exe>', so the depth is
+     ;; fixed regardless of how the archive itself was packed.
+     (mapcar (lambda (dir) (expand-file-name (concat "bin/" exe) dir))
+             (when (file-directory-p install-dir)
+               (directory-files install-dir t "\\`[0-9]" t))))
+    ;; Newest build first, comparing components numerically so that 263.10.0
+    ;; sorts above 263.9.0 (string order gets that backwards).
+    (lambda (a b)
+      (lsp-proxy-java--version<
+       (lsp-proxy-java--version-key b)
+       (lsp-proxy-java--version-key a))))))
+
+(defun lsp-proxy-java-backend-launcher (name)
+  "Return the newest managed launcher for backend NAME, or nil if none.
 Useful for pointing a `languages.toml' entry at the managed install."
-  (let ((exe (if (eq system-type 'windows-nt) "intellij-server.exe" "intellij-server")))
-    (car
-     (sort
-      (seq-filter
-       #'file-executable-p
-       ;; The proxy flattens each install to `<version>/bin/<exe>', so the depth is
-       ;; fixed regardless of how the archive itself was packed.
-       (mapcar (lambda (dir) (expand-file-name (concat "bin/" exe) dir))
-               (when (file-directory-p lsp-proxy-java-server-install-dir)
-                 (directory-files lsp-proxy-java-server-install-dir t "\\`[0-9]" t))))
-      ;; Newest build first, comparing components numerically so that 263.10.0
-      ;; sorts above 263.9.0 (string order gets that backwards).
-      (lambda (a b)
-        (lsp-proxy-java--version<
-         (lsp-proxy-java--version-key b)
-         (lsp-proxy-java--version-key a)))))))
+  (lsp-proxy-java--managed-launcher (lsp-proxy-java--backend-install-dir name)
+                                    (lsp-proxy-java--backend-exe name)))
 
-(defun lsp-proxy-java-server-bin-directory ()
-  "Return the `bin/' directory of the newest managed IntelliJ server, or nil.
+(defun lsp-proxy-java-backend-bin-directory (name)
+  "Return the `bin/' directory of the newest managed backend NAME, or nil."
+  (when-let* ((launcher (lsp-proxy-java-backend-launcher name)))
+    (file-name-directory launcher)))
 
-Prepended to the proxy's PATH at startup so `languages.toml' can name the server
-plainly:
+(defun lsp-proxy-java-managed-bin-directories ()
+  "Return the `bin/' directory of every managed Java backend that is installed.
+
+Prepended to the proxy's PATH at startup so `languages.toml' can name each
+server plainly:
 
   [language-server.intellij]
   command = \"intellij-server\"
-  args = [\"--stdio\"]
 
-That keeps absolute, machine-specific paths out of the config entirely."
-  (when-let* ((launcher (lsp-proxy-java-server-launcher)))
-    (file-name-directory launcher)))
+  [language-server.jdtls]
+  command = \"jdtls\"
+
+That keeps absolute, machine-specific paths out of the config entirely.  Both
+may be present at once: a project with Java on one backend and Kotlin on the
+IntelliJ one needs both findable."
+  (delq nil (mapcar (lambda (entry) (lsp-proxy-java-backend-bin-directory (car entry)))
+                    lsp-proxy-java--backends)))
+
+(defun lsp-proxy-java-server-launcher ()
+  "Return the newest managed IntelliJ server launcher, or nil if none.
+Kept for configurations that referred to it before the installer grew a
+second backend; prefer `lsp-proxy-java-backend-launcher'."
+  (lsp-proxy-java-backend-launcher "intellij"))
+
+(defun lsp-proxy-java-server-bin-directory ()
+  "Return the `bin/' directory of the newest managed IntelliJ server, or nil.
+Kept for configurations that referred to it before the installer grew a
+second backend; prefer `lsp-proxy-java-backend-bin-directory'."
+  (lsp-proxy-java-backend-bin-directory "intellij"))
 
 (defun lsp-proxy-java--version-key (launcher)
   "Return a comparable list of integers for LAUNCHER's version directory.
@@ -629,25 +884,55 @@ Missing components count as zero, so 263.1 precedes 263.1.1."
           (throw 'done (< x y)))))
     nil))
 
-;;;###autoload
-(defun lsp-proxy-java-install-server (&optional force)
-  "Download and install the IntelliJ language server used for Java and Kotlin.
+(defun lsp-proxy-java--runtime-warning (backend)
+  "Return a note about anything BACKEND needs at runtime and cannot find, or nil.
 
-Installs `lsp-proxy-java-server-version', or the latest build when that is nil.
-With a prefix argument FORCE, reinstall even if the version is already present.
+The install cannot detect this for itself: the proxy only unpacks an archive,
+and what is inside may still shell out to things it does not ship — `bin/jdtls'
+is a `#!/usr/bin/env python3' script that in turn looks for a JDK.  Unreported,
+each is a failure to start, surfacing far from its cause."
+  (let ((problems (delq nil (mapcar #'funcall
+                                    (lsp-proxy-java--backend-get
+                                     backend :runtime-requires)))))
+    (when problems
+      (format "  WARNING: %s cannot start yet — it needs %s."
+              backend (mapconcat #'identity problems "; and it needs ")))))
+
+;;;###autoload
+(defun lsp-proxy-java-install-server (&optional force backend)
+  "Download and install a Java language server BACKEND.
+
+BACKEND is one of the keys of `lsp-proxy-java--backends' — \"intellij\" (which
+also serves Kotlin) or \"jdtls\".  Interactively it is read from the
+minibuffer, defaulting to \"intellij\"; with a prefix argument FORCE,
+reinstall even if that version is already present.
+
+The version installed is the backend's own option
+\(`lsp-proxy-java-server-version' or `lsp-proxy-java-jdtls-version'), or the
+latest build when that is nil.
 
 The work happens in the proxy; progress is shown in the mode line while it runs
-\(hover it for the current phase).  On success the launcher path is reported —
-point your `languages.toml' at it."
-  (interactive "P")
+\(hover it for the current phase).  On success the launcher path is reported.
+Its `bin/' is put on the proxy's PATH at startup, so `languages.toml' can go on
+naming the server plainly — but PATH is fixed when the proxy starts, so a fresh
+install needs `lsp-proxy-restart' before it is visible."
+  (interactive
+   (list current-prefix-arg
+         (completing-read "Install Java backend: "
+                          (mapcar #'car lsp-proxy-java--backends)
+                          nil t nil nil "intellij")))
   (lsp-proxy--ensure-connection)
-  (let ((dir (file-name-as-directory
-              (expand-file-name lsp-proxy-java-server-install-dir))))
-    (message "[lsp-proxy] Installing IntelliJ server into %s ..." dir)
+  (let* ((backend (or backend "intellij"))
+         (label (lsp-proxy-java--backend-get backend :label))
+         (tag (lsp-proxy-java--backend-get backend :tag))
+         (version (symbol-value (lsp-proxy-java--backend-get backend :version)))
+         (dir (file-name-as-directory
+               (expand-file-name (lsp-proxy-java--backend-install-dir backend)))))
+    (message "[lsp-proxy] Installing %s into %s ..." label dir)
     ;; Set immediately rather than waiting for the first progress notification:
     ;; looking up the latest version takes a moment, and an indicator that only
     ;; appears seconds after the command looks like the command did nothing.
-    (lsp-proxy--set-global-status "IntelliJ" "Starting IntelliJ server install")
+    (lsp-proxy--set-global-status tag (format "Starting %s install" label))
     (jsonrpc-async-request
      lsp-proxy--connection 'emacs/installJavaServer
      ;; The proxy wraps every request in a `{uri, context, params}' envelope and
@@ -659,36 +944,38 @@ point your `languages.toml' at it."
       :params
       (append
        (list :installDir dir
+             :backend backend
              :force (if force t :json-false))
        ;; Omit the key rather than encoding a null: this connection serializes with
        ;; `:null-object nil', so a `:null' keyword is not a valid JSON value at all.
        ;; The proxy's `version' field is `#[serde(default)]', so absent means latest.
-       (when lsp-proxy-java-server-version
-         (list :version lsp-proxy-java-server-version))))
+       (when version
+         (list :version version))))
      :success-fn
      (lambda (result)
        (lsp-proxy--clear-global-status)
        (let ((path (plist-get result :launcherPath))
              (version (plist-get result :version)))
          (if (eq (plist-get result :alreadyInstalled) t)
-             (message "[lsp-proxy] IntelliJ server %s already installed: %s" version path)
+             (message "[lsp-proxy] %s %s already installed: %s" label version path)
            ;; The proxy inherits PATH at startup, so a freshly installed server only
            ;; becomes findable after a restart.
-           (message "[lsp-proxy] Installed IntelliJ server %s. Run M-x lsp-proxy-restart to use it (%s)"
-                    version path))))
+           (message "[lsp-proxy] Installed %s %s. Run M-x lsp-proxy-restart to use it (%s)%s"
+                    label version path
+                    (or (lsp-proxy-java--runtime-warning backend) "")))))
      :error-fn
      (lambda (err)
        (lsp-proxy--clear-global-status)
-       (lsp-proxy--error "IntelliJ server install failed: %s"
+       (lsp-proxy--error "%s install failed: %s" label
                          (or (plist-get err :message) err)))
      ;; Was `ignore'. With an hour-long timeout that would leave the mode-line
      ;; indicator up for the rest of the session if it ever fired.
      :timeout-fn
      (lambda ()
        (lsp-proxy--clear-global-status)
-       (lsp-proxy--error "IntelliJ server install timed out"))
-     ;; The transfer is hundreds of megabytes; the default request timeout is far
-     ;; too short for it.
+       (lsp-proxy--error "%s install timed out" label))
+     ;; The transfer is tens to hundreds of megabytes; the default request timeout
+     ;; is far too short for it.
      :timeout 3600)))
 
 ;;; ModCommand action picker
@@ -903,6 +1190,231 @@ Used to insert a heading when output starts coming from a different module.")
     (let ((inhibit-read-only t))
       (erase-buffer))
     (setq lsp-proxy-java--import-log-root nil)))
+
+;;; Project build and configuration
+;;
+;; Two operations a Java backend exposes that LSP has no standard method for:
+;; rebuilding the workspace, and re-reading the build file after it changed.  Both
+;; travel over `emacs/forwardRequest', the proxy's generic "deliver this method to
+;; that server" channel, so neither needs a request type of its own in the proxy.
+;;
+;; They are not symmetric on the wire, and the asymmetry is the server's, not ours:
+;; `java/buildWorkspace' is a request answering with a build result, while
+;; `java/projectConfigurationUpdate' is declared as a *notification*.  Sending the
+;; latter as a request would sit out the full request timeout waiting for a reply the
+;; server never sends, which is why the forwarding channel takes a `notify' flag.
+
+(defconst lsp-proxy-java--build-result-messages
+  '((0 . "Build cancelled.")
+    (1 . "Build finished successfully.")
+    (2 . "Build failed. See the diagnostics for details.")
+    (3 . "Build finished with errors. See the diagnostics for details."))
+  "Server `CompileWorkspaceStatus' codes and what to tell the user.
+0 = cancelled, 1 = succeeded, 2 = failed, 3 = succeeded with errors.")
+
+(defun lsp-proxy-java--forward (method params &optional notify)
+  "Send METHOD with PARAMS to the Java backend, returning its result.
+
+Routed through a real project document, because the proxy dispatches by opened
+document and a decompiled buffer is not one — the same reason
+`lsp-proxy-java--routing-uri' exists for content fetches.
+
+With NOTIFY non-nil the method is sent as a notification and nil is
+returned; use it for methods the server declares as notifications."
+  (unless lsp-proxy--connection
+    (user-error "lsp-proxy is not running"))
+  (let ((doc-uri (or (lsp-proxy-java--routing-uri)
+                     (user-error "No active Java buffer to send %s from" method))))
+    (jsonrpc-request
+     lsp-proxy--connection 'emacs/forwardRequest
+     (list :uri doc-uri
+           :params (list :uri doc-uri
+                         :serverName lsp-proxy-java-class-file-contents-server-name
+                         :method method
+                         :params params
+                         :notify (if notify t :json-false))))))
+
+;;;###autoload
+(defun lsp-proxy-java-build-workspace (&optional full)
+  "Rebuild the Java workspace.
+
+With a prefix argument FULL, request a full rebuild instead of an
+incremental one. A full rebuild of a large project takes minutes; the
+incremental default is what you want after an ordinary edit."
+  (interactive "P")
+  (lsp-proxy--info "%s" (if full "Full rebuild requested..." "Rebuild requested..."))
+  (let* ((result (lsp-proxy-java--forward "java/buildWorkspace" (if full t :json-false)))
+         (text (alist-get result lsp-proxy-java--build-result-messages)))
+    (cond
+     ;; 2 and 3 both mean the user has something to look at; anything unrecognised is
+     ;; reported verbatim rather than swallowed, so a status code we have not seen
+     ;; before is visible instead of silently reading as success.
+     ((null text) (lsp-proxy--warn "Build returned an unrecognised status: %S" result))
+     ((memq result '(2 3)) (lsp-proxy--warn "%s" text))
+     (t (lsp-proxy--info "%s" text)))
+    result))
+
+;;;###autoload
+(defun lsp-proxy-java-update-project-configuration ()
+  "Re-read this project's build file, picking up dependency changes.
+
+Run it from the build file itself (`pom.xml', `build.gradle', ...) after editing
+it: the server re-imports the project the file describes, and it identifies that
+project by the document it is given."
+  (interactive)
+  (unless buffer-file-name
+    (user-error "Not visiting a file"))
+  (unless (string-match-p "\\`\\(?:pom\\.xml\\|build\\.gradle\\(?:\\.kts\\)?\\|settings\\.gradle\\(?:\\.kts\\)?\\|\\.classpath\\|\\.project\\)\'"
+                          (file-name-nondirectory buffer-file-name))
+    (user-error "Run this from a build file (pom.xml or a Gradle build script), not %s"
+                (file-name-nondirectory buffer-file-name)))
+  ;; A notification: the server declares it as one, so there is no reply to wait for
+  ;; and no result to report. Progress shows up on the import channel instead.
+  (lsp-proxy-java--forward "java/projectConfigurationUpdate"
+                           (list :uri (lsp-proxy--path-to-uri buffer-file-name))
+                           t)
+  (lsp-proxy--info "Project configuration update requested."))
+
+;;; Client-side code actions
+;;
+;; Some code actions are only half done by the server: it answers the code-action
+;; request with a *command* that the client is expected to run, prompting the user
+;; and sending a second request with what they picked.  Organising imports with
+;; ambiguous names, generating accessors and overriding methods all work this way.
+;;
+;; The client has to opt in per action (see the `extendedClientCapabilities' block in
+;; `languages.toml'), and opting in without implementing the handler is worse than
+;; not opting in: the server then sends a command nothing can execute.  The table
+;; below is therefore the authoritative list, and the TOML must match it exactly.
+
+(defun lsp-proxy-java--first-argument (command)
+  "Return COMMAND's first argument, or nil.
+The server passes the action's context as a single argument; the vector is
+JSON-decoded, so it may arrive as a vector or a list."
+  (let ((args (plist-get command :arguments)))
+    (cond ((and (vectorp args) (> (length args) 0)) (aref args 0))
+          ((consp args) (car args))
+          (t nil))))
+
+(defun lsp-proxy-java--select-many (prompt items key)
+  "Prompt with PROMPT to pick any number of ITEMS, returning the chosen ones.
+
+KEY maps an item to its completion string. Returns a vector because the
+server expects a JSON array, and an empty pick returns an empty vector
+rather than nil — `nil' would serialise as null and the server would reject
+the request."
+  (let* ((table (mapcar (lambda (it) (cons (funcall key it) it)) items))
+         (chosen (completing-read-multiple prompt (mapcar #'car table) nil t)))
+    (apply #'vector
+           (delq nil (mapcar (lambda (name) (alist-get name table nil nil #'equal))
+                             chosen)))))
+
+(defun lsp-proxy-java--handle-organize-imports (command)
+  "Resolve ambiguous imports for COMMAND and apply the resulting edit.
+
+The server answers with a `WorkspaceEdit' directly here — there is nothing
+to ask the user, because the ambiguous cases come back through a separate
+`chooseImports' round trip the server initiates itself."
+  (when-let* ((context (lsp-proxy-java--first-argument command))
+              (edit (lsp-proxy-java--forward "java/organizeImports" context)))
+    (lsp-proxy--apply-workspace-edit edit 'lsp-proxy-java--handle-organize-imports)))
+
+(defun lsp-proxy-java--handle-generate-accessors (command)
+  "Ask which fields to generate accessors for, then apply the edit for COMMAND."
+  (when-let* ((context (lsp-proxy-java--first-argument command))
+              (fields (append (lsp-proxy-java--forward
+                               "java/resolveUnimplementedAccessors" context)
+                              nil)))
+    (if (null fields)
+        (lsp-proxy--info "No fields without accessors here.")
+      (let ((chosen (lsp-proxy-java--select-many
+                     "Generate accessors for: " fields
+                     (lambda (f) (format "%s" (plist-get f :fieldName))))))
+        (if (zerop (length chosen))
+            (lsp-proxy--info "Nothing selected.")
+          (lsp-proxy--apply-workspace-edit
+           (lsp-proxy-java--forward "java/generateAccessors"
+                                    (list :accessors chosen :context context))
+           'lsp-proxy-java--handle-generate-accessors))))))
+
+(defun lsp-proxy-java--handle-override-methods (command)
+  "Ask which inherited methods to override, then apply the edit for COMMAND."
+  (when-let* ((context (lsp-proxy-java--first-argument command))
+              (result (lsp-proxy-java--forward "java/listOverridableMethods" context))
+              (methods (append (plist-get result :methods) nil)))
+    (if (null methods)
+        (lsp-proxy--info "Nothing left to override here.")
+      (let ((chosen (lsp-proxy-java--select-many
+                     "Override methods: " methods
+                     (lambda (m)
+                       (format "%s(%s) — %s"
+                               (plist-get m :name)
+                               (string-join (append (plist-get m :parameters) nil) ", ")
+                               (plist-get m :declaringClass))))))
+        (if (zerop (length chosen))
+            (lsp-proxy--info "Nothing selected.")
+          (lsp-proxy--apply-workspace-edit
+           (lsp-proxy-java--forward "java/addOverridableMethods"
+                                    (list :overridableMethods chosen :context context))
+           'lsp-proxy-java--handle-override-methods))))))
+
+(defconst lsp-proxy-java--client-command-handlers
+  '(("java.action.organizeImports" . lsp-proxy-java--handle-organize-imports)
+    ("java.action.generateAccessorsPrompt" . lsp-proxy-java--handle-generate-accessors)
+    ("java.action.overrideMethodsPrompt" . lsp-proxy-java--handle-override-methods))
+  "Server commands this client executes itself instead of sending back.
+
+Each entry is (COMMAND-ID . HANDLER); HANDLER receives the whole `Command'
+plist.
+
+Must stay in one-to-one correspondence with the
+`extendedClientCapabilities' switches declared in `languages.toml': a
+switch with no handler makes the server send a command nothing can run,
+which is strictly worse than not declaring it.")
+
+(defun lsp-proxy-java--execute-client-command (command)
+  "Run COMMAND here if it is one of ours; return non-nil when it was handled.
+
+Registered on `lsp-proxy-client-command-functions', which the generic
+code-action path consults before forwarding a command to the server.
+Returning nil leaves every other command on exactly the path it took before."
+  (when-let* ((id (plist-get command :command))
+              (handler (alist-get id lsp-proxy-java--client-command-handlers
+                                  nil nil #'equal)))
+    (funcall handler command)
+    t))
+
+(add-hook 'lsp-proxy-client-command-functions #'lsp-proxy-java--execute-client-command)
+
+;;; Missing backend
+;;
+;; When the configured Java server is not installed, the proxy reports it as
+;; `emacs/serverStartFailure' and the generic handler prints the fact.  All this adds
+;; is where to get the thing — knowledge that belongs with the language, not in the
+;; proxy or in the generic notification path.
+
+(defcustom lsp-proxy-java-jdtls-install-hint
+  "Run M-x lsp-proxy-java-install-server and choose `jdtls' to install it, \
+or install Eclipse JDT Language Server yourself \
+(https://github.com/eclipse-jdtls/eclipse.jdt.ls) and put its `bin/jdtls' \
+launcher on PATH — e.g. `brew install jdtls' on macOS."
+  "What to tell the user when the `java/classFileContents' backend is missing.
+Both routes work: a managed install goes under
+`lsp-proxy-java-jdtls-install-dir' and is put on the proxy's PATH at startup,
+while a self-installed one is found on PATH like any other server."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java--install-hint (server-name)
+  "Return an install hint for SERVER-NAME, or nil when we have none."
+  (cond
+   ((equal server-name lsp-proxy-java-class-file-contents-server-name)
+    lsp-proxy-java-jdtls-install-hint)
+   ((assoc server-name lsp-proxy-java--backends)
+    (format "Run M-x lsp-proxy-java-install-server and choose `%s' to install it."
+            server-name))))
+
+(add-hook 'lsp-proxy-server-install-hint-functions #'lsp-proxy-java--install-hint)
 
 ;;; Debugging (dape)
 ;;

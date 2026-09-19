@@ -754,6 +754,20 @@ Unlike `lsp-proxy--request', this is not scoped to the current buffer."
                                               (complete-with-action action col string pred))) nil t)))
         (cdr (assoc completion col))))))
 
+(defvar lsp-proxy-client-command-functions nil
+  "Functions given a chance to run a server command in the client.
+
+Each is called with the `Command' plist and returns non-nil once it has
+handled it, in which case the command is NOT sent on to the server.
+Returning nil leaves the command on the ordinary `workspace/executeCommand'
+path.
+
+The hook exists because some servers answer a code-action request with a
+command the *client* is meant to execute — prompting the user and sending
+the choice back as a further request. Which commands those are is
+language-specific knowledge, so it lives in the language module rather than
+here.")
+
 (defun lsp-proxy--execute-code-action (action)
   "Execute code action ACTION."
   (let* ((item (plist-get action :lsp_item))
@@ -763,7 +777,11 @@ Unlike `lsp-proxy--request', this is not scoped to the current buffer."
     (when edit
       (lsp-proxy--apply-workspace-edit edit this-command))
     (when command
-      (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id))))
+      ;; A client-side handler claims the command, or it goes to the server exactly
+      ;; as before. With no handler registered this is `run-hook-with-args-until-success'
+      ;; over an empty list, i.e. nil, and the branch below is the original code.
+      (unless (run-hook-with-args-until-success 'lsp-proxy-client-command-functions command)
+        (lsp-proxy--execute-command (plist-get command :command) (plist-get command :arguments) ls-id)))))
 
 ;;;###autoload
 (defun lsp-proxy-execute-code-action (action)

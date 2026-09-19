@@ -1,13 +1,20 @@
-//! Installing the JetBrains IntelliJ language server, which `lsp-proxy-java` requires.
+//! Installing a Java language server backend for `lsp-proxy-java`: either the
+//! JetBrains IntelliJ server or Eclipse's jdtls.
 //!
-//! The archives are ~370 MB, so nothing here loads a payload into memory: every
-//! step shells out to `curl` / `tar` / `unzip` / `sha256sum` the way
-//! [`crate::remote::deploy`] already does, and progress is streamed to the editor
-//! as `$/progress`. No HTTP, archive or digest crate is added for this — that
+//! The archives are large (~370 MB for IntelliJ, ~50 MB for jdtls), so nothing here
+//! loads a payload into memory: every step shells out to `curl` / `tar` / `unzip` /
+//! `sha256sum` the way [`crate::remote::deploy`] already does, and progress is
+//! streamed to the editor. No HTTP, archive or digest crate is added for this — that
 //! dependency tree would land in every prebuilt binary for a feature only
 //! JVM users reach.
 //!
-//! # Where the download URL comes from
+//! Both backends share one pipeline — resolve, download, verify, unpack, publish —
+//! and differ only in how the `{url, version, sha256}` tuple is resolved; that is
+//! the whole of [`Backend`]. Every install is published as
+//! `<install-dir>/<version>/bin/<launcher>`, a fixed depth the Emacs side depends on
+//! when it prepends that `bin/` to the proxy's PATH.
+//!
+//! # Where the IntelliJ download URL comes from
 //!
 //! The JetBrains VSCode extension is a ~1.3 MB *shim* that contains no server. Its
 //! `extension/server-bundle.json` is the authoritative `{url, version, sha256}`
@@ -22,10 +29,85 @@
 //! `intellij-server`. The similarly-named `kotlin-server` product (which Mason's
 //! kotlin-lsp package fetches from the `download-cdn.` host) is a *different*
 //! server; using it here silently installs the wrong backend.
+//!
+//! # Where the jdtls download URL comes from
+//!
+//! Eclipse publishes the archive name and its digest next to the archive itself, but
+//! nothing that points at the newest milestone (`milestones/latest.txt` is a 404, and
+//! the directory index renders its versions from JavaScript). So the version number —
+//! and *only* the version number — comes from Homebrew's formula API, the same source
+//! `eglot-java` uses:
+//!
+//! ```text
+//! formulae.brew.sh/api/formula/jdtls.json  →  versions.stable        ("1.61.0")
+//!   download.eclipse.org/jdtls/milestones/<version>/latest.txt   →  archive name
+//!   download.eclipse.org/jdtls/milestones/<version>/<name>.sha256 →  digest
+//! ```
+//!
+//! The URL is then *constructed* from [`JDTLS_DOWNLOAD_BASE`], never taken from a
+//! response: the network supplies two path fragments beneath a constant host and
+//! product path, and both are validated before use. Because the digest is published
+//! per milestone rather than only for the newest build, a pinned jdtls version is
+//! checksum-verified too — unlike a pinned IntelliJ version, whose URL has to be
+//! guessed and therefore cannot be.
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Which Java language server to install.
+///
+/// The two backends share the entire pipeline and differ only in how a
+/// `{url, version, sha256}` tuple is resolved, so everything backend-specific about
+/// the *install* is reachable from here. A third backend means another resolver and
+/// three more arms, not a second copy of the pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Backend {
+    /// JetBrains IntelliJ headless server. The default because it is what
+    /// `emacs/installJavaServer` installed before the request carried a backend at
+    /// all, so an older client that omits the field still gets what it asked for.
+    #[default]
+    Intellij,
+    /// Eclipse JDT Language Server.
+    Jdtls,
+}
+
+impl Backend {
+    /// Human-readable name for progress messages and errors.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Backend::Intellij => "IntelliJ server",
+            Backend::Jdtls => "Eclipse JDT language server",
+        }
+    }
+
+    /// The file inside `bin/` that a valid archive must contain.
+    ///
+    /// jdtls ships a Python script with a `.bat` shim beside it rather than a native
+    /// binary, so its Windows name is *not* the Unix name plus `.exe`. Getting this
+    /// wrong does not fail loudly: `find_launcher` simply reports the archive as the
+    /// wrong product.
+    pub fn launcher_name(self) -> &'static str {
+        match (self, cfg!(windows)) {
+            (Backend::Intellij, false) => LAUNCHER_NAME,
+            (Backend::Intellij, true) => "intellij-server.exe",
+            (Backend::Jdtls, false) => "jdtls",
+            (Backend::Jdtls, true) => "jdtls.bat",
+        }
+    }
+
+    /// External tools this backend's install shells out to.
+    ///
+    /// jdtls is a single `.tar.gz`, so it never reaches `unzip`; demanding it anyway
+    /// would refuse to install on a machine that has no other use for it.
+    pub fn required_tools(self) -> &'static [&'static str] {
+        match self {
+            Backend::Intellij => &["curl", "unzip", "tar"],
+            Backend::Jdtls => &["curl", "tar"],
+        }
+    }
+}
 
 const OPEN_VSX_API: &str = "https://open-vsx.org/api/JetBrains/intellij-server";
 const DOWNLOAD_BASE: &str = "https://download.jetbrains.com/language-server/intellij-server";
@@ -182,37 +264,30 @@ pub fn extract_argv(archive: &Path, dest: &Path) -> Vec<String> {
     }
 }
 
-/// Locate `bin/intellij-server` anywhere under ROOT (depth-limited).
+/// Locate `bin/<EXE>` anywhere under ROOT (depth-limited).
 ///
 /// Searching rather than assuming a path is what lets one code path handle every
-/// archive layout, including the extra top-level directory `.tar.gz` carries.
-pub fn find_launcher(root: &Path) -> Option<PathBuf> {
-    fn walk(dir: &Path, depth: usize) -> Option<PathBuf> {
+/// archive layout: the extra top-level directory IntelliJ's `.tar.gz` carries, and
+/// jdtls's archive, whose root *is* the server root.
+pub fn find_launcher(root: &Path, exe: &str) -> Option<PathBuf> {
+    fn walk(dir: &Path, exe: &str, depth: usize) -> Option<PathBuf> {
         if depth > 3 {
             return None;
         }
-        let direct = dir.join("bin").join(exe_name());
+        let direct = dir.join("bin").join(exe);
         if direct.is_file() {
             return Some(direct);
         }
         for entry in std::fs::read_dir(dir).ok()?.flatten() {
             if entry.file_type().ok()?.is_dir() {
-                if let Some(found) = walk(&entry.path(), depth + 1) {
+                if let Some(found) = walk(&entry.path(), exe, depth + 1) {
                     return Some(found);
                 }
             }
         }
         None
     }
-    walk(root, 0)
-}
-
-fn exe_name() -> &'static str {
-    if cfg!(windows) {
-        "intellij-server.exe"
-    } else {
-        LAUNCHER_NAME
-    }
+    walk(root, exe, 0)
 }
 
 /// Directory a given version is installed into.
@@ -296,10 +371,13 @@ async fn run(argv: &[String], what: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn require_tool(name: &str) -> Result<()> {
-    which::which(name)
-        .map(|_| ())
-        .with_context(|| format!("`{name}` was not found on PATH; it is required to install the IntelliJ server"))
+fn require_tool(backend: Backend, name: &str) -> Result<()> {
+    which::which(name).map(|_| ()).with_context(|| {
+        format!(
+            "`{name}` was not found on PATH; it is required to install the {}",
+            backend.display_name()
+        )
+    })
 }
 
 /// Resolve the newest build by reading the extension shim's `server-bundle.json`.
@@ -391,15 +469,21 @@ fn download_pct(current: u64, total: u64) -> u32 {
 ///
 /// Mirrors `remote::deploy`: `select!` runs the transfer and a size poller
 /// concurrently and cancels the poller as soon as the transfer resolves.
-async fn download_with_progress(url: &str, archive: &Path, progress: &ProgressFn) -> Result<()> {
+async fn download_with_progress(
+    backend: Backend,
+    url: &str,
+    archive: &Path,
+    progress: &ProgressFn,
+) -> Result<()> {
     let total = remote_size(url).await;
     let mb = |b: u64| b as f64 / 1_048_576.0;
+    let name = backend.display_name();
     progress(
         Some(0),
         if total > 0 {
-            format!("Downloading IntelliJ server ({:.0} MB)", mb(total))
+            format!("Downloading {name} ({:.0} MB)", mb(total))
         } else {
-            "Downloading IntelliJ server".into()
+            format!("Downloading {name}")
         },
     );
 
@@ -433,11 +517,11 @@ async fn download_with_progress(url: &str, archive: &Path, progress: &ProgressFn
                     // structured field, and having it in both makes every renderer
                     // that formats the two together print it twice.
                     progress(Some(download_pct(current, total)), format!(
-                        "Downloading IntelliJ server ({:.0} / {:.0} MB)",
+                        "Downloading {name} ({:.0} / {:.0} MB)",
                         mb(current), mb(total)
                     ));
                 } else {
-                    progress(None, format!("Downloading IntelliJ server ({:.0} MB)", mb(current)));
+                    progress(None, format!("Downloading {name} ({:.0} MB)", mb(current)));
                 }
             }
         } => { unreachable!("the poller loops forever") }
@@ -470,38 +554,24 @@ async fn verify_checksum(archive: &Path, expected: &str) -> Result<()> {
 
 /// Download, verify, unpack and publish the server. Returns the launcher path.
 pub async fn install(
+    backend: Backend,
     install_dir: &Path,
     version: Option<&str>,
     force: bool,
     progress: ProgressFn,
 ) -> Result<(PathBuf, String, bool)> {
-    let (os, arch) = (current_os()?, current_arch()?);
-    for tool in ["curl", "unzip", "tar"] {
-        require_tool(tool)?;
+    for tool in backend.required_tools() {
+        require_tool(backend, tool)?;
     }
 
-    // Pinned version: build the URL ourselves and say so when the shape is a guess.
-    // Unpinned: the shim tells us url + version + checksum authoritatively.
-    let (url, version, expected_sha) = match version {
-        Some(v) => {
-            let (url, confirmed) = download_url(v, os, arch)?;
-            if !confirmed {
-                progress(
-                    None,
-                    format!("Archive name for {os}-{arch} is inferred, not confirmed; trying {url}"),
-                );
-            }
-            (url, v.to_string(), None)
-        }
-        None => {
-            let bundle = discover_latest_bundle(os, arch, &progress).await?;
-            (bundle.url, bundle.version, Some(bundle.sha256))
-        }
+    let (url, version, expected_sha) = match backend {
+        Backend::Intellij => resolve_intellij(version, &progress).await?,
+        Backend::Jdtls => resolve_jdtls(version, &progress).await?,
     };
 
     let dest = version_dir(install_dir, &version);
     if !force {
-        if let Some(existing) = find_launcher(&dest) {
+        if let Some(existing) = find_launcher(&dest, backend.launcher_name()) {
             return Ok((existing, version, true));
         }
     }
@@ -517,7 +587,8 @@ pub async fn install(
         .await
         .with_context(|| format!("could not create {}", staging.display()))?;
 
-    let result = install_into_staging(&url, expected_sha.as_deref(), &staging, &progress).await;
+    let result =
+        install_into_staging(backend, &url, expected_sha.as_deref(), &staging, &progress).await;
 
     let launcher_in_staging = match result {
         Ok(path) => path,
@@ -530,7 +601,10 @@ pub async fn install(
     // Publish atomically. A pre-existing destination is replaced only now that a
     // complete tree is ready. The server root is promoted directly to `<version>/`,
     // so the installed launcher is always at `<version>/bin/<exe>`.
-    progress(Some(PCT_INSTALL), "Installing IntelliJ server".into());
+    progress(
+        Some(PCT_INSTALL),
+        format!("Installing {}", backend.display_name()),
+    );
     let server_root = launcher_in_staging
         .parent()
         .and_then(|bin| bin.parent())
@@ -548,22 +622,217 @@ pub async fn install(
         .with_context(|| format!("could not publish {}", dest.display()))?;
     let _ = tokio::fs::remove_dir_all(&staging).await;
 
-    let launcher = dest.join("bin").join(exe_name());
+    let launcher = dest.join("bin").join(backend.launcher_name());
     set_executable(&launcher).await?;
     Ok((launcher, version, false))
 }
 
+/// Resolve IntelliJ's `{url, version, sha256}`.
+///
+/// Pinned: build the URL ourselves and say so when the shape is a guess, because a
+/// constructed URL has no published digest to check it against. Unpinned: the
+/// extension shim states url + version + checksum authoritatively.
+async fn resolve_intellij(
+    version: Option<&str>,
+    progress: &ProgressFn,
+) -> Result<(String, String, Option<String>)> {
+    let (os, arch) = (current_os()?, current_arch()?);
+    match version {
+        Some(v) => {
+            let (url, confirmed) = download_url(v, os, arch)?;
+            if !confirmed {
+                progress(
+                    None,
+                    format!("Archive name for {os}-{arch} is inferred, not confirmed; trying {url}"),
+                );
+            }
+            Ok((url, v.to_string(), None))
+        }
+        None => {
+            let bundle = discover_latest_bundle(os, arch, progress).await?;
+            Ok((bundle.url, bundle.version, Some(bundle.sha256)))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backend: Eclipse jdtls
+// ---------------------------------------------------------------------------
+
+/// Eclipse's download host and product path.
+///
+/// A constant, never a value read from a response: everything the network supplies
+/// is a path fragment *beneath* this, and is validated before it is used.
+pub const JDTLS_DOWNLOAD_BASE: &str = "https://download.eclipse.org/jdtls";
+
+/// Homebrew's formula API, used for the newest milestone *number* and nothing else.
+///
+/// Eclipse publishes no pointer to its newest milestone — `milestones/latest.txt` is
+/// a 404 and the directory index renders its versions from JavaScript — so the one
+/// fact that cannot be derived from the constant above is taken from the same source
+/// `eglot-java` uses. The digest and archive name still come from Eclipse, so a
+/// wrong answer here cannot redirect the download; it can only name a milestone that
+/// does not exist, which fails loudly on the next request.
+const JDTLS_BREW_FORMULA: &str = "https://formulae.brew.sh/api/formula/jdtls.json";
+
+/// Directory holding VERSION's artifacts.
+pub fn jdtls_milestone_url(version: &str) -> String {
+    format!("{JDTLS_DOWNLOAD_BASE}/milestones/{version}")
+}
+
+/// File naming the archive published for VERSION.
+pub fn jdtls_latest_txt_url(version: &str) -> String {
+    format!("{}/latest.txt", jdtls_milestone_url(version))
+}
+
+/// Download URL for ARCHIVE, assembled from the constants above.
+pub fn jdtls_download_url(version: &str, archive: &str) -> String {
+    format!("{}/{archive}", jdtls_milestone_url(version))
+}
+
+/// Sidecar holding ARCHIVE's published sha256.
+pub fn jdtls_sha256_url(version: &str, archive: &str) -> String {
+    format!("{}.sha256", jdtls_download_url(version, archive))
+}
+
+/// Reject a version that would not be safe as a URL path segment.
+///
+/// Milestones are strictly `x.y.z`, so digits and dots is not merely sufficient —
+/// it also rules out `..` and any separator, which is what keeps a hostile or
+/// garbled answer from escaping the product path.
+pub fn validate_jdtls_version(version: &str) -> Result<()> {
+    if version.is_empty()
+        || !version.starts_with(|c: char| c.is_ascii_digit())
+        || !version.ends_with(|c: char| c.is_ascii_digit())
+        || !version.chars().all(|c| c.is_ascii_digit() || c == '.')
+        || version.contains("..")
+    {
+        bail!("not a valid jdtls version: {version:?}");
+    }
+    Ok(())
+}
+
+/// Reject an archive name we would not have constructed ourselves.
+///
+/// `latest.txt` arrives over the network and its contents reach both `curl` (as a
+/// URL segment) and the filesystem (as the staged archive's name), so the name is
+/// checked rather than trusted. Only the build timestamp is genuinely unknown to us:
+/// everything else is pinned to `jdt-language-server-<version>-<14 digits>.tar.gz`.
+pub fn validate_jdtls_archive_name(version: &str, archive: &str) -> Result<()> {
+    if archive.contains("..") || archive.contains('/') || archive.contains('\\') {
+        bail!("jdtls latest.txt has an unsafe archive name: {archive:?}");
+    }
+    let prefix = format!("jdt-language-server-{version}-");
+    let stamp = archive
+        .strip_prefix(&prefix)
+        .and_then(|rest| rest.strip_suffix(".tar.gz"))
+        .with_context(|| {
+            format!("jdtls latest.txt has an unrecognised archive name: {archive:?} (expected {prefix}<timestamp>.tar.gz)")
+        })?;
+    // The stamp is `yyyyMMddHHmm`, e.g. 202609031315 — checked against the published
+    // `latest.txt` of milestones 1.9.0, 1.30.0, 1.40.0, 1.50.0, 1.60.0 and 1.61.0,
+    // all 12 digits. Should upstream ever change its shape, this rejects the archive
+    // rather than downloading something unrecognised.
+    if stamp.len() != 12 || !stamp.chars().all(|c| c.is_ascii_digit()) {
+        bail!("jdtls archive name has a malformed build timestamp: {stamp:?}");
+    }
+    Ok(())
+}
+
+/// Parse the `.sha256` sidecar, which holds the bare digest.
+pub fn parse_jdtls_sha256(body: &str) -> Result<String> {
+    // Same shape `sha256sum` prints, so the existing parser already handles both the
+    // bare digest Eclipse publishes and a `<digest>  <file>` line.
+    parse_digest(body).with_context(|| {
+        format!(
+            "jdtls checksum sidecar is not a sha256 digest: {:?}",
+            body.trim()
+        )
+    })
+}
+
+/// Extract the newest stable milestone number from Homebrew's formula JSON.
+pub fn jdtls_version_from_brew(json: &str) -> Result<String> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).context("Homebrew returned invalid JSON")?;
+    let version = value
+        .get("versions")
+        .and_then(|v| v.get("stable"))
+        .and_then(|v| v.as_str())
+        .context("Homebrew formula has no versions.stable")?;
+    validate_jdtls_version(version)?;
+    Ok(version.to_string())
+}
+
+/// Resolve jdtls's `{url, version, sha256}`.
+///
+/// Unlike IntelliJ, a *pinned* version is checksum-verified too: Eclipse publishes a
+/// digest per milestone rather than only for the newest build, so nothing here has
+/// to fall back to downloading unverified bytes.
+async fn resolve_jdtls(
+    version: Option<&str>,
+    progress: &ProgressFn,
+) -> Result<(String, String, Option<String>)> {
+    let version = match version {
+        Some(v) => {
+            validate_jdtls_version(v)?;
+            v.to_string()
+        }
+        None => {
+            progress(None, "Looking up the latest jdtls milestone".into());
+            let json = run(
+                &[
+                    "curl".into(),
+                    "-fsSL".into(),
+                    JDTLS_BREW_FORMULA.to_string(),
+                ],
+                "Homebrew formula lookup",
+            )
+            .await?;
+            jdtls_version_from_brew(&json)?
+        }
+    };
+
+    progress(None, format!("Resolving jdtls {version}"));
+    let listing = run(
+        &["curl".into(), "-fsSL".into(), jdtls_latest_txt_url(&version)],
+        "jdtls archive lookup",
+    )
+    .await
+    .with_context(|| format!("no jdtls milestone {version} on {JDTLS_DOWNLOAD_BASE}"))?;
+    let archive = listing.lines().next().unwrap_or_default().trim();
+    validate_jdtls_archive_name(&version, archive)?;
+
+    let sidecar = run(
+        &[
+            "curl".into(),
+            "-fsSL".into(),
+            jdtls_sha256_url(&version, archive),
+        ],
+        "jdtls checksum lookup",
+    )
+    .await?;
+    let sha256 = parse_jdtls_sha256(&sidecar)?;
+
+    Ok((
+        jdtls_download_url(&version, archive),
+        version,
+        Some(sha256),
+    ))
+}
+
 /// Download + verify + unpack into STAGING, returning the launcher found inside.
 async fn install_into_staging(
+    backend: Backend,
     url: &str,
     expected_sha: Option<&str>,
     staging: &Path,
     progress: &ProgressFn,
 ) -> Result<PathBuf> {
-    let archive_name = url.rsplit('/').next().unwrap_or("intellij-server-archive");
+    let archive_name = url.rsplit('/').next().unwrap_or("server-archive");
     let archive = staging.join(archive_name);
 
-    download_with_progress(url, &archive, progress).await?;
+    download_with_progress(backend, url, &archive, progress).await?;
 
     match expected_sha {
         Some(expected) => {
@@ -581,16 +850,19 @@ async fn install_into_staging(
         ),
     }
 
-    progress(Some(PCT_UNPACK), "Unpacking IntelliJ server".into());
+    progress(
+        Some(PCT_UNPACK),
+        format!("Unpacking {}", backend.display_name()),
+    );
     let extract_dir = staging.join("unpacked");
     tokio::fs::create_dir_all(&extract_dir).await.ok();
     run(&extract_argv(&archive, &extract_dir), "unpacking").await?;
     let _ = tokio::fs::remove_file(&archive).await;
 
-    let launcher = find_launcher(&extract_dir).with_context(|| {
+    let launcher = find_launcher(&extract_dir, backend.launcher_name()).with_context(|| {
         format!(
             "the archive unpacked but contains no bin/{} — the download may be a different product",
-            exe_name()
+            backend.launcher_name()
         )
     })?;
 
@@ -609,7 +881,7 @@ async fn install_into_staging(
         .with_context(|| format!("could not hoist {}", server_root.display()))?;
     let _ = tokio::fs::remove_dir_all(&extract_dir).await;
 
-    Ok(flattened.join("bin").join(exe_name()))
+    Ok(flattened.join("bin").join(backend.launcher_name()))
 }
 
 /// Archives do not reliably preserve the executable bit.
@@ -786,18 +1058,219 @@ mod tests {
 
     #[test]
     fn find_launcher_handles_an_extra_archive_root() {
+        let exe = Backend::Intellij.launcher_name();
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("intellij-server-263.2689.0").join("bin");
         std::fs::create_dir_all(&nested).unwrap();
-        std::fs::write(nested.join(super::exe_name()), b"#!/bin/sh\n").unwrap();
-        assert_eq!(find_launcher(tmp.path()).unwrap(), nested.join(super::exe_name()));
+        std::fs::write(nested.join(exe), b"#!/bin/sh\n").unwrap();
+        assert_eq!(find_launcher(tmp.path(), exe).unwrap(), nested.join(exe));
+    }
+
+    /// jdtls's archive has no wrapper directory: its root *is* the server root, so
+    /// the launcher sits at depth 0 rather than 1.
+    #[test]
+    fn find_launcher_handles_an_archive_rooted_at_the_server() {
+        let exe = Backend::Jdtls.launcher_name();
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(exe), b"#!/usr/bin/env python3\n").unwrap();
+        assert_eq!(find_launcher(tmp.path(), exe).unwrap(), bin.join(exe));
+    }
+
+    /// Each backend must not be satisfied by the other's launcher, or a mixed-up
+    /// download would install silently and fail only at startup.
+    #[test]
+    fn find_launcher_does_not_accept_the_other_backends_launcher() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(Backend::Jdtls.launcher_name()), b"x").unwrap();
+        assert!(find_launcher(tmp.path(), Backend::Intellij.launcher_name()).is_none());
     }
 
     #[test]
     fn find_launcher_returns_none_when_absent() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(tmp.path().join("lib")).unwrap();
-        assert!(find_launcher(tmp.path()).is_none());
+        assert!(find_launcher(tmp.path(), Backend::Intellij.launcher_name()).is_none());
+    }
+}
+
+#[cfg(test)]
+mod jdtls_tests {
+    use super::*;
+
+    /// The milestone actually published at the time this was written; every literal
+    /// below is copied from Eclipse's own endpoints rather than invented.
+    const V: &str = "1.61.0";
+    const ARCHIVE: &str = "jdt-language-server-1.61.0-202609031315.tar.gz";
+    const SHA: &str = "338e7e73d61836651ba2453919a0d34fa763eb4e7c03342092309bffb8934c64";
+
+    /// The URL that must not regress: it is assembled from constants, so a response
+    /// can never redirect the download to another host or product.
+    #[test]
+    fn download_urls_use_the_constant_host_and_product_path() {
+        assert_eq!(
+            jdtls_download_url(V, ARCHIVE),
+            "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz"
+        );
+        assert_eq!(
+            jdtls_latest_txt_url(V),
+            "https://download.eclipse.org/jdtls/milestones/1.61.0/latest.txt"
+        );
+        assert_eq!(
+            jdtls_sha256_url(V, ARCHIVE),
+            "https://download.eclipse.org/jdtls/milestones/1.61.0/jdt-language-server-1.61.0-202609031315.tar.gz.sha256"
+        );
+        for url in [
+            jdtls_download_url(V, ARCHIVE),
+            jdtls_latest_txt_url(V),
+            jdtls_sha256_url(V, ARCHIVE),
+        ] {
+            assert!(url.starts_with(JDTLS_DOWNLOAD_BASE), "escaped the product path: {url}");
+        }
+    }
+
+    #[test]
+    fn accepts_the_published_archive_name() {
+        validate_jdtls_archive_name(V, ARCHIVE).unwrap();
+    }
+
+    #[test]
+    fn rejects_path_traversal_in_archive_name() {
+        for bad in [
+            "../../../etc/passwd",
+            "jdt-language-server-1.61.0-../../evil.tar.gz",
+            "sub/jdt-language-server-1.61.0-202609031315.tar.gz",
+            r"sub\jdt-language-server-1.61.0-202609031315.tar.gz",
+        ] {
+            assert!(
+                validate_jdtls_archive_name(V, bad).is_err(),
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    /// A name for another milestone would download a version we did not resolve a
+    /// checksum for, so the version has to appear in the name itself.
+    #[test]
+    fn rejects_an_archive_name_for_a_different_version() {
+        assert!(validate_jdtls_archive_name(V, "jdt-language-server-1.60.0-202609031315.tar.gz").is_err());
+    }
+
+    #[test]
+    fn rejects_a_malformed_build_timestamp() {
+        for bad in [
+            "jdt-language-server-1.61.0-20260903131.tar.gz",   // too short
+            "jdt-language-server-1.61.0-2026090313155.tar.gz", // too long
+            "jdt-language-server-1.61.0-20260903131a.tar.gz",  // not all digits
+            "jdt-language-server-1.61.0-202609031315.zip",     // wrong extension
+            "jdt-language-server-1.61.0-202609031315.tar.gz.sha256",
+        ] {
+            assert!(
+                validate_jdtls_archive_name(V, bad).is_err(),
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_versions() {
+        validate_jdtls_version(V).unwrap();
+        validate_jdtls_version("1.9.0").unwrap();
+        for bad in ["", "..", "1.61.0/../..", "../1.61.0", "v1.61.0", "1.61.0-SNAPSHOT", "latest", "1..61", "1.61."] {
+            assert!(validate_jdtls_version(bad).is_err(), "must reject {bad:?}");
+        }
+    }
+
+    /// Eclipse publishes the bare digest; `sha256sum` prints `<digest>  <file>`.
+    /// Both shapes reach this parser, so both are covered.
+    #[test]
+    fn parses_the_sha256_sidecar_in_both_shapes() {
+        assert_eq!(parse_jdtls_sha256(SHA).unwrap(), SHA);
+        assert_eq!(parse_jdtls_sha256(&format!("{SHA}\n")).unwrap(), SHA);
+        assert_eq!(parse_jdtls_sha256(&format!("{SHA}  {ARCHIVE}\n")).unwrap(), SHA);
+        assert_eq!(parse_jdtls_sha256(&SHA.to_uppercase()).unwrap(), SHA);
+    }
+
+    #[test]
+    fn rejects_a_bad_sha256_sidecar() {
+        for bad in ["", "not-a-digest", &"a".repeat(63), &"a".repeat(65), &"z".repeat(64), "<html>404</html>"] {
+            assert!(parse_jdtls_sha256(bad).is_err(), "must reject {bad:?}");
+        }
+    }
+
+    #[test]
+    fn reads_the_stable_version_from_brew_metadata() {
+        let json = r#"{"versions":{"stable":"1.61.0","head":null},"urls":{"stable":{"url":"https://example.invalid/x"}}}"#;
+        assert_eq!(jdtls_version_from_brew(json).unwrap(), "1.61.0");
+    }
+
+    /// The version becomes a URL path segment, so a hostile or garbled answer must
+    /// not survive into `jdtls_milestone_url`.
+    #[test]
+    fn rejects_junk_brew_metadata() {
+        for bad in [
+            r#"{"versions":{"stable":"../../../evil"}}"#,
+            r#"{"versions":{"stable":""}}"#,
+            r#"{"versions":{"stable":123}}"#,
+            r#"{"versions":{}}"#,
+            r#"{}"#,
+            "not json at all",
+        ] {
+            assert!(jdtls_version_from_brew(bad).is_err(), "must reject {bad:?}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod backend_tests {
+    use super::*;
+
+    /// jdtls ships a Python script plus a `.bat` shim, so its Windows name is not
+    /// the Unix name with `.exe` appended — the one place the two backends do not
+    /// follow the same rule.
+    #[test]
+    fn launcher_names_differ_per_backend_and_platform() {
+        assert_ne!(
+            Backend::Intellij.launcher_name(),
+            Backend::Jdtls.launcher_name()
+        );
+        if cfg!(windows) {
+            assert_eq!(Backend::Intellij.launcher_name(), "intellij-server.exe");
+            assert_eq!(Backend::Jdtls.launcher_name(), "jdtls.bat");
+        } else {
+            assert_eq!(Backend::Intellij.launcher_name(), "intellij-server");
+            assert_eq!(Backend::Jdtls.launcher_name(), "jdtls");
+        }
+    }
+
+    /// jdtls is a single `.tar.gz`; demanding `unzip` anyway would refuse to install
+    /// on a machine that has no other use for it.
+    #[test]
+    fn required_tools_do_not_over_demand() {
+        assert!(Backend::Jdtls.required_tools().contains(&"tar"));
+        assert!(Backend::Jdtls.required_tools().contains(&"curl"));
+        assert!(!Backend::Jdtls.required_tools().contains(&"unzip"));
+        assert!(Backend::Intellij.required_tools().contains(&"unzip"));
+    }
+
+    /// The wire default has to stay IntelliJ: a client built before the field
+    /// existed omits it and must still get what it asked for.
+    #[test]
+    fn the_wire_default_is_intellij() {
+        assert_eq!(Backend::default(), Backend::Intellij);
+        assert_eq!(
+            serde_json::from_str::<Backend>(r#""jdtls""#).unwrap(),
+            Backend::Jdtls
+        );
+        assert_eq!(serde_json::to_string(&Backend::Jdtls).unwrap(), r#""jdtls""#);
+        assert_eq!(
+            serde_json::to_string(&Backend::Intellij).unwrap(),
+            r#""intellij""#
+        );
+        assert!(serde_json::from_str::<Backend>(r#""eclipse""#).is_err());
     }
 }
 
@@ -860,22 +1333,23 @@ mod pipeline_tests {
     /// 370 MB.
     #[tokio::test]
     async fn unpacks_locates_and_marks_the_launcher_executable() {
+        let exe = Backend::Intellij.launcher_name();
         let tmp = tempfile::tempdir().unwrap();
         let build = tmp.path().join("build/intellij-server-263.2689.0");
         std::fs::create_dir_all(build.join("bin")).unwrap();
         std::fs::create_dir_all(build.join("lib")).unwrap();
-        std::fs::write(build.join("bin").join(exe_name()), b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::write(build.join("bin").join(exe), b"#!/bin/sh\nexit 0\n").unwrap();
         std::fs::write(build.join("lib/a.jar"), b"jar").unwrap();
 
         // Deliberately drop the executable bit: archives often do.
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut p = std::fs::metadata(build.join("bin").join(exe_name()))
+            let mut p = std::fs::metadata(build.join("bin").join(exe))
                 .unwrap()
                 .permissions();
             p.set_mode(0o644);
-            std::fs::set_permissions(build.join("bin").join(exe_name()), p).unwrap();
+            std::fs::set_permissions(build.join("bin").join(exe), p).unwrap();
         }
 
         let archive = tmp.path().join("intellij-server-263.2689.0.tar.gz");
@@ -897,8 +1371,9 @@ mod pipeline_tests {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
         // The launcher is one level down because we do not strip components.
-        let launcher = find_launcher(&dest).expect("launcher must be found through the archive root");
-        assert!(launcher.ends_with(Path::new("bin").join(exe_name())));
+        let launcher = find_launcher(&dest, exe)
+            .expect("launcher must be found through the archive root");
+        assert!(launcher.ends_with(Path::new("bin").join(exe)));
 
         set_executable(&launcher).await.unwrap();
         #[cfg(unix)]
@@ -907,6 +1382,64 @@ mod pipeline_tests {
             let mode = std::fs::metadata(&launcher).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "archives lose the executable bit");
         }
+    }
+
+    /// jdtls's archive has no wrapper directory — its root *is* the server root —
+    /// so the flatten step renames the extraction directory onto itself. That is the
+    /// one structural difference between the two backends, and the only place a
+    /// wrapper-less archive could go wrong.
+    ///
+    /// Runs the whole staging half (download, verify, unpack, flatten) over a
+    /// `file://` URL, so it exercises the real pipeline without fetching 49 MB.
+    #[tokio::test]
+    async fn staging_flattens_an_archive_whose_root_is_the_server_root() {
+        let exe = Backend::Jdtls.launcher_name();
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Shaped like Eclipse's: bin/ and plugins/ sit at the archive root.
+        let build = tmp.path().join("build");
+        std::fs::create_dir_all(build.join("bin")).unwrap();
+        std::fs::create_dir_all(build.join("plugins")).unwrap();
+        std::fs::write(build.join("bin").join(exe), b"#!/usr/bin/env python3\n").unwrap();
+        std::fs::write(build.join("plugins/a.jar"), b"jar").unwrap();
+
+        let archive = tmp.path().join("jdt-language-server-9.9.9-202600000000.tar.gz");
+        let status = std::process::Command::new("tar")
+            .args(["-czf", archive.to_str().unwrap(), "-C", build.to_str().unwrap(), "."])
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        // The digest the installer will be asked to match.
+        let digest_out = std::process::Command::new("shasum")
+            .args(["-a", "256", archive.to_str().unwrap()])
+            .output()
+            .unwrap();
+        let sha = parse_digest(&String::from_utf8_lossy(&digest_out.stdout)).unwrap();
+
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+        let progress: ProgressFn = Box::new(|_, _| {});
+        let launcher = install_into_staging(
+            Backend::Jdtls,
+            &format!("file://{}", archive.display()),
+            Some(&sha),
+            &staging,
+            &progress,
+        )
+        .await
+        .expect("staging must succeed for a wrapper-less archive");
+
+        assert_eq!(launcher, staging.join("server-root").join("bin").join(exe));
+        assert!(launcher.is_file(), "launcher must survive the flatten");
+        assert!(
+            staging.join("server-root/plugins/a.jar").is_file(),
+            "the rest of the tree must be flattened along with the launcher"
+        );
+        assert!(
+            !staging.join("unpacked").exists(),
+            "the extraction directory must not be left behind"
+        );
     }
 
     /// A checksum mismatch must delete the archive, or a resumed transfer would
@@ -962,5 +1495,42 @@ mod live_tests {
         let size = remote_size(&bundle.url).await;
         assert!(size > 100 * 1024 * 1024, "archive suspiciously small: {size} bytes");
         eprintln!("  archive is {:.0} MB", size as f64 / 1_048_576.0);
+    }
+
+    /// Hits the network: resolves jdtls the way the installer does, across all three
+    /// endpoints, and checks the tuple survives validation.
+    ///
+    /// This covers the half unit tests cannot: that Homebrew still exposes
+    /// `versions.stable`, that Eclipse still publishes `latest.txt` and a `.sha256`
+    /// sidecar for that milestone, and that the URL we construct actually resolves.
+    ///
+    /// RUN THIS after upgrading the pinned jdtls version, or whenever a jdtls install
+    /// starts failing at the lookup stage — those are the only times the assumptions
+    /// above can have changed. Ignored by default because it is slow and networked:
+    /// `cargo test -- --ignored jdtls_resolution`.
+    #[tokio::test]
+    #[ignore]
+    async fn jdtls_resolution_reaches_a_real_archive() {
+        let progress: ProgressFn = Box::new(|_, m| eprintln!("  {m}"));
+        let (url, version, sha) = resolve_jdtls(None, &progress)
+            .await
+            .expect("jdtls resolution must succeed");
+        eprintln!("  resolved: {version} -> {url}");
+
+        assert!(url.starts_with(JDTLS_DOWNLOAD_BASE), "wrong host/product: {url}");
+        validate_jdtls_version(&version).unwrap();
+        let sha = sha.expect("a milestone always publishes a digest");
+        assert_eq!(sha.len(), 64, "digest is not a sha256: {sha}");
+
+        // A milestone archive is tens of MB; an HTML error page or a sidecar-sized
+        // answer means we resolved the wrong artifact.
+        let size = remote_size(&url).await;
+        assert!(size > 10 * 1024 * 1024, "archive suspiciously small: {size} bytes");
+        eprintln!("  archive is {:.0} MB", size as f64 / 1_048_576.0);
+
+        // Pinning the version we just resolved must take the same path and agree.
+        let (pinned_url, _, pinned_sha) = resolve_jdtls(Some(&version), &progress).await.unwrap();
+        assert_eq!(pinned_url, url);
+        assert_eq!(pinned_sha.as_deref(), Some(sha.as_str()), "a pinned jdtls version must still be checksum-verified");
     }
 }

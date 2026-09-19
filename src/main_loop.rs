@@ -577,6 +577,30 @@ impl Application {
                         // Emacs command each maps to is the editor's decision.
                         self.send_notification::<lsp_ext::RunEditorCommand>(params)
                     }
+                    // jdtls's own status/progress channels, translated onto the two
+                    // the editor already renders. The translation is a pure function
+                    // in `lsp_ext`; only the root stamping happens here, because only
+                    // here is the language server in scope.
+                    NotificationFromServer::LanguageStatus(params) => {
+                        let language_server = language_server!();
+                        let mut params = lsp_ext::language_status_to_import_log(&params);
+                        // Same stamping as the IntelliJ path below, and for the same
+                        // reason: in a monorepo each module imports separately and
+                        // their lines would otherwise interleave with no way to tell
+                        // them apart.
+                        params.root_path =
+                            Some(language_server.root_path.to_string_lossy().to_string());
+                        self.send_notification::<lsp_ext::ImportLog>(params)
+                    }
+                    NotificationFromServer::LanguageProgressReport(params) => {
+                        let language_server = language_server!();
+                        self.send_notification::<lsp_ext::CustomProgress>(
+                            lsp_ext::CustomProgressParams {
+                                root_path: language_server.root_path.to_string_lossy().to_string(),
+                                params: lsp_ext::progress_report_to_progress(&params),
+                            },
+                        )
+                    }
                     NotificationFromServer::ImportLog(mut params) => {
                         // Stamped with the server's root rather than the editor's project
                         // root: in a monorepo each module imports separately and the two
@@ -1134,14 +1158,20 @@ impl Application {
         let sender = self.sender.clone();
         let id = req.id.clone();
         let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let backend = params.backend;
         let version = params.version.clone();
         let force = params.force;
 
         tokio::spawn(async move {
             let progress = Self::install_progress_reporter(sender.clone());
-            let outcome =
-                crate::java_install::install(&install_dir, version.as_deref(), force, progress)
-                    .await;
+            let outcome = crate::java_install::install(
+                backend,
+                &install_dir,
+                version.as_deref(),
+                force,
+                progress,
+            )
+            .await;
 
             let response = match outcome {
                 Ok((launcher, version, already_installed)) => Response::new_ok(

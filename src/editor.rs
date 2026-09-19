@@ -1,6 +1,7 @@
 use crate::{
     client::Client,
     document::{Document, DocumentId},
+    lsp_ext,
     registry::Registry,
     syntax,
     utils::uri_to_path,
@@ -35,6 +36,30 @@ fn uris_match(a: &Url, b: &Url) -> bool {
             let resolved = uri_to_path(a);
             !resolved.as_os_str().is_empty() && resolved == uri_to_path(b)
         }
+}
+
+/// Describe a language server that would not start, in the shape the editor
+/// consumes.
+///
+/// `not_on_path` is read off the typed `ExecutableNotFound` variant rather than by
+/// sniffing the error string: that variant exists precisely so this decision is a
+/// match and not a substring search, and it is the one failure with a specific next
+/// step ("install it, then restart the proxy") rather than a generic apology.
+fn describe_start_failure(
+    name: &str,
+    command: Option<&str>,
+    err: &crate::registry::Error,
+) -> lsp_ext::ServerStartFailureParams {
+    let not_on_path = matches!(err, crate::registry::Error::ExecutableNotFound(_));
+    lsp_ext::ServerStartFailureParams {
+        name: name.to_string(),
+        // Falls back to the server name: every `languages.toml` entry has a
+        // `command`, so this only happens if the config vanished between the lookup
+        // and here, and the name is still the useful thing to print.
+        command: command.unwrap_or(name).to_string(),
+        not_on_path,
+        message: err.to_string(),
+    }
 }
 
 pub struct Editor {
@@ -111,11 +136,23 @@ impl Editor {
         self.documents.get(&id).unwrap()
     }
 
-    pub fn launch_language_servers(&mut self, doc_id: DocumentId) {
+    /// Start the language servers configured for a document.
+    ///
+    /// Returns every configured server that failed to start. The caller relays those
+    /// to the editor (`emacs/serverStartFailure`): the `error!` below is invisible at
+    /// the default log level, and a document with zero attached servers is otherwise
+    /// reported to the user as "no language server config found for this file" —
+    /// which is the opposite of what happened when the config is right and the
+    /// binary is simply missing.
+    pub fn launch_language_servers(
+        &mut self,
+        doc_id: DocumentId,
+    ) -> Vec<lsp_ext::ServerStartFailureParams> {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
-            return;
+            return Vec::new();
         };
         let (language_config, doc_path) = (doc.language_config.clone(), doc.path());
+        let mut failures: Vec<lsp_ext::ServerStartFailureParams> = Vec::new();
         let language_servers =
             language_config
                 .as_ref()
@@ -129,6 +166,14 @@ impl Editor {
                             "Failed to initialize the language servers for `{}` - `{}` {{ {} }}",
                             language_config.language_id, lang, err,
                         );
+                                failures.push(describe_start_failure(
+                                    &lang,
+                                    self.syn_loader
+                                        .language_server_configs()
+                                        .get(&lang)
+                                        .map(|cfg| cfg.command.as_str()),
+                                    &err,
+                                ));
                                 None
                             }
                         })
@@ -136,7 +181,7 @@ impl Editor {
                 });
 
         if language_servers.is_empty() && doc.language_servers.is_empty() {
-            return;
+            return failures;
         }
 
         // only spawn new language servers if the servers aren't the same
@@ -156,6 +201,7 @@ impl Editor {
         }
 
         doc.language_servers = language_servers;
+        failures
     }
 
     pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {

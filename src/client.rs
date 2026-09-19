@@ -219,8 +219,20 @@ impl Client {
             root_path
         );
 
-        // Resolve path to the binary
-        let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
+        // Resolve path to the binary.
+        //
+        // "Not on PATH" is separated from every other lookup failure: it is the
+        // expected outcome whenever a server is configured but not installed, and it
+        // is the only one with an actionable next step for the user. The caller
+        // relays it to the editor as `emacs/serverStartFailure`; folding it into
+        // `Other` would leave that failure as an `error!` line nobody sees at the
+        // default log level.
+        let cmd = which::which(cmd).map_err(|err| match err {
+            which::Error::CannotFindBinaryPath => {
+                registry::Error::ExecutableNotFound(cmd.to_string())
+            }
+            other => registry::Error::Other(anyhow::anyhow!(other)),
+        })?;
 
         let process = Command::new(cmd)
             .envs(server_envirment)
@@ -491,6 +503,23 @@ impl Client {
     }
 
     /// Call an arbitrary method on the language server
+    /// Send `method` as a notification, with the method name known only at runtime.
+    ///
+    /// The notification twin of [`Self::call_method`]. `notify` cannot serve here
+    /// because it takes the method from a `Notification` type's `METHOD` constant,
+    /// and a forwarded method's name is not known until the editor names it.
+    pub fn notify_method(&self, method: String, params: Value) -> Result<()> {
+        let notification = jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method,
+            params: Self::value_into_params(params),
+        };
+        self.server_tx
+            .send(Payload::Notification(notification))
+            .map_err(|e| Error::Other(e.into()))?;
+        Ok(())
+    }
+
     pub fn call_method(
         &self,
         req_id: RequestId,
