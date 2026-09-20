@@ -258,6 +258,9 @@ impl Application {
                         Ok(json!(result))
                     }
                     Ok(MethodCall::RegisterCapability(params)) => {
+                        // Set when a registration changes something
+                        // `get_server_capabilities` reports, so the editor can be told.
+                        let mut announced_capabilities_changed = false;
                         if let Some(client) = self
                             .editor
                             .language_servers
@@ -328,6 +331,7 @@ impl Application {
                                                 register_options: Some(ops),
                                             },
                                         );
+                                        announced_capabilities_changed = true;
                                     }
                                     _ => {
                                         // Language Servers based on the `vscode-languageserver-node` library often send
@@ -340,6 +344,25 @@ impl Application {
                                     }
                                 }
                             }
+                        }
+
+                        // A dynamic registration arrives *after* `initialized`, so the
+                        // capability snapshot the editor was given at startup is now
+                        // stale. Nothing else re-sends it, and that snapshot is what the
+                        // editor consults before asking for lenses — so without this, a
+                        // server that registers code lens dynamically is never asked for
+                        // one in any buffer that was already open when it registered.
+                        if announced_capabilities_changed {
+                            self.editor
+                                .documents()
+                                .filter(|doc| {
+                                    doc.language_servers().any(|ls| ls.id() == server_id)
+                                })
+                                .for_each(|doc| {
+                                    self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                        doc.get_server_capabilities(),
+                                    )
+                                });
                         }
 
                         Ok(serde_json::Value::Null)
@@ -1603,5 +1626,51 @@ impl Application {
                 "No uri provided".to_string(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod dynamic_registration_tests {
+    use lsp_types::request::Request as _;
+
+    /// The exact `registerOptions` jdtls sends for code lens.
+    ///
+    /// It carries only `resolveProvider` — no `documentSelector` — and the handler
+    /// above deserializes it into `TextDocumentRegistrationOptions` before storing
+    /// the registration. If that ever stopped accepting this shape the handler would
+    /// `continue`, the registration would never be stored, and code lens would go
+    /// quietly missing for every server that registers it this way: no error, just a
+    /// capability the editor is told it does not have.
+    #[test]
+    fn jdtls_code_lens_register_options_deserialize() {
+        let raw = serde_json::json!({ "resolveProvider": true });
+        let ops: lsp_types::TextDocumentRegistrationOptions =
+            serde_json::from_value(raw).expect("jdtls registerOptions must deserialize");
+        assert!(
+            ops.document_selector.is_none(),
+            "jdtls registers for every document it serves"
+        );
+    }
+
+    /// The method string the registration is matched on. jdtls sends this literal,
+    /// and the match arm compares against the constant — pinning it keeps a rename
+    /// in `lsp_types` from silently turning the arm into dead code.
+    #[test]
+    fn code_lens_registration_method_is_the_one_jdtls_sends() {
+        assert_eq!(
+            lsp_types::request::CodeLensRequest::METHOD,
+            "textDocument/codeLens"
+        );
+    }
+
+    /// A registration for something we do not announce must not be mistaken for one
+    /// we do; only the code-lens arm sets the re-announce flag.
+    #[test]
+    fn watched_files_registration_is_a_different_method() {
+        use lsp_types::notification::Notification as _;
+        assert_ne!(
+            lsp_types::notification::DidChangeWatchedFiles::METHOD,
+            lsp_types::request::CodeLensRequest::METHOD
+        );
     }
 }

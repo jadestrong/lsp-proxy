@@ -1534,3 +1534,4 @@ mod live_tests {
         assert_eq!(pinned_sha.as_deref(), Some(sha.as_str()), "a pinned jdtls version must still be checksum-verified");
     }
 }
+
