@@ -701,7 +701,9 @@ Eclipse."
      :exe-windows "intellij-server.exe"
      :tag         "IntelliJ"
      :label       "IntelliJ server"
-     ;; The bundle is self-contained, including its own JBR.
+     ;; The bundle is self-contained, including its own JBR, and understands Lombok
+     ;; natively the way the IntelliJ IDE does.
+     :wants-lombok nil
      :runtime-requires nil)
     ("jdtls"
      :install-dir lsp-proxy-java-jdtls-install-dir
@@ -713,6 +715,8 @@ Eclipse."
      :exe-windows "jdtls.bat"
      :tag         "jdtls"
      :label       "Eclipse JDT language server"
+     ;; Its compiler is the one the Lombok agent patches.
+     :wants-lombok t
      :runtime-requires (lsp-proxy-java--check-python lsp-proxy-java--check-jdk)))
   "Java language server backends the proxy can install, keyed by server name.
 
@@ -884,6 +888,103 @@ Missing components count as zero, so 263.1 precedes 263.1.1."
           (throw 'done (< x y)))))
     nil))
 
+;;; Lombok java agent
+;;
+;; jdtls cannot see Lombok-generated members on its own: it ships no Lombok and has
+;; no setting for one, so every `@Data' getter is reported as an undefined method.
+;; The fix is a java agent on the server's own command line, which is what the VS
+;; Code Java extension does too -- `java.jdt.ls.lombokSupport.enabled' is consumed by
+;; that extension, never sent to the server, so a client that only forwards the
+;; setting (as `lsp-java' does) changes nothing.
+;;
+;; The download lives in the proxy for the same reason the servers' do; this half
+;; only decides where the jar goes and tells the proxy where it ended up.
+
+(defcustom lsp-proxy-java-lombok-install-dir
+  (expand-file-name "lombok/" lsp-proxy-install-dir)
+  "Directory holding the managed Lombok java agent jar.
+
+A sibling of the managed servers rather than a subdirectory of one: the
+agent is not part of any server, and a jdtls installed by some other
+means (Homebrew, a distribution package) uses the same jar."
+  :type 'directory
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java-lombok-jar ()
+  "Return the newest managed Lombok jar, or nil when none is installed.
+
+Passed to the proxy at startup, which appends it to the command line of any
+server whose `languages.toml' entry says how it takes a java agent.  Normally
+there is exactly one jar here; several are sorted newest-first so a downgrade
+is just deleting a file."
+  (car
+   (sort
+    (when (file-directory-p lsp-proxy-java-lombok-install-dir)
+      (directory-files lsp-proxy-java-lombok-install-dir t "\\`lombok-[0-9].*\\.jar\\'" t))
+    (lambda (a b)
+      (lsp-proxy-java--version<
+       (lsp-proxy-java--jar-version-key b)
+       (lsp-proxy-java--jar-version-key a))))))
+
+(defun lsp-proxy-java--jar-version-key (jar)
+  "Return a comparable list of integers for JAR's `lombok-<version>.jar' name."
+  (let ((name (file-name-nondirectory jar)))
+    (if (string-match "\\`lombok-\\([0-9.]+\\)" name)
+        (mapcar #'string-to-number (split-string (match-string 1 name) "\\." t))
+      '(0))))
+
+(defun lsp-proxy-java--install-lombok (force on-done)
+  "Install the Lombok agent, then call ON-DONE with a report string or nil.
+
+FORCE re-downloads a jar that is already present.  ON-DONE is called with nil
+when the install failed, having already reported why: a failure here must not
+be mistaken for the caller's own failure, which is why nothing is signalled."
+  (let ((dir (file-name-as-directory
+              (expand-file-name lsp-proxy-java-lombok-install-dir))))
+    (jsonrpc-async-request
+     lsp-proxy--connection 'emacs/installLombok
+     (list :params (list :installDir dir :force (if force t :json-false)))
+     :success-fn
+     (lambda (result)
+       (let ((version (plist-get result :version))
+             (path (plist-get result :jarPath)))
+         (funcall on-done
+                  (if (eq (plist-get result :alreadyInstalled) t)
+                      (format "Lombok %s already installed" version)
+                    (format "Installed Lombok %s (java agent): %s" version path)))))
+     :error-fn
+     (lambda (err)
+       (lsp-proxy--error "Lombok install failed: %s" (or (plist-get err :message) err))
+       (funcall on-done nil))
+     :timeout-fn
+     (lambda ()
+       (lsp-proxy--error "Lombok install timed out")
+       (funcall on-done nil))
+     ;; Two megabytes, so nothing like the servers' hour -- but still far past the
+     ;; default request timeout on a slow link.
+     :timeout 300)))
+
+;;;###autoload
+(defun lsp-proxy-java-install-lombok (&optional force)
+  "Download the Lombok java agent jdtls needs to see Lombok-generated members.
+
+With a prefix argument FORCE, re-download even if the jar is already present.
+`lsp-proxy-java-install-server' installs this too when it installs jdtls; this
+command is for a jdtls that came from somewhere else.
+
+The proxy resolves the jar's path at startup, so a fresh install needs
+`lsp-proxy-restart' before jdtls is launched with it."
+  (interactive "P")
+  (lsp-proxy--ensure-connection)
+  (lsp-proxy--set-global-status "Lombok" "Installing Lombok")
+  (message "[lsp-proxy] Installing Lombok ...")
+  (lsp-proxy-java--install-lombok
+   force
+   (lambda (report)
+     (lsp-proxy--clear-global-status)
+     (when report
+       (message "[lsp-proxy] %s. Run M-x lsp-proxy-restart to use it" report)))))
+
 (defun lsp-proxy-java--runtime-warning (backend)
   "Return a note about anything BACKEND needs at runtime and cannot find, or nil.
 
@@ -962,7 +1063,17 @@ install needs `lsp-proxy-restart' before it is visible."
            ;; becomes findable after a restart.
            (message "[lsp-proxy] Installed %s %s. Run M-x lsp-proxy-restart to use it (%s)%s"
                     label version path
-                    (or (lsp-proxy-java--runtime-warning backend) "")))))
+                    (or (lsp-proxy-java--runtime-warning backend) "")))
+         ;; jdtls is unusable on a Lombok project without the agent, so installing
+         ;; the server without it would leave the user with a working server that
+         ;; reports thousands of errors that are not there. Chained rather than
+         ;; required: a failure to fetch it is reported on its own and does not
+         ;; retract the server install that just succeeded.
+         (when (lsp-proxy-java--backend-get backend :wants-lombok)
+           (lsp-proxy-java--install-lombok
+            nil
+            (lambda (report)
+              (when report (message "[lsp-proxy] %s" report)))))))
      :error-fn
      (lambda (err)
        (lsp-proxy--clear-global-status)

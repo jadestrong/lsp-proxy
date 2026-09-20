@@ -371,12 +371,9 @@ async fn run(argv: &[String], what: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn require_tool(backend: Backend, name: &str) -> Result<()> {
+fn require_tool(what: &str, name: &str) -> Result<()> {
     which::which(name).map(|_| ()).with_context(|| {
-        format!(
-            "`{name}` was not found on PATH; it is required to install the {}",
-            backend.display_name()
-        )
+        format!("`{name}` was not found on PATH; it is required to install {what}")
     })
 }
 
@@ -470,14 +467,13 @@ fn download_pct(current: u64, total: u64) -> u32 {
 /// Mirrors `remote::deploy`: `select!` runs the transfer and a size poller
 /// concurrently and cancels the poller as soon as the transfer resolves.
 async fn download_with_progress(
-    backend: Backend,
+    name: &str,
     url: &str,
     archive: &Path,
     progress: &ProgressFn,
 ) -> Result<()> {
     let total = remote_size(url).await;
     let mb = |b: u64| b as f64 / 1_048_576.0;
-    let name = backend.display_name();
     progress(
         Some(0),
         if total > 0 {
@@ -561,7 +557,7 @@ pub async fn install(
     progress: ProgressFn,
 ) -> Result<(PathBuf, String, bool)> {
     for tool in backend.required_tools() {
-        require_tool(backend, tool)?;
+        require_tool(backend.display_name(), tool)?;
     }
 
     let (url, version, expected_sha) = match backend {
@@ -821,6 +817,146 @@ async fn resolve_jdtls(
     ))
 }
 
+// ---------------------------------------------------------------------------
+// Java agent: Lombok
+// ---------------------------------------------------------------------------
+
+/// Maven Central's coordinates for Lombok. A constant; the network supplies no part
+/// of this URL, not even a filename.
+const LOMBOK_MAVEN_BASE: &str = "https://repo1.maven.org/maven2/org/projectlombok/lombok";
+
+/// The Lombok build this proxy installs.
+///
+/// Pinned rather than resolved, because Maven Central publishes no sha256 for it —
+/// only sha1 and md5. Pinning lets the digest below be a constant *we* carry instead
+/// of one the network hands us, which is strictly stronger than how the language
+/// servers are verified. The cost is that a Lombok upgrade is a code change.
+const LOMBOK_VERSION: &str = "1.18.48";
+
+/// sha256 of `lombok-1.18.48.jar` (2,055,065 bytes).
+///
+/// Established by downloading the artifact and checking its sha1 against the value
+/// Maven Central publishes beside it (`6858f13541bab505384f07053c5a7b539bbfd3e3`,
+/// matched exactly), then digesting the same bytes with sha256.
+const LOMBOK_SHA256: &str = "85477a4655ebb2c074a9099cfb749be454449fee564d4282610df1b85f7c508b";
+
+const LOMBOK_LABEL: &str = "Lombok";
+
+/// File name the jar is published under.
+pub fn lombok_jar_name() -> String {
+    format!("lombok-{LOMBOK_VERSION}.jar")
+}
+
+/// Download URL, assembled entirely from the constants above.
+pub fn lombok_download_url() -> String {
+    format!("{LOMBOK_MAVEN_BASE}/{LOMBOK_VERSION}/{}", lombok_jar_name())
+}
+
+/// Download and verify the Lombok agent jar into INSTALL_DIR.
+///
+/// Deliberately *not* routed through `install_into_staging`: that function exists to
+/// unpack an archive and locate a launcher inside it, and a jar has neither. What is
+/// shared is everything that matters — the transfer, the digest check, and publishing
+/// by rename from a staging directory so a half-written jar is never visible.
+pub async fn install_lombok(
+    install_dir: &Path,
+    force: bool,
+    progress: ProgressFn,
+) -> Result<(PathBuf, String, bool)> {
+    require_tool(LOMBOK_LABEL, "curl")?;
+
+    let jar = install_dir.join(lombok_jar_name());
+    if !force && jar.is_file() {
+        return Ok((jar, LOMBOK_VERSION.to_string(), true));
+    }
+
+    tokio::fs::create_dir_all(install_dir)
+        .await
+        .with_context(|| format!("could not create {}", install_dir.display()))?;
+    let staging = install_dir.join(format!(
+        ".staging-lombok-{LOMBOK_VERSION}-{}",
+        std::process::id()
+    ));
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .with_context(|| format!("could not create {}", staging.display()))?;
+
+    let staged = staging.join(lombok_jar_name());
+    let outcome = async {
+        download_with_progress(LOMBOK_LABEL, &lombok_download_url(), &staged, &progress).await?;
+        progress(Some(PCT_VERIFY), "Verifying Lombok download".into());
+        if let Err(err) = verify_checksum(&staged, LOMBOK_SHA256).await {
+            // Same rule as the servers: remove the file rather than leave bytes we
+            // already know are wrong for a resumed transfer to continue from.
+            let _ = tokio::fs::remove_file(&staged).await;
+            return Err(err);
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(err) = outcome {
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        return Err(err);
+    }
+
+    progress(Some(PCT_INSTALL), "Installing Lombok".into());
+    // Replace rather than merge: the name carries the version, so an existing file
+    // here is either identical or a forced reinstall of the same build.
+    let _ = tokio::fs::remove_file(&jar).await;
+    tokio::fs::rename(&staged, &jar)
+        .await
+        .with_context(|| format!("could not publish {}", jar.display()))?;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+
+    Ok((jar, LOMBOK_VERSION.to_string(), false))
+}
+
+/// Render the launch argument that loads JAR as a java agent.
+///
+/// TEMPLATE comes from `languages.toml` rather than being built here, so nothing
+/// dispatches on a server's name: a server declares how it wants an agent passed
+/// (jdtls wants `--jvm-arg=-javaagent:{jar}`) and anything with different syntax
+/// only has to change that string.
+pub fn render_agent_arg(template: &str, jar: &str) -> String {
+    template.replace("{jar}", jar)
+}
+
+/// The arguments a server is actually launched with.
+///
+/// Returns ARGS unchanged unless the server declared a TEMPLATE *and* a managed JAR
+/// exists *and* the user has not already loaded a Lombok agent themselves. Kept
+/// separate from the launch path so all three of those conditions are testable
+/// without starting a process.
+pub fn with_lombok_agent(
+    args: &[String],
+    template: Option<&str>,
+    jar: Option<&str>,
+) -> Vec<String> {
+    let mut out = args.to_vec();
+    let (Some(template), Some(jar)) = (template, jar) else {
+        return out;
+    };
+    if args_already_load_lombok(args) {
+        return out;
+    }
+    out.push(render_agent_arg(template, jar));
+    out
+}
+
+/// Whether ARGS already loads a Lombok agent.
+///
+/// A user who put `-javaagent:` in `args` themselves has picked a jar on purpose;
+/// adding a second agent for the same library is at best redundant. Mirrors the
+/// duplicate check the VS Code Java extension does before appending its own.
+pub fn args_already_load_lombok(args: &[String]) -> bool {
+    args.iter().any(|arg| {
+        let lower = arg.to_ascii_lowercase();
+        lower.contains("-javaagent:") && lower.contains("lombok")
+    })
+}
+
 /// Download + verify + unpack into STAGING, returning the launcher found inside.
 async fn install_into_staging(
     backend: Backend,
@@ -832,7 +968,7 @@ async fn install_into_staging(
     let archive_name = url.rsplit('/').next().unwrap_or("server-archive");
     let archive = staging.join(archive_name);
 
-    download_with_progress(backend, url, &archive, progress).await?;
+    download_with_progress(backend.display_name(), url, &archive, progress).await?;
 
     match expected_sha {
         Some(expected) => {
@@ -1225,6 +1361,112 @@ mod jdtls_tests {
 }
 
 #[cfg(test)]
+mod lombok_tests {
+    use super::*;
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// The URL that must not regress. Unlike the servers, nothing here is assembled
+    /// from a network response at all — not even the filename — so a compromised or
+    /// confused Maven Central cannot redirect this download.
+    #[test]
+    fn download_url_is_built_from_constants_only() {
+        assert_eq!(
+            lombok_download_url(),
+            "https://repo1.maven.org/maven2/org/projectlombok/lombok/1.18.48/lombok-1.18.48.jar"
+        );
+        assert!(lombok_download_url().starts_with(LOMBOK_MAVEN_BASE));
+        assert_eq!(lombok_jar_name(), "lombok-1.18.48.jar");
+    }
+
+    /// The digest is a constant we carry rather than one the network hands us, so a
+    /// typo in it would be caught only here.
+    #[test]
+    fn the_pinned_digest_is_a_wellformed_sha256() {
+        let (version, sha) = (LOMBOK_VERSION, LOMBOK_SHA256);
+        assert_eq!(sha.len(), 64, "not a sha256: {sha}");
+        assert!(sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(version.starts_with(|c: char| c.is_ascii_digit()));
+        // The jar name embeds the version, so the two cannot drift apart silently.
+        assert!(lombok_jar_name().contains(version));
+    }
+
+    #[test]
+    fn agent_arg_template_substitutes_the_jar_path() {
+        assert_eq!(
+            render_agent_arg("--jvm-arg=-javaagent:{jar}", "/x/lombok-1.18.48.jar"),
+            "--jvm-arg=-javaagent:/x/lombok-1.18.48.jar"
+        );
+        // A template with no placeholder is passed through rather than mangled.
+        assert_eq!(render_agent_arg("--plain", "/x/l.jar"), "--plain");
+    }
+
+    #[test]
+    fn the_agent_is_appended_when_a_template_and_a_jar_are_both_present() {
+        let out = with_lombok_agent(
+            &s(&["--stdio"]),
+            Some("--jvm-arg=-javaagent:{jar}"),
+            Some("/x/lombok-1.18.48.jar"),
+        );
+        assert_eq!(
+            out,
+            s(&["--stdio", "--jvm-arg=-javaagent:/x/lombok-1.18.48.jar"])
+        );
+    }
+
+    /// Every server that declares no template — which is every server but jdtls —
+    /// must be launched with byte-identical arguments, since they all now go through
+    /// this one call.
+    #[test]
+    fn no_template_means_the_arguments_are_untouched() {
+        let args = s(&["--stdio", "--eula=34d850193ee04897"]);
+        assert_eq!(with_lombok_agent(&args, None, Some("/x/l.jar")), args);
+    }
+
+    #[test]
+    fn a_template_without_an_installed_jar_means_no_injection() {
+        let args = s(&["--stdio"]);
+        assert_eq!(
+            with_lombok_agent(&args, Some("--jvm-arg=-javaagent:{jar}"), None),
+            args
+        );
+    }
+
+    /// A user who wrote their own `-javaagent:` picked that jar deliberately; adding
+    /// a second agent for the same library behind their back is at best redundant.
+    #[test]
+    fn an_existing_lombok_agent_in_args_suppresses_injection() {
+        for existing in [
+            "--jvm-arg=-javaagent:/opt/lombok.jar",
+            "--jvm-arg=-javaagent:/opt/LOMBOK-1.18.4.jar",
+            "-javaagent:/home/u/.m2/.../lombok-1.18.30.jar",
+        ] {
+            let args = s(&["--stdio", existing]);
+            assert_eq!(
+                with_lombok_agent(&args, Some("--jvm-arg=-javaagent:{jar}"), Some("/x/l.jar")),
+                args,
+                "must not add a second agent alongside {existing:?}"
+            );
+        }
+    }
+
+    /// An unrelated agent is not Lombok, so it must not suppress the injection.
+    #[test]
+    fn an_unrelated_javaagent_does_not_suppress_injection() {
+        let args = s(&["--jvm-arg=-javaagent:/opt/jacoco.jar"]);
+        let out = with_lombok_agent(
+            &args,
+            Some("--jvm-arg=-javaagent:{jar}"),
+            Some("/x/lombok-1.18.48.jar"),
+        );
+        assert_eq!(out.len(), 2, "the Lombok agent should still be appended");
+        assert!(out[1].contains("lombok-1.18.48.jar"));
+    }
+}
+
+#[cfg(test)]
 mod backend_tests {
     use super::*;
 
@@ -1532,6 +1774,41 @@ mod live_tests {
         let (pinned_url, _, pinned_sha) = resolve_jdtls(Some(&version), &progress).await.unwrap();
         assert_eq!(pinned_url, url);
         assert_eq!(pinned_sha.as_deref(), Some(sha.as_str()), "a pinned jdtls version must still be checksum-verified");
+    }
+    /// Hits the network: fetches the pinned Lombok jar and checks it still digests to
+    /// the constant compiled in above.
+    ///
+    /// This is the half a unit test cannot cover. Pinning means the digest is only
+    /// ever as good as the moment it was taken — if Maven Central ever served
+    /// different bytes under the same coordinates, or the artifact were withdrawn,
+    /// installs would start failing with a checksum mismatch and nothing else would
+    /// explain why.
+    ///
+    /// RUN THIS when bumping `LOMBOK_VERSION`, to establish the new digest and prove
+    /// the URL resolves. Ignored by default because it is networked:
+    /// `cargo test -- --ignored lombok_jar`.
+    #[tokio::test]
+    #[ignore]
+    async fn lombok_jar_still_matches_the_pinned_digest() {
+        let (version, sha) = (LOMBOK_VERSION, LOMBOK_SHA256);
+        let url = lombok_download_url();
+        eprintln!("  fetching {url}");
+
+        let size = remote_size(&url).await;
+        assert!(size > 500 * 1024, "jar suspiciously small: {size} bytes");
+        eprintln!("  {:.1} MB", size as f64 / 1_048_576.0);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let jar = tmp.path().join(lombok_jar_name());
+        let progress: ProgressFn = Box::new(|_, m| eprintln!("  {m}"));
+        download_with_progress(LOMBOK_LABEL, &url, &jar, &progress)
+            .await
+            .expect("the pinned Lombok version must still be downloadable");
+
+        verify_checksum(&jar, sha).await.unwrap_or_else(|err| {
+            panic!("Lombok {version} no longer digests to the pinned value: {err:#}")
+        });
+        eprintln!("  digest matches the pinned constant");
     }
 }
 

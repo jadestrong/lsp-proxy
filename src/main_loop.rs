@@ -955,6 +955,14 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::ShutdownWorkspace::METHOD => {
                 self.handle_shutdown_workspace(&req);
             }
+            // Matched by method before the generic path below, which resolves a
+            // document first: installing a server is not about any open file.
+            Message::Request(req) if req.method == lsp_ext::InstallJavaServer::METHOD => {
+                self.handle_install_java_server(req);
+            }
+            Message::Request(req) if req.method == lsp_ext::InstallLombok::METHOD => {
+                self.handle_install_lombok(req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -1124,6 +1132,113 @@ impl Application {
         .finish();
 
         Ok(())
+    }
+
+    /// Install a Java language server and report progress to the editor.
+    fn handle_install_java_server(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallJavaServerParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installJavaServer params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let backend = params.backend;
+        let version = params.version.clone();
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone());
+            let outcome = crate::java_install::install(
+                backend,
+                &install_dir,
+                version.as_deref(),
+                force,
+                progress,
+            )
+            .await;
+
+            let response = match outcome {
+                Ok((launcher, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallJavaServerResult {
+                        launcher_path: launcher.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    id,
+                    jsonrpc::ErrorCode::InternalError,
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn handle_install_lombok(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallLombokParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installLombok params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone());
+            let outcome = crate::java_install::install_lombok(&install_dir, force, progress).await;
+
+            let response = match outcome {
+                Ok((jar, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallLombokResult {
+                        jar_path: jar.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    id,
+                    jsonrpc::ErrorCode::InternalError,
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn install_progress_reporter(sender: Sender<Message>) -> crate::java_install::ProgressFn {
+        Box::new(move |percentage: Option<u32>, message: String| {
+            let notification = msg::Notification::new(
+                lsp_ext::InstallProgress::METHOD.to_string(),
+                lsp_ext::InstallProgressParams {
+                    message,
+                    percentage,
+                },
+            );
+            let _ = sender.send(notification.into());
+        })
     }
 
     fn handle_list_workspaces(&mut self, req: &msg::Request) {

@@ -302,6 +302,15 @@ pub struct LanguageServerConfiguration {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub environment: HashMap<String, String>,
+    /// How this server wants a Lombok java agent passed on its command line, e.g.
+    /// `"--jvm-arg=-javaagent:{jar}"`. `{jar}` is replaced with the managed jar's
+    /// absolute path, and the argument is appended only when such a jar exists.
+    ///
+    /// Declared per server rather than decided by matching a server's name: the
+    /// knowledge "this launcher takes agents *this* way" belongs in the same config
+    /// that already knows the launcher's command and arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lombok_agent_arg: Option<String>,
     #[serde(default, skip_serializing, deserialize_with = "deserialize_lsp_config")]
     pub config: Option<serde_json::Value>,
     #[serde(default = "default_timeout")]
