@@ -46,6 +46,25 @@ pub fn set_copilot_server_name(name: String) {
     COPILOT_SERVER_NAME.set(name).ok();
 }
 
+static LOMBOK_JAR_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
+
+/// Initialise the Lombok agent jar path from `LSP_PROXY_LOMBOK_JAR`.
+///
+/// The editor resolves it, for the same reason it resolves the managed servers'
+/// `bin/` directories: it owns the install layout. Call once at startup.
+pub fn initialize_lombok_jar_path() {
+    if let Ok(val) = std::env::var("LSP_PROXY_LOMBOK_JAR") {
+        if !val.is_empty() {
+            LOMBOK_JAR_PATH.set(val).ok();
+        }
+    }
+}
+
+/// Path to the managed Lombok agent jar, or `None` when none is installed.
+pub fn lombok_jar_path() -> Option<&'static str> {
+    LOMBOK_JAR_PATH.get().map(|s| s.as_str())
+}
+
 /// Initialise the remote binary path from the `LSP_PROXY_REMOTE_BINARY_PATH`
 /// environment variable.  Call once at startup, before the remote manager is
 /// used.  If the variable is absent or empty the built-in default is used.
@@ -247,6 +266,52 @@ mod builtin_config_tests {
         );
     }
 
+    /// jdtls must declare how it takes a java agent, and IntelliJ must not.
+    ///
+    /// This is the whole switch for Lombok support: the proxy appends the rendered
+    /// argument only for a server that declares one. A typo in the key name (it is
+    /// kebab-case on the wire, snake_case in Rust) deserializes to `None` without any
+    /// error, and the only symptom would be Lombok silently not working again — which
+    /// is indistinguishable from not having installed the jar.
+    #[test]
+    fn jdtls_declares_how_it_takes_a_java_agent() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let servers = &config.language_server;
+
+        let template = servers
+            .get("jdtls")
+            .expect("jdtls must be defined")
+            .lombok_agent_arg
+            .as_deref()
+            .expect("jdtls must declare `lombok-agent-arg`");
+        assert!(
+            template.contains("{jar}"),
+            "the template must have somewhere to put the jar: {template:?}"
+        );
+        assert!(
+            template.contains("-javaagent:"),
+            "the rendered argument must load a java agent: {template:?}"
+        );
+        assert!(
+            template.starts_with("--jvm-arg="),
+            "`bin/jdtls` passes JVM options through `--jvm-arg=`, not directly: {template:?}"
+        );
+        // Rendering it must produce exactly what the launcher documents.
+        assert_eq!(
+            crate::java_install::render_agent_arg(template, "/x/lombok-1.18.48.jar"),
+            "--jvm-arg=-javaagent:/x/lombok-1.18.48.jar"
+        );
+
+        assert!(
+            servers
+                .get("intellij")
+                .expect("intellij must be defined")
+                .lombok_agent_arg
+                .is_none(),
+            "the IntelliJ backend understands Lombok natively and must not be given an agent"
+        );
+    }
+
     /// Every declared `extendedClientCapabilities` switch must have a client handler.
     ///
     /// Declaring one without its handler is worse than leaving it off: the server
@@ -316,5 +381,27 @@ mod builtin_config_tests {
             !names.contains(&"jdtls"),
             "kotlin must not be routed to jdtls, got {names:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod lombok_jar_path_tests {
+    /// The editor hands the agent's location over as an environment variable, the
+    /// same way it hands over the remote binary path. Nothing else reads that
+    /// variable, so a typo in either half is invisible until Lombok quietly fails to
+    /// load — which looks exactly like not having installed it.
+    ///
+    /// The backing cell is a process-wide `OnceCell`, so this must stay the only test
+    /// that initialises it; a second one would race for the single write.
+    #[test]
+    fn the_jar_path_arrives_through_the_environment() {
+        assert!(
+            super::lombok_jar_path().is_none(),
+            "nothing should have initialised this yet"
+        );
+        std::env::set_var("LSP_PROXY_LOMBOK_JAR", "/x/lombok-1.18.48.jar");
+        super::initialize_lombok_jar_path();
+        assert_eq!(super::lombok_jar_path(), Some("/x/lombok-1.18.48.jar"));
+        std::env::remove_var("LSP_PROXY_LOMBOK_JAR");
     }
 }

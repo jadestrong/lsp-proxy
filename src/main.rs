@@ -39,7 +39,7 @@ use log::{error, info};
 use logging::init_tracing;
 
 use crate::{
-    config::{initialize_remote_binary_path, set_copilot_server_name},
+    config::{initialize_lombok_jar_path, initialize_remote_binary_path, set_copilot_server_name},
     connection::Connection,
     main_loop::main_loop,
 };
@@ -96,6 +96,7 @@ fn try_main() -> Result<()> {
     set_enable_snippets(args.enable_snippets);
     set_copilot_server_name(args.copilot_server_name);
     initialize_remote_binary_path();
+    initialize_lombok_jar_path();
 
     if let Err(e) = setup_logging(args.log_level) {
         eprintln!("Failed to setup logging: {e}");

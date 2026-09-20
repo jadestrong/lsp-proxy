@@ -135,6 +135,46 @@ impl Request for InstallJavaServer {
     const METHOD: &'static str = "emacs/installJavaServer";
 }
 
+// emacs/installLombok
+//
+// Downloads the Lombok java agent that `jdtls` needs in order to see Lombok-generated
+// members. Deliberately NOT a variant of `installJavaServer`'s `backend`: Lombok is
+// not a language server, and widening that enum to hold one would make the abstraction
+// lie about what a backend is.
+//
+// jdtls ships no Lombok and has no setting for it — `java.jdt.ls.lombokSupport.enabled`
+// belongs to the VS Code Java extension, which consumes it client-side and appends
+// `-javaagent:` to the server's command line. This is that half, moved here because
+// the proxy is what launches the server.
+#[derive(Debug)]
+pub enum InstallLombok {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallLombokParams {
+    /// Where to place `lombok-<version>.jar`. Chosen by the client so the location
+    /// stays next to everything else Emacs manages.
+    pub install_dir: String,
+    /// Re-download even when the pinned version is already present.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallLombokResult {
+    pub jar_path: String,
+    pub version: String,
+    /// True when the pinned version was already present and nothing was downloaded.
+    pub already_installed: bool,
+}
+
+impl Request for InstallLombok {
+    type Params = InstallLombokParams;
+    type Result = InstallLombokResult;
+    const METHOD: &'static str = "emacs/installLombok";
+}
+
 // emacs/installProgress
 //
 // Progress for a long install, reported on its own channel rather than as
@@ -1729,5 +1769,43 @@ mod jdtls_live_tests {
              different projects, so they would share one jdtls workspace. Pass an \
              explicit per-project `-data` in languages.toml, or drop the assumption."
         );
+    }
+}
+
+#[cfg(test)]
+mod install_lombok_tests {
+    use super::{InstallLombok, InstallLombokParams, InstallLombokResult};
+    use lsp_types::request::Request as _;
+
+    /// The method name is the wire contract with `lsp-proxy-java.el`; a rename here
+    /// silently stops the command working rather than failing to compile.
+    #[test]
+    fn the_method_name_is_stable() {
+        assert_eq!(InstallLombok::METHOD, "emacs/installLombok");
+    }
+
+    /// Same envelope as every other request: the payload lives in the nested
+    /// `params`, and `force` defaults so the client may omit it.
+    #[test]
+    fn params_and_result_round_trip_through_the_envelope() {
+        let wire = r#"{
+          "id": 7,
+          "method": "emacs/installLombok",
+          "params": { "params": { "installDir": "/u/.emacs.d/lsp-proxy/lombok/" } }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        let params: InstallLombokParams = serde_json::from_value(req.params.params).unwrap();
+        assert_eq!(params.install_dir, "/u/.emacs.d/lsp-proxy/lombok/");
+        assert!(!params.force, "an absent force must mean false");
+
+        // camelCase on the way out, because that is what the Emacs side reads.
+        let json = serde_json::to_string(&InstallLombokResult {
+            jar_path: "/u/lombok-1.18.48.jar".into(),
+            version: "1.18.48".into(),
+            already_installed: true,
+        })
+        .unwrap();
+        assert!(json.contains("\"jarPath\""), "{json}");
+        assert!(json.contains("\"alreadyInstalled\":true"), "{json}");
     }
 }

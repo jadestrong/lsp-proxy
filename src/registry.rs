@@ -403,9 +403,19 @@ fn start_client(
     doc_path: Option<&std::path::PathBuf>,
     ls_features: Option<&LanguageServerFeatures>,
 ) -> Result<NewClient> {
+    // jdtls cannot see Lombok-generated members without the agent, and reports every
+    // one of them as an undefined method. The server declares how it takes an agent
+    // (`lombok-agent-arg` in `languages.toml`); this is a no-op for every server that
+    // does not, so the two backends share one unconditional code path.
+    let args = crate::java_install::with_lombok_agent(
+        &ls_config.args,
+        ls_config.lombok_agent_arg.as_deref(),
+        crate::config::lombok_jar_path(),
+    );
+
     let (client, incoming, initialize_notify) = Client::start(
         &ls_config.command,
-        &ls_config.args,
+        &args,
         ls_config.config.clone(),
         ls_config.experimental.clone(),
         ls_config.environment.clone(),

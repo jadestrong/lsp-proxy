@@ -354,9 +354,17 @@ picked up on the next `lsp-proxy-restart'."
                   :notification-dispatcher #'lsp-proxy--handle-notification
                   :request-dispatcher #'lsp-proxy--handle-request
                   :process (let ((process-environment
-                                  (cons (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
-                                                lsp-proxy-remote-binary-path)
-                                        (lsp-proxy--managed-server-path-environment))))
+                                  (append
+                                   (list (format "LSP_PROXY_REMOTE_BINARY_PATH=%s"
+                                                 lsp-proxy-remote-binary-path))
+                                   ;; Where the managed Lombok agent lives, if any.
+                                   ;; Resolved here for the same reason the servers'
+                                   ;; `bin/' directories are: this side owns the
+                                   ;; install layout. Absent simply means no agent.
+                                   (when-let* ((jar (and (fboundp 'lsp-proxy-java-lombok-jar)
+                                                         (lsp-proxy-java-lombok-jar))))
+                                     (list (format "LSP_PROXY_LOMBOK_JAR=%s" jar)))
+                                   (lsp-proxy--managed-server-path-environment))))
                               (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
                                          :command (append (list lsp-proxy--exec-file

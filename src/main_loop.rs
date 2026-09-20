@@ -887,6 +887,9 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallJavaServer::METHOD => {
                 self.handle_install_java_server(req);
             }
+            Message::Request(req) if req.method == lsp_ext::InstallLombok::METHOD => {
+                self.handle_install_lombok(req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -1210,6 +1213,48 @@ impl Application {
                     jsonrpc::ErrorCode::InternalError,
                     // `{:#}` includes the anyhow context chain, which is where the
                     // actionable part lives (missing tool, checksum, wrong product).
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn handle_install_lombok(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallLombokParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installLombok params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone());
+            let outcome = crate::java_install::install_lombok(&install_dir, force, progress).await;
+
+            let response = match outcome {
+                Ok((jar, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallLombokResult {
+                        jar_path: jar.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    id,
+                    jsonrpc::ErrorCode::InternalError,
                     format!("{err:#}"),
                 ),
             };
