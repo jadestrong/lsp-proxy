@@ -301,7 +301,14 @@ impl Document {
                 server_capabilities.support_hover = true;
             }
 
-            if ls.supports_feature(LanguageServerFeature::CodeLens) {
+            // `with_feature` rather than `supports_feature`: code lens is commonly
+            // registered *dynamically* rather than declared in the initialize result
+            // (jdtls sends no `codeLensProvider` at all and follows up with
+            // `client/registerCapability`). Asking only about the static capability
+            // reports `false` for such a server, and the editor then never requests a
+            // lens — the request path itself already uses `with_feature`, so the two
+            // disagreed about the same server.
+            if ls.with_feature(LanguageServerFeature::CodeLens) {
                 server_capabilities.support_code_lens = true;
             }
         });
