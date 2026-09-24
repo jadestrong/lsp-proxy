@@ -35,7 +35,7 @@ use anyhow::Result;
 use crossbeam_channel::{bounded, Sender};
 use futures_util::StreamExt;
 use log::{debug, error, info, warn};
-use lsp_types::{notification::Notification, request::Request, LogMessageParams};
+use lsp_types::{notification::Notification, request::Request};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::Duration;
@@ -299,6 +299,31 @@ impl Application {
                                             },
                                         );
                                     }
+                                    lsp_types::request::CodeLensRequest::METHOD => {
+                                        let Some(options) = reg.register_options else {
+                                            continue;
+                                        };
+                                        // `CodeLensRegistrationOptions` flattens
+                                        // `TextDocumentRegistrationOptions` at the top level and adds
+                                        // an unused (here) `resolveProvider` field, so deserializing
+                                        // into the smaller struct works the same way `Formatting`
+                                        // does above.
+                                        let ops: lsp_types::TextDocumentRegistrationOptions =
+                                            match serde_json::from_value(options) {
+                                                Ok(ops) => ops,
+                                                Err(err) => {
+                                                    warn!("Failed to deserialize TextDocumentRegistrationOptions for CodeLens: {err}");
+                                                    continue;
+                                                }
+                                            };
+                                        client.registered_capabilities.lock().push(
+                                            RegisteredCapability {
+                                                id: reg.id,
+                                                method: reg.method,
+                                                register_options: Some(ops),
+                                            },
+                                        );
+                                    }
                                     _ => {
                                         // Language Servers based on the `vscode-languageserver-node` library often send
                                         // client/registerCapability even though we do not enable dynamic registration
@@ -331,13 +356,11 @@ impl Application {
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::ShowMessageRequest(params)) => {
-                        log::warn!("unhandled window/showMessageRequest: {params:?}");
-                        let log_message = LogMessageParams {
-                            typ: params.typ,
-                            message: params.message,
-                        };
-                        self.send_notification::<lsp_types::notification::LogMessage>(log_message);
-                        Ok(serde_json::Value::Null)
+                        // Answered asynchronously: the user has to choose first, so the
+                        // reply cannot be produced here. `forward_show_message_request`
+                        // takes ownership of `id` and replies once the editor responds.
+                        self.forward_show_message_request(server_id, id, params);
+                        return;
                     }
                 };
 
@@ -424,10 +447,27 @@ impl Application {
                             log::debug!("Disabled pushlishDiagnostics for org file.");
                             return;
                         }
+                        // Deliberately no staleness gate, matching
+                        // vscode-languageclient's `handleDiagnostics`, which never reads
+                        // `params.version`. Superseding is by content instead: the
+                        // comparison below skips the notification when the diagnostics
+                        // are unchanged, and a newer publish simply replaces the older
+                        // set for this provider.
+                        //
+                        // Dropping stale publishes sounds safer but is strictly worse,
+                        // because nothing re-requests them. A server that stamps the
+                        // version it analysed will always lag the client while the user
+                        // types, so an equality check discarded every notification and
+                        // then went silent, losing the final analysis permanently.
+                        // Showing a slightly stale set that the next publish corrects is
+                        // the trade VS Code makes.
                         if let Some(version) = params.version {
                             if version != doc.version {
-                                log::error!("Version ({version}) is out of date for {:?} (expected ({}), dropping PublishDiagnostic notification", params.uri, doc.version());
-                                return;
+                                log::debug!(
+                                    "Accepting diagnostics for {:?} at server version ({version}) while the document is at ({}); ranges may lag until the next publish",
+                                    params.uri,
+                                    doc.version()
+                                );
                             }
                         }
                         let provider = DiagnosticProvider {
@@ -508,6 +548,18 @@ impl Application {
                                 params,
                             },
                         )
+                    }
+                    NotificationFromServer::ChooseAction(params) => {
+                        self.forward_choose_action(server_id, params);
+                    }
+                    NotificationFromServer::ImportLog(mut params) => {
+                        // Stamped with the server's root rather than the editor's project
+                        // root: in a monorepo each module imports separately and the two
+                        // do not agree.
+                        let language_server = language_server!();
+                        params.root_path =
+                            Some(language_server.root_path.to_string_lossy().to_string());
+                        self.send_notification::<lsp_ext::ImportLog>(params)
                     }
                     NotificationFromServer::ForwardRequest(params) => {
                         let language_server = language_server!();
@@ -617,6 +669,14 @@ impl Application {
                         let doc_id = doc.id();
                         let previous_result_id = doc.previous_diagnostic_id.clone();
 
+                        // Tag this batch so a response that is overtaken by a newer
+                        // batch can be recognised and discarded on arrival.
+                        let pull_generation = self
+                            .editor
+                            .document_mut(doc_id)
+                            .map(|doc| doc.next_pull_generation())
+                            .unwrap_or_default();
+
                         let limit_diagnostics = req
                             .params
                             .context
@@ -704,6 +764,7 @@ impl Application {
                                         result,
                                         doc_id,
                                         limit_diagnostics,
+                                        pull_generation,
                                     )
                                     .await;
                                 }
@@ -742,6 +803,11 @@ impl Application {
             }
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
+            }
+            // Matched by method before the generic path below, which resolves a
+            // document first: installing a server is not about any open file.
+            Message::Request(req) if req.method == lsp_ext::InstallJavaServer::METHOD => {
+                self.handle_install_java_server(req);
             }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
@@ -861,6 +927,10 @@ impl Application {
             .on::<lsp_types::request::DocumentHighlightRequest, _, _>(
                 handlers::request::handle_document_highlight,
             )
+            .on::<lsp_types::request::CodeLensRequest, _, _>(handlers::request::handle_code_lens)
+            .on::<lsp_types::request::CodeLensResolve, _, _>(
+                handlers::request::handle_code_lens_resolve,
+            )
             .on::<lsp_types::request::DocumentSymbolRequest, _, _>(
                 handlers::request::handle_document_symbols,
             )
@@ -910,10 +980,193 @@ impl Application {
         Ok(())
     }
 
+    /// Ask the editor to present a server's `window/showMessageRequest` and reply
+    /// with whatever the user chose.
+    ///
+    /// The request is deferred rather than answered inline: LSP defines the result as
+    /// the chosen `MessageActionItem`, or `null` when the user dismissed the prompt,
+    /// so answering before asking would mean always reporting "dismissed" — which is
+    /// exactly what the previous log-only implementation did, leaving the server to
+    /// fall back to a default the user never saw.
+    fn forward_show_message_request(
+        &mut self,
+        server_id: usize,
+        server_request_id: crate::msg::RequestId,
+        params: lsp_types::ShowMessageRequestParams,
+    ) {
+        let editor_request_id = self
+            .send_request_returning_id::<lsp_types::request::ShowMessageRequest>(
+                params,
+                Self::on_show_message_response,
+            );
+        self.pending_editor_choices
+            .insert(editor_request_id, (server_id, server_request_id));
+    }
+
+    /// Relay the user's choice back to the language server.
+    ///
+    /// A bare `fn` because that is what `ReqHandler` is; the correlation it needs was
+    /// stashed in `pending_editor_choices`.
+    /// Ask the editor to pick one of the server's actions.
+    fn forward_choose_action(&mut self, server_id: usize, params: lsp_ext::ChooseActionParams) {
+        if params.entries.is_empty() {
+            // Nothing to choose from; answering would send a meaningless index.
+            debug!("ignoring intellij/chooseAction with no entries");
+            return;
+        }
+        let session_id = params.session_id;
+        let editor_request_id = self.send_request_returning_id::<lsp_ext::EmacsChooseAction>(
+            params,
+            Self::on_choose_action_response,
+        );
+        self.pending_choose_actions
+            .insert(editor_request_id, (server_id, session_id));
+    }
+
+    /// Deliver the picked entry as `workspace/executeCommand`. A dismissed prompt
+    /// sends nothing: the server's protocol has no cancellation message for this, so
+    /// inventing an index would run an action the user did not choose.
+    fn on_choose_action_response(&mut self, response: msg::Response) {
+        let Some((server_id, session_id)) = self.pending_choose_actions.remove(&response.id) else {
+            warn!("no pending chooseAction for response id={:?}", response.id);
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer chooseAction: {error:?}");
+            return;
+        }
+        let Some(index) = response
+            .result
+            .as_ref()
+            .and_then(|value| value.as_i64())
+        else {
+            debug!("chooseAction dismissed; session {session_id} left unanswered");
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping chooseAction reply");
+            return;
+        };
+        let params = lsp_types::ExecuteCommandParams {
+            command: lsp_ext::CHOOSE_MOD_COMMAND_ACTION.to_string(),
+            arguments: vec![session_id.into(), index.into()],
+            work_done_progress_params: Default::default(),
+        };
+        tokio::spawn(async move {
+            if let Err(err) = language_server
+                .request::<lsp_types::request::ExecuteCommand>(params)
+                .await
+            {
+                warn!("chooseModCommandAction failed: {err}");
+            }
+        });
+    }
+
+    fn on_show_message_response(&mut self, response: msg::Response) {
+        let Some((server_id, server_request_id)) =
+            self.pending_editor_choices.remove(&response.id)
+        else {
+            warn!("no pending showMessageRequest for response id={:?}", response.id);
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping showMessageRequest reply");
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer showMessageRequest: {error:?}");
+        }
+        // Absent or failed result means the prompt was dismissed, which LSP spells
+        // `null` — not an error.
+        let result = response.result.unwrap_or(Value::Null);
+        tokio::spawn(language_server.reply(server_request_id, Ok(result)));
+    }
+
+    /// Install the IntelliJ language server, reporting progress as `$/progress`.
+    ///
+    /// Spawned rather than awaited: the transfer is ~370 MB, and the main loop must
+    /// keep serving the editor throughout.
+    fn handle_install_java_server(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallJavaServerParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installJavaServer params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let version = params.version.clone();
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone());
+            let outcome =
+                crate::java_install::install(&install_dir, version.as_deref(), force, progress)
+                    .await;
+
+            let response = match outcome {
+                Ok((launcher, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallJavaServerResult {
+                        launcher_path: launcher.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    id,
+                    jsonrpc::ErrorCode::InternalError,
+                    // `{:#}` includes the anyhow context chain, which is where the
+                    // actionable part lives (missing tool, checksum, wrong product).
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    /// Progress callback that pushes each update to the editor's echo area.
+    ///
+    /// Deliberately not `$/progress`: the editor files that by project root and only
+    /// renders it in a buffer that is both inside that project and has the minor mode
+    /// on, so an install started from anywhere else showed nothing at all.
+    fn install_progress_reporter(sender: Sender<Message>) -> crate::java_install::ProgressFn {
+        Box::new(move |percentage: Option<u32>, message: String| {
+            let notification = msg::Notification::new(
+                lsp_ext::InstallProgress::METHOD.to_string(),
+                lsp_ext::InstallProgressParams {
+                    message,
+                    percentage,
+                },
+            );
+            let _ = sender.send(notification.into());
+        })
+    }
+
     fn handle_workspace_restart(&mut self, req: &msg::Request) {
         match self.get_working_document(req) {
             Ok(doc) => {
-                let config = doc.language_config().unwrap().clone();
+                // A virtual document (a `jar:`/`jrt:` decompiled source) can lack a
+                // language config, and always lacks a path; unwrapping either here
+                // took the whole proxy down when restart was invoked from such a
+                // buffer.
+                let Some(config) = doc.language_config().cloned() else {
+                    self.respond(Response::new_err(
+                        req.id.clone(),
+                        jsonrpc::ErrorCode::InvalidRequest,
+                        "Cannot restart the workspace from a document with no language config"
+                            .to_string(),
+                    ));
+                    return;
+                };
                 let doc_path = doc.path();
                 let old_client_ids: Vec<usize> = doc
                     .get_all_language_servers()
@@ -943,7 +1196,11 @@ impl Application {
                         let mut doc_paths: Vec<String> = vec![];
                         for document_id in document_ids_to_refresh {
                             if let Some(doc) = self.editor.documents.remove(&document_id) {
-                                doc_paths.push(doc.path().unwrap().to_string_lossy().to_string());
+                                // Virtual documents have no path to report back;
+                                // skip them rather than panicking.
+                                if let Some(path) = doc.path() {
+                                    doc_paths.push(path.to_string_lossy().to_string());
+                                }
                             }
                         }
                         self.respond(Response::new_ok(req.id.clone(), doc_paths));

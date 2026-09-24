@@ -32,6 +32,18 @@ type ReqQueue = req_queue::ReqQueue<(String, Instant), ReqHandler>;
 pub(crate) struct Application {
     pub sender: Sender<Message>,
     req_queue: ReqQueue,
+    /// Server requests that are waiting on an answer from the editor.
+    ///
+    /// Maps the id of the request we sent to the editor back to the language server
+    /// and request id that must be answered once the user decides. `ReqHandler` is a
+    /// bare `fn` and cannot capture, so the correlation has to live here.
+    pub(crate) pending_editor_choices:
+        std::collections::HashMap<crate::msg::RequestId, (usize, crate::msg::RequestId)>,
+    /// Editor request id → (language server, `sessionId`) for a pending
+    /// `intellij/chooseAction`. Separate from `pending_editor_choices` because the
+    /// answer is a new request to the server, not a reply to one of its requests.
+    pub(crate) pending_choose_actions:
+        std::collections::HashMap<crate::msg::RequestId, (usize, i64)>,
     pub editor: Editor,
     pub jobs: Jobs,
     pub shutdown_requested: bool,
@@ -52,6 +64,8 @@ impl Application {
         Application {
             sender,
             req_queue: ReqQueue::default(),
+            pending_editor_choices: std::collections::HashMap::new(),
+            pending_choose_actions: std::collections::HashMap::new(),
             editor,
             jobs: Jobs::new(),
             shutdown_requested: false,
@@ -86,6 +100,22 @@ impl Application {
             .outgoing
             .register(R::METHOD.to_string(), params, handler);
         self.send(request.into());
+    }
+
+    /// Like [`Self::send_request`] but returns the id of the request that was sent,
+    /// so a deferred reply can be correlated back to it.
+    pub(crate) fn send_request_returning_id<R: lsp_types::request::Request>(
+        &mut self,
+        params: R::Params,
+        handler: ReqHandler,
+    ) -> crate::msg::RequestId {
+        let request = self
+            .req_queue
+            .outgoing
+            .register(R::METHOD.to_string(), params, handler);
+        let id = request.id.clone();
+        self.send(request.into());
+        id
     }
 
     pub fn send(&self, message: Message) {

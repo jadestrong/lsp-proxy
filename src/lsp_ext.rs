@@ -31,7 +31,21 @@ pub struct CustomServerCapabilitiesParams {
     pub support_inline_completion: bool,
     pub text_document_sync_kind: String, // "full" or "incremental"
     pub support_hover: bool,
+    pub support_code_lens: bool,
     pub has_any_servers: bool,
+    /// Workspace root of every language server serving this document.
+    ///
+    /// A list, not one value: a document can be served by several servers (vtsls +
+    /// eslint + tailwind) whose roots differ, and unlike the booleans above these
+    /// cannot be folded together.
+    ///
+    /// The editor needs them because `$/progress` is filed by server root, while the
+    /// editor's own notion of "the project" comes from project.el. In a monorepo those
+    /// disagree — the server root is the module (where `pom.xml` lives), project.el's
+    /// is the repository (where `.git` lives) — so a lookup keyed on the latter never
+    /// finds progress reported under the former.
+    #[serde(default)]
+    pub workspace_roots: Vec<String>,
 }
 
 impl Notification for CustomServerCapabilities {
@@ -69,6 +83,168 @@ impl Request for WorkspaceRestart {
     type Result = Option<WorkspaceRestartResponse>;
     const METHOD: &'static str = "emacs/workspaceRestart";
 }
+
+// emacs/installJavaServer
+//
+// Downloads the JetBrains IntelliJ language server, which `lsp-proxy-java`
+// requires. Lives here rather than in Emacs Lisp because the proxy already has
+// tokio (so the ~370 MB download does not block the editor) and an established
+// `$/progress` pipeline; the Emacs side is only a thin command.
+//
+// The *proxy's own* installer stays in Emacs Lisp on purpose — that one cannot
+// run here, since the proxy does not exist yet when it runs.
+#[derive(Debug)]
+pub enum InstallJavaServer {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaServerParams {
+    /// Where to place `<version>/bin/intellij-server`. Chosen by the client so the
+    /// location stays next to everything else Emacs manages.
+    pub install_dir: String,
+    /// Pin a build (e.g. "263.2689.0"); `None` resolves the latest via Open VSX.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Reinstall even when this version is already present.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaServerResult {
+    pub launcher_path: String,
+    pub version: String,
+    /// True when the requested version was already installed and nothing was
+    /// downloaded.
+    pub already_installed: bool,
+}
+
+impl Request for InstallJavaServer {
+    type Params = InstallJavaServerParams;
+    type Result = InstallJavaServerResult;
+    const METHOD: &'static str = "emacs/installJavaServer";
+}
+
+// emacs/installProgress
+//
+// Progress for a long install, reported on its own channel rather than as
+// `$/progress`. The editor files `$/progress` by project root and only renders it
+// for a buffer that is both in that project and has `lsp-proxy-mode' on, so a
+// several-hundred-megabyte download started from anywhere else would be entirely
+// silent. This goes to the echo area instead, which is visible from any buffer.
+#[derive(Debug)]
+pub enum InstallProgress {}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallProgressParams {
+    pub message: String,
+    /// Completion percentage when the phase has a measurable size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub percentage: Option<u32>,
+}
+
+impl Notification for InstallProgress {
+    type Params = InstallProgressParams;
+    const METHOD: &'static str = "emacs/installProgress";
+}
+
+// intellij/importLog
+//
+// Build-tool import progress from the IntelliJ language server (Maven/Gradle/Bazel
+// resolving a project). Mirrors the `ImportLogParams` interface in the JetBrains
+// VS Code extension's `lspClient.ts`.
+//
+// Kept separate from `window/logMessage`: an import is a discrete, long operation
+// whose outcome the user acts on (a failed import means no symbols resolve), so it
+// gets its own buffer rather than being interleaved with general server chatter.
+#[derive(Debug)]
+pub enum ImportLog {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportLogParams {
+    /// `lsp_types::MessageType`: 1 = error, 2 = warning, 3 = info.
+    ///
+    /// Optional because losing a terminal `failed` event to a strict-parse error
+    /// would be worse than rendering one line without a severity face.
+    #[serde(rename = "type", default)]
+    pub typ: Option<u8>,
+    #[serde(default)]
+    pub message: String,
+    /// Build-tool display name, e.g. "Maven" / "Gradle" / "Bazel". Set on the
+    /// `started` and `failed` events.
+    #[serde(default)]
+    pub tool: Option<String>,
+    #[serde(default)]
+    pub failed: bool,
+    #[serde(default)]
+    pub succeeded: bool,
+    /// Marks the beginning of an import; carries no message worth showing.
+    #[serde(default)]
+    pub started: bool,
+    /// Filled in by the proxy, not the server: which workspace root this import
+    /// belongs to. A monorepo runs one import per module, and their lines would
+    /// otherwise interleave in one buffer with no way to tell them apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_path: Option<String>,
+}
+
+impl Notification for ImportLog {
+    type Params = ImportLogParams;
+    const METHOD: &'static str = "intellij/importLog";
+}
+
+// intellij/chooseAction  →  emacs/chooseAction  →  workspace/executeCommand
+//
+// The IntelliJ server asks the user to pick one of several ModCommand actions. It
+// arrives as a *notification*, and the answer goes back as a fresh
+// `workspace/executeCommand` request rather than as a reply — so the session id has
+// to be held across the editor round trip.
+//
+// Note this is not `window/showMessageRequest`: that one is a request the proxy
+// replies to. Here the server expects a command invocation, which is why the two
+// cannot share a code path.
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChooseActionEntry {
+    /// Index the server identifies this entry by; not necessarily its position.
+    pub index: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChooseActionParams {
+    pub session_id: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub entries: Vec<ChooseActionEntry>,
+}
+
+#[derive(Debug)]
+pub enum ChooseAction {}
+
+impl Notification for ChooseAction {
+    type Params = ChooseActionParams;
+    const METHOD: &'static str = "intellij/chooseAction";
+}
+
+/// The editor-facing half. Result is the chosen `index`, or `None` when the user
+/// dismissed the prompt — in which case nothing is sent back to the server.
+#[derive(Debug)]
+pub enum EmacsChooseAction {}
+
+impl Request for EmacsChooseAction {
+    type Params = ChooseActionParams;
+    type Result = Option<i64>;
+    const METHOD: &'static str = "emacs/chooseAction";
+}
+
+/// Server-side command the picked entry is delivered through.
+pub const CHOOSE_MOD_COMMAND_ACTION: &str = "chooseModCommandAction";
 
 // emacs/getFiles
 #[derive(Debug)]
@@ -463,4 +639,298 @@ impl Request for ForwardRequest {
     type Params = ForwardRequestParams;
     type Result = serde_json::Value;
     const METHOD: &'static str = "emacs/forwardRequest";
+}
+
+#[cfg(test)]
+mod choose_action_tests {
+    use super::{ChooseAction, ChooseActionParams, EmacsChooseAction, CHOOSE_MOD_COMMAND_ACTION};
+    use lsp_types::notification::Notification;
+    use lsp_types::request::Request;
+
+    #[test]
+    fn method_names_match_the_protocol() {
+        assert_eq!(ChooseAction::METHOD, "intellij/chooseAction");
+        assert_eq!(EmacsChooseAction::METHOD, "emacs/chooseAction");
+        assert_eq!(CHOOSE_MOD_COMMAND_ACTION, "chooseModCommandAction");
+    }
+
+    /// The payload as the server sends it.
+    #[test]
+    fn parses_the_server_payload() {
+        let json = r#"{
+          "sessionId": 42,
+          "title": "Choose an action",
+          "entries": [{"index": 0, "name": "Introduce variable"},
+                      {"index": 1, "name": "Introduce constant"}]
+        }"#;
+        let p: ChooseActionParams = serde_json::from_str(json).unwrap();
+        assert_eq!(p.session_id, 42);
+        assert_eq!(p.title, "Choose an action");
+        assert_eq!(p.entries.len(), 2);
+        // Index 0 is a legitimate answer, not "absent".
+        assert_eq!(p.entries[0].index, 0);
+        assert_eq!(p.entries[1].name, "Introduce constant");
+    }
+
+    /// Forwarded to the editor with camelCase keys, since the Emacs handler
+    /// destructures `:entries` and each entry's `:index` / `:name`.
+    #[test]
+    fn forwards_as_camel_case() {
+        let p: ChooseActionParams =
+            serde_json::from_str(r#"{"sessionId":7,"entries":[{"index":3,"name":"x"}]}"#).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["sessionId"], 7);
+        assert!(json.get("session_id").is_none());
+        assert_eq!(json["entries"][0]["index"], 3);
+    }
+
+    /// Missing title/entries must not fail the parse and drop the notification.
+    #[test]
+    fn tolerates_a_minimal_payload() {
+        let p: ChooseActionParams = serde_json::from_str(r#"{"sessionId":1}"#).unwrap();
+        assert_eq!(p.title, "");
+        assert!(p.entries.is_empty());
+    }
+
+    #[test]
+    fn registry_routes_the_notification() {
+        let serde_json::Value::Object(map) = serde_json::json!({
+            "sessionId": 5,
+            "entries": [{"index": 0, "name": "a"}]
+        }) else {
+            unreachable!()
+        };
+        let params = crate::lsp::jsonrpc::Params::Map(map);
+        match crate::registry::NotificationFromServer::parse(ChooseAction::METHOD, params) {
+            Ok(crate::registry::NotificationFromServer::ChooseAction(p)) => {
+                assert_eq!(p.session_id, 5);
+            }
+            other => panic!("expected ChooseAction, got {other:?}"),
+        }
+    }
+
+    /// The editor answers with the index or null; null means dismissed and must
+    /// deserialize rather than error, because the proxy then sends nothing.
+    #[test]
+    fn editor_result_accepts_index_or_null() {
+        let picked: Option<i64> = serde_json::from_str("3").unwrap();
+        assert_eq!(picked, Some(3));
+        let zero: Option<i64> = serde_json::from_str("0").unwrap();
+        assert_eq!(zero, Some(0), "index 0 must survive as a real choice");
+        let dismissed: Option<i64> = serde_json::from_str("null").unwrap();
+        assert_eq!(dismissed, None);
+    }
+}
+
+#[cfg(test)]
+mod import_log_tests {
+    use super::{ImportLog, ImportLogParams};
+    use lsp_types::notification::Notification;
+
+    /// The method the JetBrains server actually sends. Getting this wrong means the
+    /// notification keeps being dropped as unhandled, which is the bug being fixed.
+    #[test]
+    fn method_matches_the_server() {
+        assert_eq!(ImportLog::METHOD, "intellij/importLog");
+    }
+
+    /// A `started` event as the server sends it: no `tool` guarantee, no message.
+    #[test]
+    fn parses_started_event() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"type":3,"message":"","started":true,"tool":"Maven"}"#)
+                .unwrap();
+        assert!(p.started);
+        assert!(!p.failed);
+        assert!(!p.succeeded);
+        assert_eq!(p.tool.as_deref(), Some("Maven"));
+    }
+
+    /// A plain progress line: only `type` and `message`, every flag absent. Absent
+    /// flags must read as false rather than failing the parse.
+    #[test]
+    fn parses_bare_progress_line() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"type":3,"message":"Resolving dependencies"}"#).unwrap();
+        assert_eq!(p.message, "Resolving dependencies");
+        assert!(!p.started && !p.failed && !p.succeeded);
+        assert_eq!(p.root_path, None);
+    }
+
+    /// A terminal failure must survive even a payload missing `message`; losing it
+    /// would leave the user with no indication that the import broke.
+    #[test]
+    fn failure_survives_a_missing_message() {
+        let p: ImportLogParams =
+            serde_json::from_str(r#"{"failed":true,"tool":"Gradle"}"#).unwrap();
+        assert!(p.failed);
+        assert_eq!(p.message, "");
+        assert_eq!(p.typ, None);
+    }
+
+    /// `rootPath` is the proxy's addition, so it must go out camelCase and must be
+    /// omitted rather than sent as null when unset.
+    #[test]
+    fn root_path_is_added_on_the_way_out() {
+        let mut p: ImportLogParams =
+            serde_json::from_str(r#"{"type":1,"message":"boom","failed":true}"#).unwrap();
+        let json = serde_json::to_value(&p).unwrap();
+        assert!(
+            json.get("rootPath").is_none(),
+            "unset rootPath must be omitted, not null"
+        );
+
+        p.root_path = Some("/repo/initial".to_string());
+        let json = serde_json::to_value(&p).unwrap();
+        assert_eq!(json["rootPath"], "/repo/initial");
+        // `type` is a reserved word in Rust; make sure the rename survives.
+        assert_eq!(json["type"], 1);
+        assert!(json.get("typ").is_none());
+    }
+
+    /// The dispatch that was returning `Unhandled` before.
+    #[test]
+    fn registry_routes_the_notification() {
+        let serde_json::Value::Object(map) =
+            serde_json::json!({"type": 3, "message": "Importing", "tool": "Maven"})
+        else {
+            unreachable!()
+        };
+        let params = crate::lsp::jsonrpc::Params::Map(map);
+        match crate::registry::NotificationFromServer::parse(ImportLog::METHOD, params) {
+            Ok(crate::registry::NotificationFromServer::ImportLog(p)) => {
+                assert_eq!(p.message, "Importing");
+            }
+            other => panic!("expected ImportLog, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod server_capabilities_tests {
+    use super::CustomServerCapabilitiesParams;
+
+    fn params() -> CustomServerCapabilitiesParams {
+        CustomServerCapabilitiesParams {
+            uri: "file:///w/src/A.java".to_string(),
+            trigger_characters: vec![],
+            support_inlay_hints: false,
+            support_document_highlight: false,
+            support_document_symbols: false,
+            support_signature_help: false,
+            support_pull_diagnostic: false,
+            support_inline_completion: false,
+            text_document_sync_kind: "incremental".to_string(),
+            support_hover: false,
+            support_code_lens: false,
+            has_any_servers: true,
+            workspace_roots: vec!["/w/initial".to_string(), "/w/complete".to_string()],
+        }
+    }
+
+    /// The key on the wire must be `workspaceRoots`: the Emacs handler destructures
+    /// by that name, so a snake_case key would silently bind nil and the mode-line
+    /// would go back to showing nothing.
+    #[test]
+    fn serializes_roots_as_camel_case() {
+        let json = serde_json::to_value(params()).unwrap();
+        assert_eq!(
+            json.get("workspaceRoots").and_then(|v| v.as_array()).map(|a| a.len()),
+            Some(2),
+            "actual keys: {:?}",
+            json.as_object().unwrap().keys().collect::<Vec<_>>()
+        );
+        assert!(json.get("workspace_roots").is_none());
+    }
+
+    /// Order is preserved, so the editor tries the servers in activation order.
+    #[test]
+    fn round_trips() {
+        let json = serde_json::to_string(&params()).unwrap();
+        let back: CustomServerCapabilitiesParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.workspace_roots, vec!["/w/initial", "/w/complete"]);
+    }
+}
+
+#[cfg(test)]
+mod install_java_server_tests {
+    use super::InstallJavaServerParams;
+
+    /// The client omits `version` entirely rather than sending JSON null: its
+    /// jsonrpc connection serializes with `:null-object nil`, so a `:null` keyword
+    /// is not a valid value there. `#[serde(default)]` is what makes the absent key
+    /// mean "latest".
+    #[test]
+    fn version_may_be_absent() {
+        let json = r#"{"installDir":"/tmp/i/","force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(json).unwrap();
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+    }
+
+    #[test]
+    fn version_may_be_present_or_explicitly_null() {
+        let pinned = r#"{"installDir":"/tmp/i/","version":"263.2689.0","force":true}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(pinned).unwrap();
+        assert_eq!(params.version.as_deref(), Some("263.2689.0"));
+        assert!(params.force);
+
+        // Tolerate an explicit null too, so a future client need not special-case it.
+        let nulled = r#"{"installDir":"/tmp/i/","version":null,"force":false}"#;
+        let params: InstallJavaServerParams = serde_json::from_str(nulled).unwrap();
+        assert_eq!(params.version, None);
+    }
+
+    /// The full wire shape, end to end.
+    ///
+    /// The proxy wraps requests in a `{uri, context, params}` envelope and the
+    /// payload lives in the nested `params`. Deserializing the payload struct
+    /// alone hides that: a flat payload still parses in isolation while failing
+    /// for real with "invalid type: null". So this parses the envelope exactly as
+    /// it arrives on stdin, then the payload out of it.
+    #[test]
+    fn parses_the_real_request_envelope() {
+        let wire = r#"{
+          "id": 3,
+          "method": "emacs/installJavaServer",
+          "params": {
+            "params": {
+              "installDir": "/Users/u/.emacs.d/.local/cache/lsp-proxy/servers/intellij/",
+              "force": false
+            }
+          }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        let params: InstallJavaServerParams = serde_json::from_value(req.params.params).unwrap();
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+        assert!(params.install_dir.ends_with("/servers/intellij/"));
+    }
+
+    /// A payload flattened into the envelope (the bug) must be recognisable rather
+    /// than silently arriving as defaults.
+    #[test]
+    fn flat_payload_is_rejected() {
+        let wire = r#"{
+          "id": 3,
+          "method": "emacs/installJavaServer",
+          "params": { "installDir": "/tmp/i/", "force": false }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        assert!(
+            req.params.params.is_null(),
+            "a flat payload leaves the nested params null"
+        );
+        assert!(serde_json::from_value::<InstallJavaServerParams>(req.params.params).is_err());
+    }
+
+    /// Only `installDir` is genuinely required; the rest default.
+    #[test]
+    fn only_install_dir_is_required() {
+        let params: InstallJavaServerParams =
+            serde_json::from_str(r#"{"installDir":"/tmp/i/"}"#).unwrap();
+        assert_eq!(params.install_dir, "/tmp/i/");
+        assert_eq!(params.version, None);
+        assert!(!params.force);
+    }
 }

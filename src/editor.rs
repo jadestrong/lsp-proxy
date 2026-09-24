@@ -14,6 +14,29 @@ use std::{
     sync::Arc,
 };
 
+/// Whether two document URIs identify the same document.
+///
+/// Exact URI equality first, which is the only correct test for virtual documents
+/// (`jar:`/`jrt:`). The path comparison is a Windows-only concession: the same file
+/// can arrive spelled with different drive-letter casing or separators.
+///
+/// It is deliberately gated on both URIs being `file:`. `uri_to_path` maps every
+/// non-`file:` URI to an empty `PathBuf`, so an ungated path comparison makes all
+/// virtual documents compare equal to each other — two different decompiled
+/// sources would resolve to whichever was opened first.
+fn uris_match(a: &Url, b: &Url) -> bool {
+    if a == b {
+        return true;
+    }
+    cfg!(target_os = "windows")
+        && a.scheme() == "file"
+        && b.scheme() == "file"
+        && {
+            let resolved = uri_to_path(a);
+            !resolved.as_os_str().is_empty() && resolved == uri_to_path(b)
+        }
+}
+
 pub struct Editor {
     pub next_document_id: DocumentId,
     pub documents: BTreeMap<DocumentId, Document>,
@@ -71,21 +94,11 @@ impl Editor {
     }
 
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
-        if cfg!(target_os = "windows") {
-            self.documents()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
-        } else {
-            self.documents().find(|doc| doc.uri() == uri)
-        }
+        self.documents().find(|doc| uris_match(doc.uri(), uri))
     }
 
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
-        if cfg!(target_os = "windows") {
-            self.documents_mut()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
-        } else {
-            self.documents_mut().find(|doc| doc.uri() == uri)
-        }
+        self.documents_mut().find(|doc| uris_match(doc.uri(), uri))
     }
 
     pub fn new_document(&mut self, uri: &Url, language: Option<&str>) -> &Document {
