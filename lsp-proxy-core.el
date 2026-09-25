@@ -416,12 +416,21 @@ picked up on the next `lsp-proxy-restart'."
   ;; buffer inside that project with the minor mode on — an install can be started
   ;; from anywhere, so it needs somewhere always visible.
   (when (eql method 'emacs/installProgress)
-    (lsp-proxy--dbind (:message message :percentage percentage) msg
+    (lsp-proxy--dbind (:label label :message message :percentage percentage) msg
       ;; Mode line only. These arrive every 700ms for several minutes; see the
       ;; commentary on `lsp-proxy--set-global-status'. The percentage is not
       ;; appended to MESSAGE — it is rendered from the structured field, and the
       ;; server deliberately leaves it out of the prose.
-      (lsp-proxy--set-global-status "IntelliJ" message percentage)))
+      ;;
+      ;; LABEL comes from the proxy rather than being assumed here: this channel
+      ;; once carried only the IntelliJ server and the name was written in, which
+      ;; then mislabelled jdtls and Lombok when they came to share it.
+      (lsp-proxy--set-global-status (or label "Install") message percentage)))
+  ;; A server says its code lenses went stale. Nothing else signals this, and the
+  ;; stale answer is usually the one a server gave while it was still starting up.
+  (when (eql method 'emacs/codeLensRefresh)
+    (when (fboundp 'lsp-proxy-codelens-refresh-all)
+      (lsp-proxy-codelens-refresh-all)))
   (when (eql method 'emacs/serverCapabilities)
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters

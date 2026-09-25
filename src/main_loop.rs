@@ -257,6 +257,14 @@ impl Application {
                             .collect();
                         Ok(json!(result))
                     }
+                    Ok(MethodCall::CodeLensRefresh) => {
+                        // The lenses the editor is showing were computed from an
+                        // answer the server now considers stale — for jdtls that is
+                        // the one it gave while the project was still importing, when
+                        // it could not resolve a single lens.
+                        self.send_notification::<lsp_ext::CodeLensRefresh>(());
+                        Ok(serde_json::Value::Null)
+                    }
                     Ok(MethodCall::RegisterCapability(params)) => {
                         // Set when a registration changes something
                         // `get_server_capabilities` reports, so the editor can be told.
@@ -355,9 +363,7 @@ impl Application {
                         if announced_capabilities_changed {
                             self.editor
                                 .documents()
-                                .filter(|doc| {
-                                    doc.language_servers().any(|ls| ls.id() == server_id)
-                                })
+                                .filter(|doc| doc.language_servers().any(|ls| ls.id() == server_id))
                                 .for_each(|doc| {
                                     self.send_notification::<lsp_ext::CustomServerCapabilities>(
                                         doc.get_server_capabilities(),
@@ -890,6 +896,12 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallLombok::METHOD => {
                 self.handle_install_lombok(req);
             }
+            Message::Request(req) if req.method == lsp_ext::GetJavaProjectRuntime::METHOD => {
+                self.handle_get_java_project_runtime(req);
+            }
+            Message::Request(req) if req.method == lsp_ext::SetJavaProjectRuntime::METHOD => {
+                self.handle_set_java_project_runtime(req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -1116,11 +1128,7 @@ impl Application {
             warn!("editor failed to answer chooseAction: {error:?}");
             return;
         }
-        let Some(index) = response
-            .result
-            .as_ref()
-            .and_then(|value| value.as_i64())
-        else {
+        let Some(index) = response.result.as_ref().and_then(|value| value.as_i64()) else {
             debug!("chooseAction dismissed; session {session_id} left unanswered");
             return;
         };
@@ -1144,10 +1152,12 @@ impl Application {
     }
 
     fn on_show_message_response(&mut self, response: msg::Response) {
-        let Some((server_id, server_request_id)) =
-            self.pending_editor_choices.remove(&response.id)
+        let Some((server_id, server_request_id)) = self.pending_editor_choices.remove(&response.id)
         else {
-            warn!("no pending showMessageRequest for response id={:?}", response.id);
+            warn!(
+                "no pending showMessageRequest for response id={:?}",
+                response.id
+            );
             return;
         };
         let Some(language_server) = self.editor.language_server_by_id(server_id) else {
@@ -1189,7 +1199,7 @@ impl Application {
         let force = params.force;
 
         tokio::spawn(async move {
-            let progress = Self::install_progress_reporter(sender.clone());
+            let progress = Self::install_progress_reporter(sender.clone(), backend.tag());
             let outcome = crate::java_install::install(
                 backend,
                 &install_dir,
@@ -1240,7 +1250,7 @@ impl Application {
         let force = params.force;
 
         tokio::spawn(async move {
-            let progress = Self::install_progress_reporter(sender.clone());
+            let progress = Self::install_progress_reporter(sender.clone(), "Lombok");
             let outcome = crate::java_install::install_lombok(&install_dir, force, progress).await;
 
             let response = match outcome {
@@ -1252,14 +1262,104 @@ impl Application {
                         already_installed,
                     },
                 ),
-                Err(err) => Response::new_err(
-                    id,
-                    jsonrpc::ErrorCode::InternalError,
-                    format!("{err:#}"),
-                ),
+                Err(err) => {
+                    Response::new_err(id, jsonrpc::ErrorCode::InternalError, format!("{err:#}"))
+                }
             };
             let _ = sender.send(response.into());
         });
+    }
+
+    fn handle_set_java_project_runtime(&mut self, req: msg::Request) {
+        let params: lsp_ext::SetJavaProjectRuntimeParams = if req.params.params.is_null() {
+            lsp_ext::SetJavaProjectRuntimeParams { java_home: None }
+        } else {
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid setJavaProjectRuntime params: {err}"),
+                    ));
+                    return;
+                }
+            }
+        };
+
+        let doc = match self.get_working_document(&req) {
+            Ok(doc) => doc,
+            Err(response) => {
+                self.respond(response);
+                return;
+            }
+        };
+
+        let Some(root_path) = Self::java_project_root(doc) else {
+            self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidRequest,
+                "Cannot set Java project JDK before this document has a workspace".to_string(),
+            ));
+            return;
+        };
+
+        match crate::java_project::set_project_runtime_override(
+            &root_path,
+            params.java_home.as_deref(),
+        ) {
+            Ok((java_home, java_version)) => self.respond(Response::new_ok(
+                req.id,
+                lsp_ext::SetJavaProjectRuntimeResult {
+                    workspace_root: root_path.to_string_lossy().to_string(),
+                    java_home: java_home.map(|path| path.to_string_lossy().to_string()),
+                    java_version,
+                },
+            )),
+            Err(error) => self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidParams,
+                error,
+            )),
+        }
+    }
+
+    fn handle_get_java_project_runtime(&mut self, req: msg::Request) {
+        let doc = match self.get_working_document(&req) {
+            Ok(doc) => doc,
+            Err(response) => {
+                self.respond(response);
+                return;
+            }
+        };
+
+        let Some(root_path) = Self::java_project_root(doc) else {
+            self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidRequest,
+                "Cannot get Java project JDK before this document has a workspace".to_string(),
+            ));
+            return;
+        };
+
+        let doc_path = doc.path();
+        let runtime = crate::java_project::project_runtime_for(&root_path, doc_path.as_deref());
+        self.respond(Response::new_ok(
+            req.id,
+            lsp_ext::GetJavaProjectRuntimeResult {
+                workspace_root: root_path.to_string_lossy().to_string(),
+                java_home: runtime
+                    .as_ref()
+                    .map(|runtime| runtime.java_home.to_string_lossy().to_string()),
+                java_version: runtime.as_ref().map(|runtime| runtime.java_version.clone()),
+                source: runtime.as_ref().map(|runtime| runtime.source.to_string()),
+                java_exec: runtime.as_ref().map(|runtime| {
+                    crate::java_project::java_executable(&runtime.java_home)
+                        .to_string_lossy()
+                        .to_string()
+                }),
+            },
+        ));
     }
 
     /// Progress callback that pushes each update to the editor's echo area.
@@ -1267,11 +1367,15 @@ impl Application {
     /// Deliberately not `$/progress`: the editor files that by project root and only
     /// renders it in a buffer that is both inside that project and has the minor mode
     /// on, so an install started from anywhere else showed nothing at all.
-    fn install_progress_reporter(sender: Sender<Message>) -> crate::java_install::ProgressFn {
+    fn install_progress_reporter(
+        sender: Sender<Message>,
+        label: &'static str,
+    ) -> crate::java_install::ProgressFn {
         Box::new(move |percentage: Option<u32>, message: String| {
             let notification = msg::Notification::new(
                 lsp_ext::InstallProgress::METHOD.to_string(),
                 lsp_ext::InstallProgressParams {
+                    label: label.to_string(),
                     message,
                     percentage,
                 },
@@ -1520,6 +1624,20 @@ impl Application {
             .flat_map(|client| Self::workspace_roots_for_doc(&client, &doc_path))
             .map(PathBuf::from)
             .collect()
+    }
+
+    fn java_project_root(doc: &Document) -> Option<PathBuf> {
+        let language_servers = doc.get_all_language_servers();
+        language_servers
+            .iter()
+            .find(|client| client.name() == "jdtls")
+            .or_else(|| {
+                language_servers
+                    .iter()
+                    .find(|client| client.name() == "intellij")
+            })
+            .or_else(|| language_servers.first())
+            .map(|client| client.root_path.clone())
     }
 
     fn workspace_roots_for_doc(client: &Arc<Client>, doc_path: &Path) -> Vec<String> {

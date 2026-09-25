@@ -11,8 +11,7 @@ use std::{sync::Arc, sync::Mutex, time::Instant};
 /// A hook registered by the Controller to kill remote processes synchronously
 /// before `process::exit()`.  Stored as a global so it is reachable from the
 /// Application thread without requiring a shared Arc between the two threads.
-static EXIT_HOOK: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> =
-    std::sync::OnceLock::new();
+static EXIT_HOOK: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 /// Register the exit hook.  Called once during Controller initialisation.
 pub fn register_exit_hook(f: impl Fn() + Send + Sync + 'static) {

@@ -20,8 +20,7 @@ pub static ENABLE_SNIPPETS: once_cell::sync::OnceCell<bool> = once_cell::sync::O
 pub static COPILOT_SERVER_NAME: once_cell::sync::OnceCell<String> =
     once_cell::sync::OnceCell::new();
 
-static REMOTE_BINARY_PATH: once_cell::sync::OnceCell<String> =
-    once_cell::sync::OnceCell::new();
+static REMOTE_BINARY_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
 
 pub fn set_max_completion_items(max_items: usize) {
     MAX_COMPLETION_ITEMS.set(max_items).ok();
@@ -211,8 +210,7 @@ pub fn default_syntax_loader() -> syntax::Configuration {
 fn timestamp_now() -> String {
     use time::macros::format_description;
     let fmt = format_description!("[year][month][day]-[hour][minute][second]");
-    let now = time::OffsetDateTime::now_local()
-        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     now.format(fmt)
         .unwrap_or_else(|_| "00000000-000000".to_string())
 }

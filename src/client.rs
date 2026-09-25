@@ -69,6 +69,62 @@ pub struct RegisteredCapability {
 /// and because nothing re-requests a push, the final analysis was lost for good.
 ///
 /// Extracted from the `initialize` capabilities literal purely so this decision
+/// Workspace-level client capabilities sent at `initialize`.
+///
+/// Extracted so the declarations can be asserted on directly: several of them are
+/// promises about behaviour implemented elsewhere, and a silent change to one is
+/// indistinguishable from the feature simply not working.
+fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
+    lsp::WorkspaceClientCapabilities {
+        configuration: Some(true),
+        did_change_configuration: Some(lsp::DynamicRegistrationClientCapabilities {
+            dynamic_registration: Some(false),
+        }),
+        workspace_folders: Some(true),
+        apply_edit: Some(true),
+        symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
+            dynamic_registration: Some(false),
+            ..Default::default()
+        }),
+        execute_command: Some(lsp::DynamicRegistrationClientCapabilities {
+            dynamic_registration: Some(false),
+        }),
+        inlay_hint: Some(lsp::InlayHintWorkspaceClientCapabilities {
+            refresh_support: Some(false),
+        }),
+        // Without this a server never tells us its lenses became
+        // available, and there is no other signal that they did: jdtls
+        // answers `textDocument/codeLens` while it is still importing,
+        // so the first (unresolved) answer would stand until the buffer
+        // was reverted by hand. Note this is the *workspace* capability,
+        // distinct from `text_document.code_lens` below.
+        code_lens: Some(lsp::CodeLensWorkspaceClientCapabilities {
+            refresh_support: Some(true),
+        }),
+        workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
+            document_changes: Some(true),
+            resource_operations: Some(vec![
+                lsp::ResourceOperationKind::Create,
+                lsp::ResourceOperationKind::Rename,
+                lsp::ResourceOperationKind::Delete,
+            ]),
+            failure_handling: Some(lsp::FailureHandlingKind::Abort),
+            normalizes_line_endings: Some(false),
+            change_annotation_support: None,
+        }),
+        did_change_watched_files: Some(lsp::DidChangeWatchedFilesClientCapabilities {
+            dynamic_registration: Some(true),
+            relative_pattern_support: Some(false),
+        }),
+        file_operations: Some(lsp::WorkspaceFileOperationsClientCapabilities {
+            will_rename: Some(true),
+            did_rename: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
 /// is covered by a test.
 fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabilities {
     lsp::PublishDiagnosticsClientCapabilities {
@@ -217,6 +273,12 @@ impl Client {
             features.map(|f| &f.support_workspace),
             doc_path,
             root_path
+        );
+        let config = crate::java_project::configure_jdtls_project_runtime(
+            &name,
+            config,
+            &root_path,
+            doc_path.map(|p| p.as_path()),
         );
 
         // Resolve path to the binary.
@@ -691,45 +753,7 @@ impl Client {
             root_uri: self.root_uri.clone(),
             initialization_options: Some(self.config.clone().unwrap_or(json!({}))),
             capabilities: lsp::ClientCapabilities {
-                workspace: Some(lsp::WorkspaceClientCapabilities {
-                    configuration: Some(true),
-                    did_change_configuration: Some(lsp::DynamicRegistrationClientCapabilities {
-                        dynamic_registration: Some(false),
-                    }),
-                    workspace_folders: Some(true),
-                    apply_edit: Some(true),
-                    symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
-                        dynamic_registration: Some(false),
-                        ..Default::default()
-                    }),
-                    execute_command: Some(lsp::DynamicRegistrationClientCapabilities {
-                        dynamic_registration: Some(false),
-                    }),
-                    inlay_hint: Some(lsp::InlayHintWorkspaceClientCapabilities {
-                        refresh_support: Some(false),
-                    }),
-                    workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
-                        document_changes: Some(true),
-                        resource_operations: Some(vec![
-                            lsp::ResourceOperationKind::Create,
-                            lsp::ResourceOperationKind::Rename,
-                            lsp::ResourceOperationKind::Delete,
-                        ]),
-                        failure_handling: Some(lsp::FailureHandlingKind::Abort),
-                        normalizes_line_endings: Some(false),
-                        change_annotation_support: None,
-                    }),
-                    did_change_watched_files: Some(lsp::DidChangeWatchedFilesClientCapabilities {
-                        dynamic_registration: Some(true),
-                        relative_pattern_support: Some(false),
-                    }),
-                    file_operations: Some(lsp::WorkspaceFileOperationsClientCapabilities {
-                        will_rename: Some(true),
-                        did_rename: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
+                workspace: Some(workspace_capabilities()),
                 text_document: Some(lsp::TextDocumentClientCapabilities {
                     completion: Some(lsp::CompletionClientCapabilities {
                         completion_item: Some(lsp::CompletionItemCapability {
@@ -1092,6 +1116,48 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::publish_diagnostics_capabilities;
+
+    /// The switch the whole "stuck on Loading" fix hangs from.
+    ///
+    /// A server only sends `workspace/codeLens/refresh` if the client says it can
+    /// handle it. jdtls answers `textDocument/codeLens` while it is still importing
+    /// — with lenses it cannot yet resolve — so without this declaration that first
+    /// answer stands forever and the editor shows placeholders until the buffer is
+    /// reverted by hand. Turning this back to false reintroduces exactly that.
+    #[test]
+    fn declares_workspace_code_lens_refresh_support() {
+        assert_eq!(
+            super::workspace_capabilities()
+                .code_lens
+                .expect("workspace.codeLens must be declared")
+                .refresh_support,
+            Some(true)
+        );
+
+        // What the server actually reads. The Rust field name is snake_case and the
+        // wire name is not, so asserting only the former would not catch a
+        // serialisation attribute going missing.
+        let json = serde_json::to_value(super::workspace_capabilities()).unwrap();
+        assert_eq!(
+            json.get("codeLens").and_then(|c| c.get("refreshSupport")),
+            Some(&serde_json::Value::Bool(true)),
+            "wire shape changed: {json}"
+        );
+    }
+
+    /// The inlay-hint refresh declaration sits right beside the code-lens one and is
+    /// deliberately the opposite; pinning both keeps a future edit from "fixing" the
+    /// wrong neighbour.
+    #[test]
+    fn does_not_declare_inlay_hint_refresh_support() {
+        assert_eq!(
+            super::workspace_capabilities()
+                .inlay_hint
+                .expect("workspace.inlayHint must be declared")
+                .refresh_support,
+            Some(false)
+        );
+    }
 
     /// Guards the fix for "diagnostics always dropped": advertising
     /// `versionSupport: true` is only honest if we actually interpret the field,

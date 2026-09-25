@@ -660,7 +660,10 @@ mod tests {
         );
         assert!(d.accept_pull_generation(g2));
         assert!(!d.accept_pull_generation(g1));
-        assert!(d.accept_pull_generation(g3), "g3 still accepted after g1 was rejected");
+        assert!(
+            d.accept_pull_generation(g3),
+            "g3 still accepted after g1 was rejected"
+        );
     }
 
     #[test]
@@ -714,7 +717,10 @@ mod tests {
     #[test]
     fn other_non_file_schemes_have_no_path() {
         assert_eq!(path_of("untitled:Untitled-1"), None);
-        assert_eq!(path_of("jdt://contents/java.base/java.lang/String.class"), None);
+        assert_eq!(
+            path_of("jdt://contents/java.base/java.lang/String.class"),
+            None
+        );
     }
 
     /// Remote documents are still plain `file:` URIs (the TRAMP prefix lives

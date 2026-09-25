@@ -111,8 +111,7 @@ fn is_pattern_in_word(
     fill_min_word_pos_arr: bool,
 ) -> bool {
     while pattern_pos < pattern_len && word_pos < word_len {
-        if pattern_low.chars().nth(pattern_pos) == word_low.chars().nth(word_pos)
-        {
+        if pattern_low.chars().nth(pattern_pos) == word_low.chars().nth(word_pos) {
             if fill_min_word_pos_arr {
                 unsafe {
                     MIN_WORD_MATCH_POS[pattern_pos] = word_pos;
@@ -132,7 +131,25 @@ fn is_separator_at_pos(value: &str, index: usize) -> bool {
     }
     matches!(
         value.chars().nth(index),
-        Some('_' | '-' | '.' | ' ' | '/' | '\\' | '\'' | '\"' | ':' | '$' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}')
+        Some(
+            '_' | '-'
+                | '.'
+                | ' '
+                | '/'
+                | '\\'
+                | '\''
+                | '\"'
+                | ':'
+                | '$'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+        )
     )
 }
 
@@ -146,10 +163,7 @@ fn is_whitespace_at_pos(value: &str, index: usize) -> bool {
 
 // Function to check if a character at a specific position in 'word' is uppercase
 fn is_upper_case_at_pos(pos: usize, word: &str, word_low: &str) -> bool {
-    if let (Some(ch), Some(ch_low)) = (
-        word.chars().nth(pos),
-        word_low.chars().nth(pos),
-    ) {
+    if let (Some(ch), Some(ch_low)) = (word.chars().nth(pos), word_low.chars().nth(pos)) {
         ch != ch_low && ch.to_ascii_uppercase() == ch
     } else {
         false

@@ -116,7 +116,6 @@ impl Controller {
         }
     }
 
-
     fn handle_message(&mut self, msg: Message, now: Instant) -> Result<()> {
         // RPC-layer heartbeat from the local RpcClient. Short-circuit before
         // we even consider remote routing or local dispatch — the whole
@@ -151,12 +150,13 @@ impl Controller {
                     // No remote manager — return a disabled status directly.
                     let resp = Response {
                         id: req.id.clone(),
-                        result: Some(serde_json::to_value(
-                            crate::lsp_ext::RemoteConnectionStatus {
+                        result: Some(
+                            serde_json::to_value(crate::lsp_ext::RemoteConnectionStatus {
                                 enabled: false,
                                 clients: vec![],
-                            },
-                        ).unwrap()),
+                            })
+                            .unwrap(),
+                        ),
                         error: None,
                     };
                     if let Err(e) = self.sender_to_emacs.send(Message::Response(resp)) {
@@ -171,9 +171,9 @@ impl Controller {
         if let Message::Request(req) = &msg {
             if req.method == lsp_ext::CheckRemoteBinary::METHOD {
                 self.register_request(req, now);
-                let connection_key = serde_json::from_value::<
-                    lsp_ext::DeployRemoteBinaryParams,
-                >(req.params.params.clone())
+                let connection_key = serde_json::from_value::<lsp_ext::DeployRemoteBinaryParams>(
+                    req.params.params.clone(),
+                )
                 .map(|p| p.connection_key)
                 .unwrap_or_default();
                 if let Some(tx) = &self.remote_task_tx {
@@ -203,9 +203,9 @@ impl Controller {
         if let Message::Request(req) = &msg {
             if req.method == lsp_ext::DeployRemoteBinary::METHOD {
                 self.register_request(req, now);
-                let connection_key = serde_json::from_value::<
-                    lsp_ext::DeployRemoteBinaryParams,
-                >(req.params.params.clone())
+                let connection_key = serde_json::from_value::<lsp_ext::DeployRemoteBinaryParams>(
+                    req.params.params.clone(),
+                )
                 .map(|p| p.connection_key)
                 .unwrap_or_default();
                 if let Some(tx) = &self.remote_task_tx {
@@ -260,7 +260,8 @@ impl Controller {
                         req.method, req.id
                     );
                     self.register_request(&req, now);
-                    self.processing_requests.insert(req.method.clone(), req.clone());
+                    self.processing_requests
+                        .insert(req.method.clone(), req.clone());
                     self.sender_for_server.send(req.into()).unwrap();
                 } else {
                     debug!(
@@ -275,7 +276,10 @@ impl Controller {
                     // This response is for a request that originated from the remote
                     // server (e.g. workspace/applyEdit). The remote server already
                     // replied to the language server without waiting, so just discard.
-                    debug!("discarding Emacs response for remote-server request id={:?}", resp.id);
+                    debug!(
+                        "discarding Emacs response for remote-server request id={:?}",
+                        resp.id
+                    );
                 } else {
                     self.sender_for_server.send(resp.into()).unwrap();
                 }
@@ -335,7 +339,10 @@ impl Controller {
         // isn't running, point at a dummy channel that never fires.
         let (_dummy_tx, dummy_rx) = bounded::<Message>(0);
         loop {
-            let remote_rx = self.remote_result_rx.clone().unwrap_or_else(|| dummy_rx.clone());
+            let remote_rx = self
+                .remote_result_rx
+                .clone()
+                .unwrap_or_else(|| dummy_rx.clone());
             select! {
                 recv(inbox) -> msg => {
                     let now = Instant::now();
@@ -446,17 +453,17 @@ impl Controller {
                         id: old_request.id.clone(),
                     },
                 );
-                self.sender_for_server.send(cancel_notification.into()).unwrap();
+                self.sender_for_server
+                    .send(cancel_notification.into())
+                    .unwrap();
             }
         }
 
         let duplicate_id = {
             let entries = self.req_queue.incoming.entries();
-            entries
-                .iter()
-                .find_map(|(id, (method, _, _))| {
-                    (&request.method == method).then(|| (*id).to_owned())
-                })
+            entries.iter().find_map(|(id, (method, _, _))| {
+                (&request.method == method).then(|| (*id).to_owned())
+            })
         };
 
         if let Some(id) = duplicate_id {
@@ -476,35 +483,37 @@ impl Controller {
     pub(crate) fn respond(&mut self, response: Response) {
         let id = response.id.clone();
 
-        let (method, duration) = if let Some((method, start, _)) =
-            self.req_queue.incoming.complete(&id)
-        {
-            if let Some(err) = &response.error {
-                if err.message.starts_with("server panicked") {
-                    error!("{}, check the log", err.message)
+        let (method, duration) =
+            if let Some((method, start, _)) = self.req_queue.incoming.complete(&id) {
+                if let Some(err) = &response.error {
+                    if err.message.starts_with("server panicked") {
+                        error!("{}, check the log", err.message)
+                    }
                 }
-            }
 
-            let duration = start.elapsed();
-            info!("handled {} - ({}) in {:0.2?}", method, response.id, duration);
+                let duration = start.elapsed();
+                info!(
+                    "handled {} - ({}) in {:0.2?}",
+                    method, response.id, duration
+                );
 
-            self.sender_to_emacs.send(response.into()).unwrap();
+                self.sender_to_emacs.send(response.into()).unwrap();
 
-            (method, Some(duration))
-        } else {
-            debug!(
-                "received response({:?}), but request had been canceled",
-                response.id
-            );
+                (method, Some(duration))
+            } else {
+                debug!(
+                    "received response({:?}), but request had been canceled",
+                    response.id
+                );
 
-            let method = self
-                .processing_requests
-                .iter()
-                .find(|(_, req)| req.id == id)
-                .map(|(method, _)| method.clone());
+                let method = self
+                    .processing_requests
+                    .iter()
+                    .find(|(_, req)| req.id == id)
+                    .map(|(method, _)| method.clone());
 
-            (method.unwrap_or_default(), None)
-        };
+                (method.unwrap_or_default(), None)
+            };
 
         if let Some(processing_request) = self.processing_requests.get_mut(&method) {
             if processing_request.id == id {

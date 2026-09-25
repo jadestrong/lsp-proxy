@@ -4,8 +4,8 @@ fn main() {
     // Prefer a user-supplied protoc if $PROTOC is set; otherwise fall back to
     // the bundled binary so the crate builds without a system install.
     if std::env::var_os("PROTOC").is_none() {
-        let protoc_path = protoc_bin_vendored::protoc_bin_path()
-            .expect("protoc-bin-vendored binary not found");
+        let protoc_path =
+            protoc_bin_vendored::protoc_bin_path().expect("protoc-bin-vendored binary not found");
         std::env::set_var("PROTOC", protoc_path);
     }
 

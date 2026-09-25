@@ -115,17 +115,15 @@ pub fn envelope_stdio() -> (Connection, IoThreads) {
     let last_msg_for_watchdog = last_msg.clone();
     thread::Builder::new()
         .name("remote-idle-watchdog".into())
-        .spawn(move || {
-            loop {
-                thread::sleep(std::time::Duration::from_secs(15));
-                let idle = now_secs().saturating_sub(last_msg_for_watchdog.load(Ordering::Relaxed));
-                if idle >= IDLE_EXIT_SECS {
-                    info!(
-                        "remote server idle for {idle}s (threshold {IDLE_EXIT_SECS}s), \
+        .spawn(move || loop {
+            thread::sleep(std::time::Duration::from_secs(15));
+            let idle = now_secs().saturating_sub(last_msg_for_watchdog.load(Ordering::Relaxed));
+            if idle >= IDLE_EXIT_SECS {
+                info!(
+                    "remote server idle for {idle}s (threshold {IDLE_EXIT_SECS}s), \
                          local lsp-proxy likely dead — exiting"
-                    );
-                    std::process::exit(0);
-                }
+                );
+                std::process::exit(0);
             }
         })
         .expect("spawn idle watchdog");
@@ -220,9 +218,7 @@ fn write_loop(receiver: Receiver<Message>) -> std::io::Result<()> {
         stdout.write_all(&message_len.to_le_bytes())?;
         buf.clear();
         buf.reserve(message_len as usize);
-        envelope
-            .encode(&mut buf)
-            .map_err(std::io::Error::other)?;
+        envelope.encode(&mut buf).map_err(std::io::Error::other)?;
         stdout.write_all(&buf)?;
         stdout.flush()?;
     }
@@ -254,9 +250,9 @@ fn envelope_to_message(envelope: Envelope) -> Result<Message> {
                 params,
             }))
         }
-        envelope::Payload::Response(_) => {
-            Err(anyhow::anyhow!("server should not receive response payloads"))
-        }
+        envelope::Payload::Response(_) => Err(anyhow::anyhow!(
+            "server should not receive response payloads"
+        )),
     }
 }
 
@@ -271,10 +267,7 @@ fn message_to_envelope(msg: Message) -> Result<Envelope> {
             let error = error.map(|e| RpcError {
                 code: e.code.code() as i32,
                 message: e.message,
-                data: e
-                    .data
-                    .as_ref()
-                    .and_then(|d| serde_json::to_vec(d).ok()),
+                data: e.data.as_ref().and_then(|d| serde_json::to_vec(d).ok()),
             });
             Ok(Envelope {
                 id: None,
@@ -420,10 +413,7 @@ mod tests {
     fn request_id_to_u32_handles_numbers_and_strings() {
         assert_eq!(request_id_to_u32(&RequestId::from(0)), Some(0));
         assert_eq!(request_id_to_u32(&RequestId::from(42)), Some(42));
-        assert_eq!(
-            request_id_to_u32(&RequestId::from("abc".to_string())),
-            None
-        );
+        assert_eq!(request_id_to_u32(&RequestId::from("abc".to_string())), None);
     }
 
     const FAKE_HOME: &str = "/home/user";
@@ -475,10 +465,7 @@ mod tests {
             "textDocument": { "uri": "file://~/src/main.rs" }
         });
         normalize_uri_in_json_with_home(&mut json, home());
-        assert_eq!(
-            json["textDocument"]["uri"],
-            "file:///home/user/src/main.rs"
-        );
+        assert_eq!(json["textDocument"]["uri"], "file:///home/user/src/main.rs");
     }
 
     #[test]

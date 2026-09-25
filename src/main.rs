@@ -15,6 +15,7 @@ mod error;
 mod fuzzy;
 mod handlers;
 mod java_install;
+mod java_project;
 mod job;
 mod large_file_manager;
 mod logging;
@@ -32,8 +33,8 @@ mod utils;
 use anyhow::{Context, Result};
 use args::Args;
 use config::{
-    initialize_config_file, initialize_log_file, set_enable_bytecode, set_max_completion_items,
-    set_enable_snippets, set_max_diagnostics_push,
+    initialize_config_file, initialize_log_file, set_enable_bytecode, set_enable_snippets,
+    set_max_completion_items, set_max_diagnostics_push,
 };
 use log::{error, info};
 use logging::init_tracing;
@@ -112,7 +113,11 @@ fn try_main() -> Result<()> {
     info!(
         "Server starting... (version: {}, mode: {})",
         env!("CARGO_PKG_VERSION"),
-        if remote_server { "remote-server" } else { "stdio" }
+        if remote_server {
+            "remote-server"
+        } else {
+            "stdio"
+        }
     );
     if remote_server {
         with_extra_thread("LspProxy", run_remote_server)?;

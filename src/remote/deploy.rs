@@ -141,9 +141,9 @@ async fn download_release_on_remote(
     if tmpdir.is_empty() {
         anyhow::bail!("mktemp -d returned an empty path");
     }
-    let archive  = format!("{tmpdir}/archive.tar.gz");
+    let archive = format!("{tmpdir}/archive.tar.gz");
     let extracted = format!("{tmpdir}/emacs-lsp-proxy");
-    let cleanup  = format!("rm -rf {}", shell_escape(&tmpdir));
+    let cleanup = format!("rm -rf {}", shell_escape(&tmpdir));
 
     // 2. Ensure the destination directory exists.
     on_progress(format!("Creating remote directory {parent}..."));
@@ -187,7 +187,7 @@ async fn download_release_on_remote(
         "command -v curl >/dev/null 2>&1 && \
          curl -fSL {url} -o {archive} || \
          wget -q -O {archive} {url}",
-        url     = shell_escape(&url),
+        url = shell_escape(&url),
         archive = shell_escape(&archive),
     );
     let dl_cmd = format!("sh -c {}", shell_escape(&dl_script));
@@ -267,7 +267,7 @@ async fn download_release_on_remote(
     on_progress(format!("Installing to {remote_path}..."));
     let install_script = format!(
         "mv {src} {dest} && chmod +x {dest}",
-        src  = shell_escape(&extracted),
+        src = shell_escape(&extracted),
         dest = shell_escape(remote_path),
     );
     let output = conn
@@ -293,10 +293,7 @@ async fn download_release_on_remote(
 /// Priority: global `emacs-lsp-proxy` in PATH first, then `remote_path`.
 /// Returns the command/path to use, or `Err` if neither location has a
 /// matching binary — the caller should then ask the user to run a deploy.
-pub async fn check_binary_available(
-    conn: &SshConnection,
-    remote_path: &str,
-) -> Result<String> {
+pub async fn check_binary_available(conn: &SshConnection, remote_path: &str) -> Result<String> {
     match check_remote_binary(conn, "emacs-lsp-proxy").await? {
         RemoteBinaryStatus::VersionMatch => {
             info!("using global emacs-lsp-proxy on remote (v{EXPECTED_VERSION})");
@@ -390,7 +387,9 @@ pub async fn deploy_with_progress(
     on_progress("Verifying installed binary...".to_string());
     match check_remote_binary(conn, remote_path).await? {
         RemoteBinaryStatus::VersionMatch => {
-            on_progress(format!("✓ Deploy successful: {remote_path} v{EXPECTED_VERSION}."));
+            on_progress(format!(
+                "✓ Deploy successful: {remote_path} v{EXPECTED_VERSION}."
+            ));
             Ok(remote_path.to_string())
         }
         other => Err(anyhow!(

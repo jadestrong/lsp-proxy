@@ -1,5 +1,5 @@
 use super::{jsonrpc, Error, Result};
-use crate::{msg::RequestId, logging::LspLogger};
+use crate::{logging::LspLogger, msg::RequestId};
 use anyhow::Context;
 use log::error;
 use serde::{Deserialize, Serialize};
@@ -57,7 +57,7 @@ impl Transport {
         let notify = Arc::new(Notify::new());
 
         let logger = LspLogger::new(name.clone(), Some(id as u32));
-        
+
         let transport = Self {
             id,
             name,
@@ -304,7 +304,7 @@ impl Transport {
 
         // Log the received message with structured logging
         logger.log_response(msg);
-        
+
         let output: serde_json::Result<ServerMessage> = serde_json::from_str(msg);
 
         Ok(output?)
@@ -365,9 +365,7 @@ impl Transport {
                 ),
             };
         } else {
-            error!(
-                "Discarding Language Server response without a request (id={id:?})"
-            );
+            error!("Discarding Language Server response without a request (id={id:?})");
         }
 
         Ok(())
@@ -403,7 +401,8 @@ impl Transport {
         if let Some(method) = LspLogger::extract_method(&request) {
             self.logger.log_request(&method, &request);
         } else {
-            self.logger.log_debug(&format!("Sending message: {}", &request));
+            self.logger
+                .log_debug(&format!("Sending message: {}", &request));
         }
 
         // send the headers
