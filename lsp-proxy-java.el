@@ -39,7 +39,12 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'compile)
+(require 'json)
+(require 'project)
+(require 'seq)
 (require 'subr-x)
+(require 'url-handlers)
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-core)
 
@@ -47,6 +52,8 @@
 ;; Defined in `lsp-proxy.el', which requires this file rather than the other
 ;; way round; only ever reached through `lsp-proxy-java-editor-command-alist'.
 (declare-function lsp-proxy-rename "lsp-proxy")
+(declare-function lsp-proxy-workspace-restart "lsp-proxy")
+(declare-function dape "dape" (config &optional skip-compile))
 (defvar lsp-proxy-mode)
 
 ;;; State
@@ -86,10 +93,6 @@ server-known file of its own, so borrow one from another active buffer)."
 
 (defcustom lsp-proxy-java-class-file-contents-server-name "jdtls"
   "Name of the language server that answers `java/classFileContents'.
-
-The same server answers this file's other forwarded extension methods
-\(`java/buildWorkspace', `java/organizeImports' and the rest), so this is
-the one place that names it.
 
 Must match the `[language-server.<name>]' section in `languages.toml'.
 A name is needed at all only because `emacs/forwardRequest' routes by
@@ -787,6 +790,832 @@ shim calls `python' instead."
      ((< major min)
       (format "a JDK %d+, but %s is Java %d" min exe major)))))
 
+;;; Project JDK selection
+
+(defun lsp-proxy-java--jdk-home-p (directory)
+  "Return non-nil when DIRECTORY looks like a full JDK home."
+  (and (stringp directory)
+       (file-directory-p directory)
+       (file-executable-p (expand-file-name
+                           (if (eq system-type 'windows-nt) "bin/java.exe" "bin/java")
+                           directory))
+       (file-executable-p (expand-file-name
+                           (if (eq system-type 'windows-nt) "bin/javac.exe" "bin/javac")
+                           directory))))
+
+(defun lsp-proxy-java--jdk-major-version (directory)
+  "Return the Java major version provided by DIRECTORY, or nil."
+  (let ((release-file (expand-file-name "release" directory)))
+    (when (file-readable-p release-file)
+      (with-temp-buffer
+        (insert-file-contents release-file)
+        (goto-char (point-min))
+        (when (re-search-forward "^JAVA_VERSION=\"\\(?:1\\.\\)?\\([0-9]+\\)" nil t)
+          (match-string 1))))))
+
+(defun lsp-proxy-java--java-home-from-path ()
+  "Infer a JDK home from the real `java' executable on PATH."
+  (when-let* ((java (executable-find "java"))
+              (real-java (file-truename java))
+              (_ (not (and (eq system-type 'darwin)
+                           (string= real-java "/usr/bin/java"))))
+              (home (file-name-directory
+                     (directory-file-name
+                      (file-name-directory real-java)))))
+    (and (lsp-proxy-java--jdk-home-p home)
+         (directory-file-name (expand-file-name home)))))
+
+(defun lsp-proxy-java--sdkman-jdk-homes ()
+  "Return JDK homes installed by SDKMAN."
+  (let ((root (expand-file-name "~/.sdkman/candidates/java/")))
+    (when (file-directory-p root)
+      (seq-filter
+       #'lsp-proxy-java--jdk-home-p
+       (directory-files root t directory-files-no-dot-files-regexp)))))
+
+(defun lsp-proxy-java--macos-jdk-homes ()
+  "Return JDK homes reported by macOS `java_home'."
+  (when (file-executable-p "/usr/libexec/java_home")
+    (with-temp-buffer
+      (call-process "/usr/libexec/java_home" nil (list t t) nil "-V")
+      (let (homes)
+        (goto-char (point-min))
+        (while (re-search-forward "\\(/[^\n]+/Contents/Home\\)[[:space:]]*$" nil t)
+          (push (string-trim (match-string 1)) homes))
+        (seq-filter #'lsp-proxy-java--jdk-home-p homes)))))
+
+(defun lsp-proxy-java--installed-jdk-homes ()
+  "Return known local JDK homes for project JDK selection."
+  (delete-dups
+   (seq-filter
+    #'lsp-proxy-java--jdk-home-p
+    (append
+     (list (getenv "JAVA_HOME")
+           (lsp-proxy-java--java-home-from-path))
+     (lsp-proxy-java--sdkman-jdk-homes)
+     (when (eq system-type 'darwin)
+       (lsp-proxy-java--macos-jdk-homes))))))
+
+(defun lsp-proxy-java--jdk-choice-label (home)
+  "Return a minibuffer label for JDK HOME."
+  (format "Java %s  %s"
+          (or (lsp-proxy-java--jdk-major-version home) "?")
+          (abbreviate-file-name home)))
+
+(defun lsp-proxy-java--read-project-jdk ()
+  "Read a project JDK home from known installs or direct input."
+  (let* ((homes (lsp-proxy-java--installed-jdk-homes))
+         (choices (mapcar (lambda (home)
+                            (cons (lsp-proxy-java--jdk-choice-label home) home))
+                          homes))
+         (choice (completing-read "Project JDK: " choices nil nil)))
+    (or (cdr (assoc choice choices))
+        (read-directory-name "Project JDK directory: " choice nil t))))
+
+;;;###autoload
+(defun lsp-proxy-java-select-project-jdk (&optional clear)
+  "Select a project JDK for the current Java workspace.
+
+With prefix argument CLEAR, clear the manual choice and return to automatic
+project JDK detection.  The choice affects the Java project runtime model and
+editor-launched run/debug sessions; it never changes the JDK used to launch
+the language server itself."
+  (interactive "P")
+  (unless (and (bound-and-true-p lsp-proxy-mode) buffer-file-name)
+    (user-error "Open a Java project buffer with lsp-proxy-mode enabled first"))
+  (lsp-proxy--ensure-connection)
+  (let* ((home (unless clear
+                 (directory-file-name
+                  (expand-file-name (lsp-proxy-java--read-project-jdk)))))
+         (result
+          (jsonrpc-request
+           lsp-proxy--connection 'emacs/setJavaProjectRuntime
+           (lsp-proxy--build-params (if clear nil (list :javaHome home))))))
+    (if clear
+        (message "[lsp-proxy] Cleared project JDK for %s"
+                 (abbreviate-file-name (plist-get result :workspaceRoot)))
+      (message "[lsp-proxy] Project JDK for %s: Java %s at %s"
+               (abbreviate-file-name (plist-get result :workspaceRoot))
+               (or (plist-get result :javaVersion) "?")
+               (plist-get result :javaHome)))
+    (when (y-or-n-p "Restart this workspace now so language servers use the new project JDK? ")
+      (lsp-proxy-workspace-restart))))
+
+(defun lsp-proxy-java--project-java-executable (&optional uri)
+  "Return the Project JDK's `java' executable for URI, or nil.
+The proxy owns the detection rules so run/debug launch code stays aligned
+with the JDK sent to jdtls during initialization.  URI, when non-nil, selects
+the document context explicitly instead of relying on the current buffer."
+  (when (bound-and-true-p lsp-proxy-mode)
+    (condition-case nil
+        (let* ((params (lsp-proxy--build-params nil))
+               (params (if uri
+                           (plist-put params :textDocument (list :uri uri))
+                         params))
+               (_ (lsp-proxy--ensure-connection))
+               (result (jsonrpc-request
+                        lsp-proxy--connection 'emacs/getJavaProjectRuntime
+                        params)))
+          (plist-get result :javaExec))
+      (jsonrpc-error nil)
+      (user-error nil))))
+
+;;; Build, run and test
+
+(defcustom lsp-proxy-java-maven-default-task "test"
+  "Default task offered by `lsp-proxy-java-build' in Maven projects."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-gradle-default-task "test"
+  "Default task offered by `lsp-proxy-java-build' in Gradle projects."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-main-arguments nil
+  "Program arguments passed by `lsp-proxy-java-run-main'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-main-jvm-arguments nil
+  "JVM arguments passed by `lsp-proxy-java-run-main'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-main-environment nil
+  "Environment entries added only to `lsp-proxy-java-run-main' processes.
+Each entry has the form `NAME=VALUE'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-test-jvm-arguments nil
+  "JVM arguments passed by `lsp-proxy-java-run-test'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-test-environment nil
+  "Environment entries added only to `lsp-proxy-java-run-test' processes.
+Each entry has the form `NAME=VALUE'."
+  :type '(repeat string)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-junit-console-jar
+  (expand-file-name "java/junit-platform-console-standalone.jar"
+                    lsp-proxy-install-dir)
+  "JUnit Platform Console standalone JAR used by `lsp-proxy-java-run-test'."
+  :type 'file
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-junit-maven-root
+  "https://repo1.maven.org/maven2"
+  "Maven repository root for the JUnit Platform Console artifact."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-junit-version nil
+  "Optional JUnit Platform Console version installed by lsp-proxy.
+When nil, select a version according to
+`lsp-proxy-java-junit-release-line'."
+  :type '(choice (const :tag "Latest release" nil)
+                 (string :tag "Pinned version"))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-junit-release-line 'java-8-compatible
+  "JUnit release line selected when `lsp-proxy-java-junit-version' is nil."
+  :type '(choice (const :tag "Newest Java 8-compatible 1.x release"
+                        java-8-compatible)
+                 (const :tag "Latest release of any major" latest))
+  :group 'lsp-proxy)
+
+(defconst lsp-proxy-java--build-files
+  '("pom.xml" "build.gradle" "build.gradle.kts" "settings.gradle" "settings.gradle.kts")
+  "Files that identify a Java build root.")
+
+(defconst lsp-proxy-java--junit-artifact
+  "org/junit/platform/junit-platform-console-standalone"
+  "Maven path of the JUnit Platform Console standalone artifact.")
+
+(defun lsp-proxy-java--current-file ()
+  "Return the current saved Java file."
+  (unless buffer-file-name
+    (user-error "The current buffer is not visiting a Java file"))
+  (when (buffer-modified-p)
+    (save-buffer))
+  (unless (file-readable-p buffer-file-name)
+    (user-error "Save the current Java file before running it"))
+  (expand-file-name buffer-file-name))
+
+(defun lsp-proxy-java--project-root ()
+  "Return the current project root or `default-directory'."
+  (if-let* ((project (project-current nil)))
+      (expand-file-name (project-root project))
+    (expand-file-name default-directory)))
+
+(defun lsp-proxy-java--nearest-build-root (&optional file)
+  "Return the nearest Java build root for FILE or the current buffer."
+  (let* ((start (file-name-directory (expand-file-name (or file buffer-file-name default-directory))))
+         (project-root (file-name-as-directory (lsp-proxy-java--project-root)))
+         (root (locate-dominating-file
+                start
+                (lambda (dir)
+                  (or (seq-some
+                       (lambda (name) (file-exists-p (expand-file-name name dir)))
+                       lsp-proxy-java--build-files)
+                      (equal (file-name-as-directory (expand-file-name dir))
+                             project-root))))))
+    (file-name-as-directory (expand-file-name (or root project-root)))))
+
+(defun lsp-proxy-java--build-system (root)
+  "Return ROOT's build system, either `maven' or `gradle'."
+  (cond
+   ((file-exists-p (expand-file-name "pom.xml" root)) 'maven)
+   ((or (file-exists-p (expand-file-name "build.gradle" root))
+        (file-exists-p (expand-file-name "build.gradle.kts" root))
+        (file-exists-p (expand-file-name "settings.gradle" root))
+        (file-exists-p (expand-file-name "settings.gradle.kts" root)))
+    'gradle)
+   (t (user-error "No Maven or Gradle build found under %s"
+                  (abbreviate-file-name root)))))
+
+(defun lsp-proxy-java--build-command-prefix (root build-system)
+  "Return the command prefix for BUILD-SYSTEM rooted at ROOT."
+  (let* ((windows (eq system-type 'windows-nt))
+         (mvnw (expand-file-name (if windows "mvnw.cmd" "mvnw") root))
+         (gradlew (expand-file-name (if windows "gradlew.bat" "gradlew") root)))
+    (pcase build-system
+      ('maven (if (file-exists-p mvnw)
+                  (if (file-executable-p mvnw) (list mvnw) (list "sh" mvnw))
+                (list "mvn")))
+      ('gradle (if (file-exists-p gradlew)
+                   (if (file-executable-p gradlew) (list gradlew) (list "sh" gradlew))
+                 (list "gradle"))))))
+
+(defun lsp-proxy-java--command-available-p (program)
+  "Return non-nil when PROGRAM can be executed."
+  (if (file-name-absolute-p program)
+      (file-executable-p program)
+    (executable-find program)))
+
+(defun lsp-proxy-java--shell-command (arguments)
+  "Return shell command for ARGUMENTS."
+  (mapconcat #'shell-quote-argument arguments " "))
+
+(defun lsp-proxy-java--default-task (build-system)
+  "Return the default task for BUILD-SYSTEM."
+  (pcase build-system
+    ('maven lsp-proxy-java-maven-default-task)
+    ('gradle lsp-proxy-java-gradle-default-task)))
+
+(defun lsp-proxy-java--url-text (url)
+  "Retrieve URL synchronously and return its trimmed text."
+  (with-temp-buffer
+    (url-insert-file-contents url)
+    (string-trim (buffer-string))))
+
+(defun lsp-proxy-java--junit-metadata-url ()
+  "Return the configured JUnit Maven metadata URL."
+  (format "%s/%s/maven-metadata.xml"
+          (string-remove-suffix "/" lsp-proxy-java-junit-maven-root)
+          lsp-proxy-java--junit-artifact))
+
+(defun lsp-proxy-java--metadata-release (metadata)
+  "Return the release version declared by Maven METADATA XML."
+  (when (string-match
+         "<release>[[:space:]]*\\([^<[:space:]]+\\)[[:space:]]*</release>"
+         metadata)
+    (match-string 1 metadata)))
+
+(defun lsp-proxy-java--metadata-versions (metadata)
+  "Return all versions declared by Maven METADATA XML."
+  (let ((position 0)
+        versions)
+    (while (string-match
+            "<version>[[:space:]]*\\([^<[:space:]]+\\)[[:space:]]*</version>"
+            metadata position)
+      (push (match-string 1 metadata) versions)
+      (setq position (match-end 0)))
+    (nreverse versions)))
+
+(defun lsp-proxy-java--latest-java-8-junit-version (metadata)
+  "Return the newest stable Java 8-compatible JUnit version in METADATA."
+  (car
+   (sort
+    (seq-filter
+     (lambda (version)
+       (string-match-p "\\`1\\.[0-9]+\\.[0-9]+\\'" version))
+     (lsp-proxy-java--metadata-versions metadata))
+    (lambda (first second) (version< second first)))))
+
+(defun lsp-proxy-java--valid-artifact-version-p (version)
+  "Return non-nil when VERSION is safe in an artifact URL and file name."
+  (and (stringp version)
+       (string-match-p "\\`[0-9A-Za-z][0-9A-Za-z._-]*\\'" version)))
+
+(defun lsp-proxy-java--junit-release ()
+  "Return release metadata for the configured JUnit Console version."
+  (let* ((metadata
+          (unless lsp-proxy-java-junit-version
+            (lsp-proxy-java--url-text
+             (lsp-proxy-java--junit-metadata-url))))
+         (version
+          (or lsp-proxy-java-junit-version
+              (pcase lsp-proxy-java-junit-release-line
+                ('java-8-compatible
+                 (lsp-proxy-java--latest-java-8-junit-version metadata))
+                ('latest (lsp-proxy-java--metadata-release metadata))
+                (_ (user-error "Unsupported JUnit release line: %s"
+                               lsp-proxy-java-junit-release-line)))))
+         (artifact "junit-platform-console-standalone"))
+    (unless (lsp-proxy-java--valid-artifact-version-p version)
+      (user-error "Could not determine a valid JUnit release version"))
+    (let ((url
+           (format "%s/%s/%s/%s-%s.jar"
+                   (string-remove-suffix "/" lsp-proxy-java-junit-maven-root)
+                   lsp-proxy-java--junit-artifact version artifact version)))
+      (list :version version :url url :checksum-url (concat url ".sha256")))))
+
+(defun lsp-proxy-java--junit-version-file ()
+  "Return the version marker associated with the configured JUnit JAR."
+  (concat (expand-file-name lsp-proxy-java-junit-console-jar) ".version"))
+
+(defun lsp-proxy-java--read-version-file (file)
+  "Return the first line of FILE, or nil."
+  (when (file-readable-p file)
+    (with-temp-buffer
+      (insert-file-contents file)
+      (string-trim (buffer-string)))))
+
+(defun lsp-proxy-java--file-sha256 (file)
+  "Return the hexadecimal SHA-256 digest for FILE."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally file)
+    (secure-hash 'sha256 (current-buffer))))
+
+(defun lsp-proxy-java--expected-sha256 (checksum-text)
+  "Return the SHA-256 digest found in CHECKSUM-TEXT."
+  (let ((case-fold-search t))
+    (when (string-match "\\b\\([[:xdigit:]]\\{64\\}\\)\\b" checksum-text)
+      (downcase (match-string 1 checksum-text)))))
+
+(defun lsp-proxy-java--verify-download (file checksum-text)
+  "Verify FILE against CHECKSUM-TEXT or signal an error."
+  (let ((expected (lsp-proxy-java--expected-sha256 checksum-text))
+        (actual (lsp-proxy-java--file-sha256 file)))
+    (unless expected
+      (error "Release source did not provide a valid SHA-256 checksum"))
+    (unless (string-equal expected actual)
+      (error "SHA-256 mismatch for %s" (file-name-nondirectory file)))
+    actual))
+
+(defun lsp-proxy-java--install-junit-release (release)
+  "Install JUnit Console RELEASE transactionally."
+  (let* ((destination (expand-file-name lsp-proxy-java-junit-console-jar))
+         (parent (file-name-directory destination)))
+    (make-directory parent t)
+    (let* ((temporary (make-temp-file (expand-file-name ".junit-stage-" parent) t))
+           (jar (expand-file-name "junit-console.jar" temporary)))
+      (unwind-protect
+          (progn
+            (url-copy-file (plist-get release :url) jar t)
+            (lsp-proxy-java--verify-download
+             jar
+             (lsp-proxy-java--url-text (plist-get release :checksum-url)))
+            (rename-file jar destination t)
+            (with-temp-file (lsp-proxy-java--junit-version-file)
+              (insert (plist-get release :version) "\n")))
+        (when (file-exists-p temporary)
+          (delete-directory temporary t))))))
+
+;;;###autoload
+(defun lsp-proxy-java-install-junit (&optional force)
+  "Install or upgrade the JUnit Platform Console standalone JAR.
+With prefix argument FORCE, reinstall an unchanged release."
+  (interactive "P")
+  (let* ((release (lsp-proxy-java--junit-release))
+         (version (plist-get release :version))
+         (installed (lsp-proxy-java--read-version-file
+                     (lsp-proxy-java--junit-version-file))))
+    (if (and (not force) (equal installed version)
+             (file-regular-p (expand-file-name lsp-proxy-java-junit-console-jar)))
+        (message "[lsp-proxy] JUnit Platform Console %s is already installed" version)
+      (message "[lsp-proxy] Installing JUnit Platform Console %s..." version)
+      (lsp-proxy-java--install-junit-release release)
+      (message "[lsp-proxy] Installed JUnit Platform Console %s" version))))
+
+(defun lsp-proxy-java--project-runtime (&optional uri)
+  "Return the Project JDK decision plist for URI, or nil."
+  (when (bound-and-true-p lsp-proxy-mode)
+    (condition-case nil
+        (let* ((params (lsp-proxy--build-params nil))
+               (params (if uri
+                           (plist-put params :textDocument (list :uri uri))
+                         params))
+               (_ (lsp-proxy--ensure-connection)))
+          (jsonrpc-request lsp-proxy--connection 'emacs/getJavaProjectRuntime params))
+      (jsonrpc-error nil)
+      (user-error nil))))
+
+(defun lsp-proxy-java--project-java-home (&optional uri)
+  "Return the Project JDK home for URI, or nil."
+  (plist-get (lsp-proxy-java--project-runtime uri) :javaHome))
+
+(defun lsp-proxy-java--environment-value (name environment)
+  "Return NAME's value from ENVIRONMENT."
+  (when-let* ((entry (seq-find
+                      (lambda (item) (string-prefix-p (concat name "=") item))
+                      environment)))
+    (substring entry (1+ (length name)))))
+
+(defun lsp-proxy-java--environment-with-java-home (java-home &optional environment)
+  "Return ENVIRONMENT adjusted to use JAVA-HOME."
+  (let* ((environment (copy-sequence (or environment process-environment)))
+         (old-java-home (lsp-proxy-java--environment-value "JAVA_HOME" environment))
+         (old-java-bin (and old-java-home
+                            (directory-file-name
+                             (expand-file-name "bin" old-java-home))))
+         (java-bin (directory-file-name (expand-file-name "bin" java-home)))
+         (path-parts (split-string
+                      (or (lsp-proxy-java--environment-value "PATH" environment) "")
+                      path-separator t))
+         (filtered-path
+          (seq-remove
+           (lambda (path)
+             (let ((expanded (directory-file-name (expand-file-name path))))
+               (or (equal expanded java-bin)
+                   (and old-java-bin (equal expanded old-java-bin)))))
+           path-parts))
+         (remaining-environment
+          (seq-remove
+           (lambda (entry)
+             (or (string-prefix-p "JAVA_HOME=" entry)
+                 (string-prefix-p "PATH=" entry)))
+           environment)))
+    (cons (concat "JAVA_HOME=" java-home)
+          (cons (concat "PATH="
+                        (mapconcat #'identity
+                                   (cons java-bin filtered-path)
+                                   path-separator))
+                remaining-environment))))
+
+(defun lsp-proxy-java--parse-environment-entry (entry)
+  "Return ENTRY as a (NAME . VALUE) pair."
+  (unless (and (stringp entry)
+               (string-match "\\`\\([[:alpha:]_][[:alnum:]_]*\\)=\\(.*\\)\\'" entry))
+    (user-error "Invalid process environment entry: %S" entry))
+  (cons (match-string 1 entry) (match-string 2 entry)))
+
+(defun lsp-proxy-java--environment-merge (environment additions)
+  "Return ENVIRONMENT with NAME=VALUE ADDITIONS applied."
+  (let ((result (copy-sequence environment)))
+    (dolist (entry additions result)
+      (let* ((parsed (lsp-proxy-java--parse-environment-entry entry))
+             (prefix (concat (car parsed) "=")))
+        (setq result
+              (cons entry
+                    (seq-remove
+                     (lambda (existing) (string-prefix-p prefix existing))
+                     result)))))))
+
+(defun lsp-proxy-java--environment-plist (entries)
+  "Return ENTRIES as a DAP environment plist."
+  (let (result)
+    (dolist (entry entries result)
+      (pcase-let ((`(,name . ,value)
+                   (lsp-proxy-java--parse-environment-entry entry)))
+        (setq result (plist-put result (intern (concat ":" name)) value))))))
+
+(defun lsp-proxy-java--project-process-environment (&optional uri additions)
+  "Return process environment for URI with Project JDK and ADDITIONS."
+  (let ((environment (copy-sequence process-environment)))
+    (when-let* ((java-home (lsp-proxy-java--project-java-home uri)))
+      (setq environment (lsp-proxy-java--environment-with-java-home java-home environment)))
+    (lsp-proxy-java--environment-merge environment additions)))
+
+(defun lsp-proxy-java--start-compilation (arguments root operation &optional env-additions uri)
+  "Run ARGUMENTS from ROOT, labelling the buffer with OPERATION.
+Apply ENV-ADDITIONS and the Project JDK only to the spawned process."
+  (let* ((program (car arguments))
+         (default-directory root)
+         (process-environment
+          (lsp-proxy-java--project-process-environment uri env-additions))
+         (command (lsp-proxy-java--shell-command arguments))
+         (buffer-name (format "*lsp-proxy java %s:%s*"
+                              operation
+                              (file-name-nondirectory
+                               (directory-file-name root)))))
+    (unless (lsp-proxy-java--command-available-p program)
+      (user-error "Build program is not executable: %s" program))
+    (compilation-start command 'compilation-mode
+                       (lambda (_mode) buffer-name))))
+
+;;;###autoload
+(defun lsp-proxy-java-build (&optional task)
+  "Build the current Maven or Gradle module using TASK."
+  (interactive)
+  (let* ((root (lsp-proxy-java--nearest-build-root))
+         (build-system (lsp-proxy-java--build-system root))
+         (task (or task
+                   (read-string "Task and arguments: "
+                                (lsp-proxy-java--default-task build-system))))
+         (arguments (append (lsp-proxy-java--build-command-prefix root build-system)
+                            (split-string-and-unquote task))))
+    (lsp-proxy-java--start-compilation arguments root "build")))
+
+;;;###autoload
+(defun lsp-proxy-java-test ()
+  "Run the current Maven or Gradle module's standard test task."
+  (interactive)
+  (lsp-proxy-java-build "test"))
+
+(defun lsp-proxy-java--jdtls-execute (command arguments)
+  "Ask jdtls to execute COMMAND with ARGUMENTS."
+  (lsp-proxy--request
+   'workspace/executeCommand
+   (lsp-proxy--build-params
+    (list :command command :arguments (vconcat arguments)))))
+
+(defun lsp-proxy-java--jdtls-classpaths (file scope)
+  "Return FILE classpaths for SCOPE from jdtls."
+  (let* ((response
+          (lsp-proxy-java--jdtls-execute
+           "java.project.getClasspaths"
+           (list (lsp-proxy--path-to-uri file)
+                 (json-serialize (list :scope scope)))))
+         (classpaths (plist-get response :classpaths))
+         (root (lsp-proxy-java--nearest-build-root file))
+         (paths (mapcar (lambda (path)
+                          (if (file-name-absolute-p path)
+                              path
+                            (expand-file-name path root)))
+                        (seq-filter #'stringp (append classpaths nil)))))
+    (unless paths
+      (user-error "jdtls returned no %s classpath for %s"
+                  scope (file-name-nondirectory file)))
+    paths))
+
+(defun lsp-proxy-java--jdtls-test-file-p (file)
+  "Return non-nil when jdtls identifies FILE as a test."
+  (let ((answer
+         (lsp-proxy-java--jdtls-execute
+          "java.project.isTestFile"
+          (list (lsp-proxy--path-to-uri file)))))
+    (not (memq answer '(nil :json-false json-false)))))
+
+(defun lsp-proxy-java--document-symbols ()
+  "Return document symbols for the current buffer."
+  (or (lsp-proxy--request
+       'textDocument/documentSymbol
+       (lsp-proxy--build-params
+        (list :textDocument (lsp-proxy--TextDocumentIdentifier))))
+      (user-error "No document symbols returned")))
+
+(defun lsp-proxy-java--imenu-name (entry)
+  "Return lsp-proxy imenu ENTRY's name."
+  (and (vectorp entry) (> (length entry) 0) (aref entry 0)))
+
+(defun lsp-proxy-java--imenu-content (entry)
+  "Return lsp-proxy imenu ENTRY's content plist."
+  (and (vectorp entry) (> (length entry) 1) (aref entry 1)))
+
+(defun lsp-proxy-java--imenu-position-line (entry)
+  "Return ENTRY's zero-based position line, or nil."
+  (when-let* ((pos (plist-get (lsp-proxy-java--imenu-content entry) :Position)))
+    (aref pos 0)))
+
+(defun lsp-proxy-java--imenu-group (entry)
+  "Return ENTRY's child group as a list, or nil."
+  (when-let* ((group (plist-get (lsp-proxy-java--imenu-content entry) :Group)))
+    (append group nil)))
+
+(defun lsp-proxy-java--imenu-group-names (entries)
+  "Return names that have group entries in ENTRIES."
+  (delq nil
+        (mapcar (lambda (entry)
+                  (and (lsp-proxy-java--imenu-group entry)
+                       (lsp-proxy-java--imenu-name entry)))
+                entries)))
+
+(defun lsp-proxy-java--imenu-group-start-line (entries index)
+  "Return group start line for ENTRIES at INDEX.
+lsp-proxy's symbol response contains separate same-name position and group
+entries; use the position entry to recover the declaration line."
+  (let* ((entry (nth index entries))
+         (name (lsp-proxy-java--imenu-name entry))
+         (previous (and (> index 0) (nth (1- index) entries)))
+         (next (nth (1+ index) entries)))
+    (or (and previous
+             (equal name (lsp-proxy-java--imenu-name previous))
+             (lsp-proxy-java--imenu-position-line previous))
+        (and next
+             (equal name (lsp-proxy-java--imenu-name next))
+             (lsp-proxy-java--imenu-position-line next))
+        (seq-some #'lsp-proxy-java--imenu-position-line
+                  (lsp-proxy-java--imenu-group entry)))))
+
+(defun lsp-proxy-java--imenu-next-group-line (entries index start-line)
+  "Return the next sibling group line after INDEX and START-LINE."
+  (cl-loop for sibling in (nthcdr (1+ index) entries)
+           for sibling-index from (1+ index)
+           for line = (and (lsp-proxy-java--imenu-group sibling)
+                           (lsp-proxy-java--imenu-group-start-line entries sibling-index))
+           when (and line (> line start-line))
+           return line))
+
+(defun lsp-proxy-java--type-path-at-line (entries line)
+  "Return the nested Java type path in imenu ENTRIES containing LINE."
+  (cl-loop for entry in entries
+           for index from 0
+           for children = (lsp-proxy-java--imenu-group entry)
+           for start = (and children
+                            (lsp-proxy-java--imenu-group-start-line entries index))
+           for end = (and start
+                          (lsp-proxy-java--imenu-next-group-line entries index start))
+           when (and children start
+                     (<= start line)
+                     (or (null end) (< line end)))
+           return (cons (lsp-proxy-java--imenu-name entry)
+                        (lsp-proxy-java--type-path-at-line children line))))
+
+(defun lsp-proxy-java--first-type-path (entries)
+  "Return the first nested Java type path found in imenu ENTRIES."
+  (seq-some
+   (lambda (entry)
+     (when-let* ((children (lsp-proxy-java--imenu-group entry)))
+       (cons (lsp-proxy-java--imenu-name entry)
+             (lsp-proxy-java--first-type-path children))))
+   entries))
+
+(defun lsp-proxy-java--method-at-line (entries line)
+  "Return the nearest method-like imenu entry in ENTRIES at LINE."
+  (let ((group-names (lsp-proxy-java--imenu-group-names entries))
+        best-name
+        best-line)
+    (dolist (entry entries best-name)
+      (let ((entry-line (lsp-proxy-java--imenu-position-line entry))
+            (name (lsp-proxy-java--imenu-name entry)))
+        (when (and entry-line
+                   (<= entry-line line)
+                   (not (member name group-names))
+                   (or (null best-line) (>= entry-line best-line)))
+          (setq best-line entry-line
+                best-name (car (split-string name "(" t))))))))
+
+(defun lsp-proxy-java--package-name ()
+  "Return the current buffer's Java package name, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (when (re-search-forward
+           "^[[:space:]]*package[[:space:]]+\\([[:alnum:]_.]+\\)[[:space:]]*;"
+           nil t)
+      (match-string-no-properties 1))))
+
+(defun lsp-proxy-java--current-target ()
+  "Return a plist with current Java :class and optional :method."
+  (let* ((symbols (lsp-proxy-java--document-symbols))
+         (line (1- (line-number-at-pos)))
+         (type-path (or (lsp-proxy-java--type-path-at-line symbols line)
+                        (lsp-proxy-java--first-type-path symbols))))
+    (unless type-path
+      (user-error "No Java type found in the current file"))
+    (let* ((package (or (lsp-proxy-java--package-name) ""))
+           (full-type-path type-path)
+           (class-type-path (if (and package (equal (car type-path) package))
+                                (cdr type-path)
+                              type-path))
+           (type-name (mapconcat #'identity class-type-path "$"))
+           (class-name (if (string-empty-p package)
+                           type-name
+                         (concat package "." type-name))))
+      (list :class class-name
+            :method (lsp-proxy-java--method-at-line
+                     (or (seq-reduce
+                          (lambda (children name)
+                            (seq-some
+                             (lambda (entry)
+                               (and (equal name (lsp-proxy-java--imenu-name entry))
+                                    (lsp-proxy-java--imenu-group entry)))
+                             children))
+                          full-type-path symbols)
+                         symbols)
+                     line)))))
+
+(defun lsp-proxy-java--java-program (&optional uri)
+  "Return the Java executable used for project processes."
+  (or (lsp-proxy-java--project-java-executable uri)
+      (executable-find "java")
+      (user-error "Could not find a Java executable")))
+
+(defun lsp-proxy-java--main-command (file classpaths class)
+  "Return a command that runs CLASS from FILE with CLASSPATHS."
+  (append (list (lsp-proxy-java--java-program (lsp-proxy--path-to-uri file)))
+          lsp-proxy-java-main-jvm-arguments
+          (list "-cp" (mapconcat #'identity classpaths path-separator)
+                class)
+          lsp-proxy-java-main-arguments))
+
+(defun lsp-proxy-java--junit-console-launch (classpaths class method)
+  "Return JUnit Console arguments for CLASSPATHS, CLASS and METHOD."
+  (let ((jar (expand-file-name lsp-proxy-java-junit-console-jar)))
+    (unless (file-regular-p jar)
+      (user-error
+       "JUnit Console JAR is missing: %s; run M-x lsp-proxy-java-install-junit or configure `lsp-proxy-java-junit-console-jar'"
+       jar))
+    (list jar "execute"
+          "--class-path" (mapconcat #'identity classpaths path-separator)
+          (if method "--select-method" "--select-class")
+          (if method (concat class "#" method) class))))
+
+(defun lsp-proxy-java--junit-command (file classpaths class method)
+  "Return a command that runs JUnit CLASS or METHOD from FILE."
+  (append (list (lsp-proxy-java--java-program (lsp-proxy--path-to-uri file)))
+          lsp-proxy-java-test-jvm-arguments
+          (list "-jar")
+          (lsp-proxy-java--junit-console-launch classpaths class method)))
+
+(defun lsp-proxy-java--ensure-dape-launch ()
+  "Ensure lsp-proxy's Java Dape launch helpers are available."
+  (unless (and (or (featurep 'dape) (require 'dape nil t))
+               (fboundp 'lsp-proxy-java--dape-populate-launch-config))
+    (user-error "Dape support is not available; load `dape' before `lsp-proxy-java'")))
+
+(defun lsp-proxy-java--dape-base-config (file root environment)
+  "Return common Dape launch config for FILE in ROOT with ENVIRONMENT."
+  (let ((env (lsp-proxy-java--environment-plist environment)))
+    (append
+     (list 'host "127.0.0.1"
+           'lsp-proxy-uri (lsp-proxy--path-to-uri file)
+           'fn #'lsp-proxy-java--dape-populate-launch-config
+           :type lsp-proxy-java-dape-adapter-id
+           :request "launch"
+           :cwd root)
+     (when env (list :env env)))))
+
+;;;###autoload
+(defun lsp-proxy-java-run-main (&optional debug)
+  "Run the current Java class.
+With prefix argument DEBUG, launch it through Dape when available."
+  (interactive "P")
+  (if debug
+      (let* ((file (lsp-proxy-java--current-file))
+             (root (lsp-proxy-java--nearest-build-root file))
+             (target (lsp-proxy-java--current-target)))
+        (lsp-proxy-java--ensure-dape-launch)
+        (dape
+         (append
+          (lsp-proxy-java--dape-base-config
+           file root lsp-proxy-java-main-environment)
+          (list :mainClass (plist-get target :class)
+                :args (combine-and-quote-strings
+                       lsp-proxy-java-main-arguments)
+                :vmArgs (combine-and-quote-strings
+                         lsp-proxy-java-main-jvm-arguments)))))
+    (let* ((file (lsp-proxy-java--current-file))
+           (target (lsp-proxy-java--current-target))
+           (class (plist-get target :class))
+           (classpaths (lsp-proxy-java--jdtls-classpaths file "runtime"))
+           (command (lsp-proxy-java--main-command file classpaths class)))
+      (lsp-proxy-java--start-compilation
+       command (lsp-proxy-java--nearest-build-root file)
+       "main" lsp-proxy-java-main-environment
+       (lsp-proxy--path-to-uri file)))))
+
+;;;###autoload
+(defun lsp-proxy-java-run-test (&optional debug)
+  "Run the JUnit class or method at point.
+With prefix argument DEBUG, launch it through Dape when available."
+  (interactive "P")
+  (let ((file (lsp-proxy-java--current-file)))
+    (unless (lsp-proxy-java--jdtls-test-file-p file)
+      (user-error "jdtls does not identify the current file as a test"))
+    (let* ((root (lsp-proxy-java--nearest-build-root file))
+           (target (lsp-proxy-java--current-target))
+           (classpaths (lsp-proxy-java--jdtls-classpaths file "test"))
+           (launch (lsp-proxy-java--junit-console-launch
+                    classpaths
+                    (plist-get target :class)
+                    (plist-get target :method))))
+      (if debug
+          (progn
+            (lsp-proxy-java--ensure-dape-launch)
+            (dape
+             (append
+              (lsp-proxy-java--dape-base-config
+               file root lsp-proxy-java-test-environment)
+              (list :mainClass "org.junit.platform.console.ConsoleLauncher"
+                    :classPaths (vector (car launch))
+                    :args (combine-and-quote-strings (cdr launch))
+                    :vmArgs (combine-and-quote-strings
+                             lsp-proxy-java-test-jvm-arguments)))))
+        (let ((command
+               (lsp-proxy-java--junit-command
+                file classpaths
+                (plist-get target :class)
+                (plist-get target :method))))
+         (lsp-proxy-java--start-compilation
+          command root "test" lsp-proxy-java-test-environment
+          (lsp-proxy--path-to-uri file)))))))
+
 
 
 (defun lsp-proxy-java--backend (name)
@@ -1323,7 +2152,7 @@ Used to insert a heading when output starts coming from a different module.")
   "Server `CompileWorkspaceStatus' codes and what to tell the user.
 0 = cancelled, 1 = succeeded, 2 = failed, 3 = succeeded with errors.")
 
-(defun lsp-proxy-java--forward (method params &optional notify)
+(defun lsp-proxy-java--forward (method params &optional notify server-name)
   "Send METHOD with PARAMS to the Java backend, returning its result.
 
 Routed through a real project document, because the proxy dispatches by opened
@@ -1331,7 +2160,8 @@ document and a decompiled buffer is not one — the same reason
 `lsp-proxy-java--routing-uri' exists for content fetches.
 
 With NOTIFY non-nil the method is sent as a notification and nil is
-returned; use it for methods the server declares as notifications."
+returned; use it for methods the server declares as notifications.
+SERVER-NAME defaults to `lsp-proxy-java-class-file-contents-server-name'."
   (unless lsp-proxy--connection
     (user-error "lsp-proxy is not running"))
   (let ((doc-uri (or (lsp-proxy-java--routing-uri)
@@ -1340,7 +2170,8 @@ returned; use it for methods the server declares as notifications."
      lsp-proxy--connection 'emacs/forwardRequest
      (list :uri doc-uri
            :params (list :uri doc-uri
-                         :serverName lsp-proxy-java-class-file-contents-server-name
+                         :serverName (or server-name
+                                         lsp-proxy-java-class-file-contents-server-name)
                          :method method
                          :params params
                          :notify (if notify t :json-false))))))
@@ -1601,6 +2432,7 @@ while a self-installed one is found on PATH like any other server."
 (declare-function lsp-proxy-java--dape-resolve-uri "lsp-proxy-java")
 (declare-function lsp-proxy-java--dape-resolve-launch "lsp-proxy-java")
 (declare-function lsp-proxy-java--dape-populate-launch-config "lsp-proxy-java")
+(declare-function lsp-proxy-java--project-java-executable "lsp-proxy-java")
 
 (defcustom lsp-proxy-java-dape-adapter-id "intellij_jvm"
   "The `:type'/DAP `adapterID' the backend's debug endpoint is addressed by.
@@ -1677,17 +2509,19 @@ roots and working directory — with CONFIG's own values passed along as
 VS Code extension's `resolveJvmLaunchConfig' (`dap.ts') does, and the
 reason it is one call rather than several: every fragment a client has
 to remember to copy is a fragment it can silently drop."
-    (let ((paths (lsp-proxy-java--dape-execute-command
-                  "intellij.java.resolveLaunch"
-                  (lsp-proxy-java--dape-compact
-                   (list :uri uri
-                         :cwd (plist-get config :cwd)
-                         :overrides
-                         (lsp-proxy-java--dape-compact
-                          (list :classPaths (plist-get config :classPaths)
-                                :modulePaths (plist-get config :modulePaths)
-                                :moduleName (plist-get config :moduleName)
-                                :javaExec (plist-get config :javaExec))))))))
+    (let* ((java-exec (or (plist-get config :javaExec)
+                          (lsp-proxy-java--project-java-executable uri)))
+           (paths (lsp-proxy-java--dape-execute-command
+                   "intellij.java.resolveLaunch"
+                   (lsp-proxy-java--dape-compact
+                    (list :uri uri
+                          :cwd (plist-get config :cwd)
+                          :overrides
+                          (lsp-proxy-java--dape-compact
+                           (list :classPaths (plist-get config :classPaths)
+                                 :modulePaths (plist-get config :modulePaths)
+                                 :moduleName (plist-get config :moduleName)
+                                 :javaExec java-exec)))))))
       ;; Already merged with the overrides sent above, so this is copied
       ;; rather than combined with whatever CONFIG had.
       (setq config (plist-put config :classPaths (or (plist-get paths :classpath) [])))

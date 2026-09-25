@@ -7,7 +7,6 @@ pub mod ssh;
 
 pub use router::RemoteConnectionManager;
 
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RemoteType {
     Ssh,

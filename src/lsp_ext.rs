@@ -175,6 +175,64 @@ impl Request for InstallLombok {
     const METHOD: &'static str = "emacs/installLombok";
 }
 
+// emacs/setJavaProjectRuntime
+//
+// Records a per-workspace project JDK override. This is deliberately separate
+// from the JDK that launches the language server itself: jdtls receives it as
+// `settings.java.configuration.runtimes` during initialize, and Java run/debug
+// helpers use it as their launch JVM.
+#[derive(Debug)]
+pub enum SetJavaProjectRuntime {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetJavaProjectRuntimeParams {
+    /// A JDK home to use for the current workspace, or `None` to clear the manual
+    /// override and return to automatic project detection.
+    #[serde(default)]
+    pub java_home: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetJavaProjectRuntimeResult {
+    pub workspace_root: String,
+    pub java_home: Option<String>,
+    pub java_version: Option<String>,
+}
+
+impl Request for SetJavaProjectRuntime {
+    type Params = SetJavaProjectRuntimeParams;
+    type Result = SetJavaProjectRuntimeResult;
+    const METHOD: &'static str = "emacs/setJavaProjectRuntime";
+}
+
+// emacs/getJavaProjectRuntime
+//
+// Reports the current Project JDK decision for the active workspace. This is used
+// by Java launch/debug helpers so a process started from the editor runs on the
+// same Project JDK that jdtls sees.
+#[derive(Debug)]
+pub enum GetJavaProjectRuntime {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetJavaProjectRuntimeResult {
+    pub workspace_root: String,
+    pub java_home: Option<String>,
+    pub java_version: Option<String>,
+    /// "manual" when set by `emacs/setJavaProjectRuntime', "detected" when inferred
+    /// from project files, or `None` when no Project JDK could be resolved.
+    pub source: Option<String>,
+    pub java_exec: Option<String>,
+}
+
+impl Request for GetJavaProjectRuntime {
+    type Params = ();
+    type Result = GetJavaProjectRuntimeResult;
+    const METHOD: &'static str = "emacs/getJavaProjectRuntime";
+}
+
 // emacs/installProgress
 //
 // Progress for a long install, reported on its own channel rather than as
@@ -188,6 +246,12 @@ pub enum InstallProgress {}
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallProgressParams {
+    /// Short name of what is being installed, for the mode-line indicator.
+    ///
+    /// Sent rather than assumed by the editor: this channel started out carrying
+    /// only the IntelliJ server, and the client hard-coded that name — which then
+    /// mislabelled every other install that came to share the channel.
+    pub label: String,
     pub message: String,
     /// Completion percentage when the phase has a measurable size.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,6 +261,24 @@ pub struct InstallProgressParams {
 impl Notification for InstallProgress {
     type Params = InstallProgressParams;
     const METHOD: &'static str = "emacs/installProgress";
+}
+
+// emacs/codeLensRefresh
+//
+// A server told us its code lenses may be stale (`workspace/codeLens/refresh`), so
+// whatever the editor is showing should be fetched again.
+//
+// Deliberately parameterless, like the LSP request it relays: the protocol says
+// nothing about *which* documents are affected, and a refresh arrives about once per
+// project import. Re-fetching every buffer that shows lenses is cheaper to get right
+// than scoping it by workspace root and being subtly wrong about which buffers
+// belong to which server.
+#[derive(Debug)]
+pub enum CodeLensRefresh {}
+
+impl Notification for CodeLensRefresh {
+    type Params = ();
+    const METHOD: &'static str = "emacs/codeLensRefresh";
 }
 
 // intellij/importLog
@@ -1231,7 +1313,9 @@ mod server_capabilities_tests {
     fn serializes_roots_as_camel_case() {
         let json = serde_json::to_value(params()).unwrap();
         assert_eq!(
-            json.get("workspaceRoots").and_then(|v| v.as_array()).map(|a| a.len()),
+            json.get("workspaceRoots")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
             Some(2),
             "actual keys: {:?}",
             json.as_object().unwrap().keys().collect::<Vec<_>>()
@@ -1419,7 +1503,10 @@ mod jdtls_notification_tests {
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["type"], "Error");
         assert!(json.get("typ").is_none());
-        assert_eq!(serde_json::from_value::<LanguageStatusParams>(json).unwrap(), p);
+        assert_eq!(
+            serde_json::from_value::<LanguageStatusParams>(json).unwrap(),
+            p
+        );
     }
 
     /// Only `Error` and `Warning` say anything about severity; every lifecycle name
@@ -1457,7 +1544,10 @@ mod jdtls_notification_tests {
             !out.failed,
             "an Error status is a severity, not a terminal import failure"
         );
-        assert!(!out.succeeded, "jdtls has no terminal import-succeeded event");
+        assert!(
+            !out.succeeded,
+            "jdtls has no terminal import-succeeded event"
+        );
         assert!(
             !out.started,
             "a started line discards the message, which is the only content here"
@@ -1807,5 +1897,47 @@ mod install_lombok_tests {
         .unwrap();
         assert!(json.contains("\"jarPath\""), "{json}");
         assert!(json.contains("\"alreadyInstalled\":true"), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod code_lens_refresh_notification_tests {
+    use super::{CodeLensRefresh, InstallProgressParams};
+    use lsp_types::notification::Notification as _;
+
+    /// The wire contract with `lsp-proxy-core.el`'s notification dispatcher, which
+    /// matches on this symbol. A rename here fails nothing at compile time and
+    /// silently stops the editor refreshing its lenses.
+    #[test]
+    fn the_refresh_notification_method_name_is_stable() {
+        assert_eq!(CodeLensRefresh::METHOD, "emacs/codeLensRefresh");
+    }
+
+    /// Progress now says what is being installed. The editor used to hard-code
+    /// "IntelliJ" for this channel, which mislabelled every install that later came
+    /// to share it (jdtls, Lombok).
+    #[test]
+    fn install_progress_carries_a_label() {
+        let json = serde_json::to_string(&InstallProgressParams {
+            label: "Lombok".into(),
+            message: "Downloading Lombok (1 / 2 MB)".into(),
+            percentage: Some(44),
+        })
+        .unwrap();
+        assert!(json.contains(r#""label":"Lombok""#), "{json}");
+
+        let back: InstallProgressParams = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.label, "Lombok");
+        assert_eq!(back.percentage, Some(44));
+
+        // A phase with no measurable size omits the percentage rather than sending
+        // a null the editor would have to special-case.
+        let json = serde_json::to_string(&InstallProgressParams {
+            label: "jdtls".into(),
+            message: "Resolving jdtls 1.61.0".into(),
+            percentage: None,
+        })
+        .unwrap();
+        assert!(!json.contains("percentage"), "{json}");
     }
 }

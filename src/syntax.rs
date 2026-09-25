@@ -275,7 +275,7 @@ where
             || !matches!(features.support_workspace, SupportWorkspace::Bool(false))
             || !features.library_directories.is_empty()
             || !features.config_files.is_empty();
-        
+
         let features = if has_non_default_fields {
             LanguageServerFeatureConfiguration::Features {
                 only_features: features.only.clone(),
@@ -412,7 +412,11 @@ impl Loader {
         })
     }
 
-    pub fn language_config_for_file_name(&self, path: &Path, language: Option<&str>) -> Option<Arc<LanguageConfiguration>> {
+    pub fn language_config_for_file_name(
+        &self,
+        path: &Path,
+        language: Option<&str>,
+    ) -> Option<Arc<LanguageConfiguration>> {
         // Find all the language configurations that match this file name
         // or a suffix of the file name.
         let configuration_id = self

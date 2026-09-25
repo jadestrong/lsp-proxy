@@ -99,9 +99,7 @@ impl RemoteConnectionManager {
             // remote process died. Evict the zombie so the code below spawns
             // a fresh tunnel instead of handing back a guaranteed-to-fail
             // client for the rest of the session.
-            warn!(
-                "RPC client for {connection_key} is dead; evicting and reconnecting"
-            );
+            warn!("RPC client for {connection_key} is dead; evicting and reconnecting");
             clients.remove(&connection_key);
             // A dead RPC client typically means the SSH child exited; the
             // master socket may also have gone stale. Force a fresh SSH
@@ -116,29 +114,23 @@ impl RemoteConnectionManager {
         // is available.  If not, notify Emacs so the user can trigger a manual
         // deploy and abort this connection attempt.
         let fallback_path = crate::config::remote_binary_path();
-        let binary_cmd = match deploy::check_binary_available(
-            ssh_connection.as_ref(),
-            fallback_path,
-        )
-        .await
-        {
-            Ok(cmd) => cmd,
-            Err(e) => {
-                warn!("remote binary unavailable for {connection_key}: {e}");
-                self.send_deploy_needed_notification(
-                    &connection_key,
-                    &e.to_string(),
-                    fallback_path,
-                );
-                return Err(anyhow!(
-                    "remote binary unavailable for {connection_key}: {e}"
-                ));
-            }
-        };
+        let binary_cmd =
+            match deploy::check_binary_available(ssh_connection.as_ref(), fallback_path).await {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    warn!("remote binary unavailable for {connection_key}: {e}");
+                    self.send_deploy_needed_notification(
+                        &connection_key,
+                        &e.to_string(),
+                        fallback_path,
+                    );
+                    return Err(anyhow!(
+                        "remote binary unavailable for {connection_key}: {e}"
+                    ));
+                }
+            };
 
-        let lsp_process = ssh_connection
-            .start_remote_lsp_proxy(&binary_cmd)
-            .await?;
+        let lsp_process = ssh_connection.start_remote_lsp_proxy(&binary_cmd).await?;
 
         let stream = SshRpcStream::from_child_stdio(
             lsp_process.stdin,
@@ -287,9 +279,7 @@ impl RemoteConnectionManager {
                     self.extract_uri_from_params(&req.params.params)
                 }
             }
-            Message::Notification(notif) => {
-                self.extract_uri_from_params(&notif.params.params)
-            }
+            Message::Notification(notif) => self.extract_uri_from_params(&notif.params.params),
             _ => None,
         }
     }

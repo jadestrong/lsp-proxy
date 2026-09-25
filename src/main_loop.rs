@@ -963,6 +963,12 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallLombok::METHOD => {
                 self.handle_install_lombok(req);
             }
+            Message::Request(req) if req.method == lsp_ext::GetJavaProjectRuntime::METHOD => {
+                self.handle_get_java_project_runtime(req);
+            }
+            Message::Request(req) if req.method == lsp_ext::SetJavaProjectRuntime::METHOD => {
+                self.handle_set_java_project_runtime(req);
+            }
             Message::Request(req) => {
                 // After shutdown, reject any requests.
                 if self.shutdown_requested {
@@ -1157,7 +1163,7 @@ impl Application {
         let force = params.force;
 
         tokio::spawn(async move {
-            let progress = Self::install_progress_reporter(sender.clone());
+            let progress = Self::install_progress_reporter(sender.clone(), backend.tag());
             let outcome = crate::java_install::install(
                 backend,
                 &install_dir,
@@ -1206,7 +1212,7 @@ impl Application {
         let force = params.force;
 
         tokio::spawn(async move {
-            let progress = Self::install_progress_reporter(sender.clone());
+            let progress = Self::install_progress_reporter(sender.clone(), "Lombok");
             let outcome = crate::java_install::install_lombok(&install_dir, force, progress).await;
 
             let response = match outcome {
@@ -1228,11 +1234,102 @@ impl Application {
         });
     }
 
-    fn install_progress_reporter(sender: Sender<Message>) -> crate::java_install::ProgressFn {
+    fn handle_set_java_project_runtime(&mut self, req: msg::Request) {
+        let params: lsp_ext::SetJavaProjectRuntimeParams = if req.params.params.is_null() {
+            lsp_ext::SetJavaProjectRuntimeParams { java_home: None }
+        } else {
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid setJavaProjectRuntime params: {err}"),
+                    ));
+                    return;
+                }
+            }
+        };
+
+        let doc = match self.get_working_document(&req) {
+            Ok(doc) => doc,
+            Err(response) => {
+                self.respond(response);
+                return;
+            }
+        };
+        let Some(root_path) = Self::java_project_root(doc) else {
+            self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidRequest,
+                "Cannot set Java project JDK before this document has a workspace".to_string(),
+            ));
+            return;
+        };
+
+        match crate::java_project::set_project_runtime_override(&root_path, params.java_home.as_deref()) {
+            Ok((java_home, java_version)) => self.respond(Response::new_ok(
+                req.id,
+                lsp_ext::SetJavaProjectRuntimeResult {
+                    workspace_root: root_path.to_string_lossy().to_string(),
+                    java_home: java_home.map(|path| path.to_string_lossy().to_string()),
+                    java_version,
+                },
+            )),
+            Err(error) => self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidParams,
+                error,
+            )),
+        }
+    }
+
+    fn handle_get_java_project_runtime(&mut self, req: msg::Request) {
+        let doc = match self.get_working_document(&req) {
+            Ok(doc) => doc,
+            Err(response) => {
+                self.respond(response);
+                return;
+            }
+        };
+        let Some(root_path) = Self::java_project_root(doc) else {
+            self.respond(Response::new_err(
+                req.id,
+                jsonrpc::ErrorCode::InvalidRequest,
+                "Cannot get Java project JDK before this document has a workspace".to_string(),
+            ));
+            return;
+        };
+
+        let doc_path = doc.path();
+        let runtime = crate::java_project::project_runtime_for(&root_path, doc_path.as_deref());
+        self.respond(Response::new_ok(
+            req.id,
+            lsp_ext::GetJavaProjectRuntimeResult {
+                workspace_root: root_path.to_string_lossy().to_string(),
+                java_home: runtime
+                    .as_ref()
+                    .map(|runtime| runtime.java_home.to_string_lossy().to_string()),
+                java_version: runtime.as_ref().map(|runtime| runtime.java_version.clone()),
+                source: runtime.as_ref().map(|runtime| runtime.source.to_string()),
+                java_exec: runtime.as_ref().map(|runtime| {
+                    crate::java_project::java_executable(&runtime.java_home)
+                        .to_string_lossy()
+                        .to_string()
+                }),
+            },
+        ));
+    }
+
+    fn install_progress_reporter(
+        sender: Sender<Message>,
+        label: &'static str,
+    ) -> crate::java_install::ProgressFn {
         Box::new(move |percentage: Option<u32>, message: String| {
             let notification = msg::Notification::new(
                 lsp_ext::InstallProgress::METHOD.to_string(),
                 lsp_ext::InstallProgressParams {
+                    label: label.to_string(),
                     message,
                     percentage,
                 },

@@ -20,7 +20,12 @@ pub fn truncate_preview(s: &str, max_bytes: usize) -> &str {
     if s.len() <= max_bytes {
         return s;
     }
-    match s.char_indices().map(|(i, _)| i).take_while(|&i| i <= max_bytes).last() {
+    match s
+        .char_indices()
+        .map(|(i, _)| i)
+        .take_while(|&i| i <= max_bytes)
+        .last()
+    {
         Some(i) if i < s.len() => &s[..i],
         _ => &s[..max_bytes],
     }

@@ -398,53 +398,54 @@ pub(crate) async fn handle_completion(
                         language_server_name
                     );
                     let items = raw_items
-                    .into_iter()
-                    .map(|item| {
-                        let mut new_item = truncate_completion_item(item);
-                        if let Some(text_edit) = &mut new_item.text_edit {
-                            if let lsp_types::CompletionTextEdit::InsertAndReplace(
-                                replace_text_edit,
-                            ) = text_edit
-                            {
-                                new_item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(
-                                    lsp_types::TextEdit {
-                                        range: replace_text_edit.replace,
-                                        new_text: replace_text_edit.new_text.clone(),
-                                    },
-                                ));
-                            }
-
-                            // Translate textEdit range from virtual doc coordinates back to org file coordinates
-                            if let Some(ref vdoc) = vdoc_ctx {
-                                if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
-                                    &mut new_item.text_edit
+                        .into_iter()
+                        .map(|item| {
+                            let mut new_item = truncate_completion_item(item);
+                            if let Some(text_edit) = &mut new_item.text_edit {
+                                if let lsp_types::CompletionTextEdit::InsertAndReplace(
+                                    replace_text_edit,
+                                ) = text_edit
                                 {
-                                    edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    new_item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(
+                                        lsp_types::TextEdit {
+                                            range: replace_text_edit.replace,
+                                            new_text: replace_text_edit.new_text.clone(),
+                                        },
+                                    ));
                                 }
-                                // Also translate additionalTextEdits for virtual documents
-                                if let Some(ref mut additional_edits) =
-                                    new_item.additional_text_edits
-                                {
-                                    for edit in additional_edits.iter_mut() {
+
+                                // Translate textEdit range from virtual doc coordinates back to org file coordinates
+                                if let Some(ref vdoc) = vdoc_ctx {
+                                    if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
+                                        &mut new_item.text_edit
+                                    {
                                         edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    }
+                                    // Also translate additionalTextEdits for virtual documents
+                                    if let Some(ref mut additional_edits) =
+                                        new_item.additional_text_edits
+                                    {
+                                        for edit in additional_edits.iter_mut() {
+                                            edit.range =
+                                                vdoc.translate_range_from_virtual(edit.range);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        let label_len = &new_item.label.chars().count();
-                        CompletionItem {
-                            item: new_item,
-                            language_server_id: if is_support_resolve {
-                                Some(language_server_id)
-                            } else {
-                                None
-                            },
-                            language_server_name: language_server_name.clone(),
-                            start: context.start_point,
-                            end: context.start_point + (*label_len as i32 - *prefix_len as i32),
-                        }
-                    })
-                    .collect();
+                            let label_len = &new_item.label.chars().count();
+                            CompletionItem {
+                                item: new_item,
+                                language_server_id: if is_support_resolve {
+                                    Some(language_server_id)
+                                } else {
+                                    None
+                                },
+                                language_server_name: language_server_name.clone(),
+                                start: context.start_point,
+                                end: context.start_point + (*label_len as i32 - *prefix_len as i32),
+                            }
+                        })
+                        .collect();
 
                     anyhow::Ok(items)
                 }
@@ -499,14 +500,15 @@ pub(crate) async fn handle_completion(
                     filtered_items.len()
                 );
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len == 0 {
-                    debug!("completion return all filtered items: {}", filtered_items.len());
+                    debug!(
+                        "completion return all filtered items: {}",
+                        filtered_items.len()
+                    );
                     anyhow::Ok(filtered_items.to_owned())
                 } else {
                     let slice_length = std::cmp::min(*max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
-                    debug!(
-                        "completion return slice: max={max_items} slice_len={slice_length}"
-                    );
+                    debug!("completion return slice: max={max_items} slice_len={slice_length}");
                     anyhow::Ok(slice_items.to_owned())
                 }
             };

@@ -63,6 +63,17 @@ This applies to scroll events and window configuration changes."
   :type 'float
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-codelens-resolve-batch-size 12
+  "How many CodeLens resolve requests to send per tick.
+
+An unresolved CodeLens renders as nothing, so a lens only becomes visible
+once its `codeLens/resolve' comes back.  Sending one per tick would make a
+screenful appear one line at a time over several seconds, reflowing the
+buffer at every step; a batch roughly the size of a screen makes them land
+together, so the text below them moves once."
+  :type 'integer
+  :group 'lsp-proxy)
+
 (defcustom lsp-proxy-codelens-resolve-delay 0.25
   "Delay in seconds between processing each CodeLens resolve request.
 This controls the rate at which pending resolve requests are processed
@@ -216,7 +227,18 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
        :success-fn (lambda (resolved)
                      (when (buffer-live-p buf)
                        (with-current-buffer buf
-                         (lsp-proxy-codelens--update-resolved-codelens codelens-cell resolved))))))))
+                         (lsp-proxy-codelens--update-resolved-codelens codelens-cell resolved))))
+       ;; Degrade quietly. The default handlers report to the user, which is wrong
+       ;; twice over here: a resolve routinely fails while a server is still
+       ;; starting up, and one lens failing is not something to interrupt anyone
+       ;; about. An unresolved lens already renders as nothing, so failing is
+       ;; simply the lens not appearing.
+       :error-fn (lambda (err)
+                   (lsp-proxy-log "codeLens/resolve failed: %s"
+                                  (or (plist-get err :message) err)))
+       ;; The macro hands the timeout handler the method it timed out on.
+       :timeout-fn (lambda (method)
+                     (lsp-proxy-log "%s timed out" method))))))
 
 (defun lsp-proxy-codelens--resolve-schedule ()
   "Schedule processing of the CodeLens resolve queue.
@@ -249,9 +271,10 @@ Each item is (DOCVER . CODELENS-CELL) where CODELENS-CELL is
           (cl-delete-if (lambda (e)
                           (not (eq (car e) lsp-proxy-codelens--version)))
                         lsp-proxy-codelens--resolve-queue))
-    ;; Process one item from the queue
-    (let ((queue-item (pop lsp-proxy-codelens--resolve-queue)))
-      (when queue-item
+    ;; Process a batch. One per tick would make a screenful of lenses appear a
+    ;; line at a time over several seconds, reflowing the buffer at each step.
+    (dotimes (_ (max 1 lsp-proxy-codelens-resolve-batch-size))
+      (when-let* ((queue-item (pop lsp-proxy-codelens--resolve-queue)))
         (lsp-proxy-codelens--resolve-codelens (cdr queue-item))))))
 
 (defun lsp-proxy-codelens--fetch-codelens ()
@@ -298,7 +321,8 @@ for later visible-area refreshes."
   "Build display string for CODELENS-CELL.
 Arguments are LINE-START, INDEX, and TOTAL-CODELENS.
 CODELENS-CELL is a cons cell \(ITEM . OVERLAY)."
-  (let* ((is-first (= index 0))
+  (let* ((body (lsp-proxy-codelens--format-text codelens-cell))
+         (is-first (= index 0))
          (is-last (= index (1- total-codelens)))
          (indentation (if is-first
                           (save-excursion
@@ -306,9 +330,14 @@ CODELENS-CELL is a cons cell \(ITEM . OVERLAY)."
                             (make-string (current-indentation) ? ))
                         ""))
          (separator (if is-last "\n" " | ")))
+    ;; Nothing to show yet.  Returning the empty string rather than a placeholder
+    ;; is what keeps an unresolved lens from occupying a line: the caller stores
+    ;; this as `before-string', and an empty one inserts nothing at all.
+    (if (null body)
+        ""
     (concat
      indentation
-     (let ((text (propertize (lsp-proxy-codelens--format-text codelens-cell)
+     (let ((text (propertize body
                              'mouse-face 'lsp-proxy-codelens-mouse-face
                              'help-echo "Click to execute this CodeLens command"
                              'keymap (let ((map (make-sparse-keymap)))
@@ -322,7 +351,30 @@ CODELENS-CELL is a cons cell \(ITEM . OVERLAY)."
        ;; `lsp-proxy-codelens--codicons-to-nerd-icons'.
        (add-face-text-property 0 (length text) 'lsp-proxy-codelens-face t text)
        text)
-     separator)))
+     separator))))
+
+(defun lsp-proxy-codelens--render-line-group (cells)
+  "Re-render every overlay in CELLS, laying out only the resolved ones.
+
+Because an unresolved CodeLens renders as nothing, a lens's position among
+*all* the lenses on its line is the wrong thing to build separators from: the
+last one carries the newline, and if that one happened to be unresolved the
+rendered text would run into the code instead of sitting above it.  Indices are
+therefore counted among the resolved lenses only, which means this has to run
+again each time one more of them resolves."
+  (let* ((resolved (seq-filter #'lsp-proxy-codelens--resolved-p cells))
+         (total (length resolved))
+         (index 0))
+    (dolist (cell cells)
+      (let ((ov (cdr cell)))
+        (when (and ov (overlayp ov) (overlay-buffer ov))
+          (if (lsp-proxy-codelens--resolved-p cell)
+              (progn
+                (overlay-put ov 'before-string
+                             (lsp-proxy-codelens--build-display-string
+                              cell (overlay-start ov) index total))
+                (setq index (1+ index)))
+            (overlay-put ov 'before-string nil)))))))
 
 (defun lsp-proxy-codelens--make-overlay (line-start codelens-cell index total-codelens docver)
   "Create overlay for CODELENS-CELL at LINE-START.
@@ -397,9 +449,12 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
                       (and ov (overlayp ov) (overlay-buffer ov)
                            (overlay-get ov 'lsp-proxy-codelens-command))))
          (title (when (listp command) (plist-get command :title))))
-    (if title
-        (lsp-proxy-codelens--codicons-to-nerd-icons title)
-      "Loading...")))
+    (when title
+      (lsp-proxy-codelens--codicons-to-nerd-icons title))))
+
+(defun lsp-proxy-codelens--resolved-p (codelens-cell)
+  "Return non-nil when CODELENS-CELL has something to display yet."
+  (and (lsp-proxy-codelens--format-text codelens-cell) t))
 
 (defun lsp-proxy-codelens--cleanup-overlays ()
   "Clean up all CodeLens overlays in current buffer."
@@ -419,21 +474,18 @@ RESOLVED is the resolved wrapped CodeLens item from the proxy."
       ;; Update cache with resolved codelens
       (setcar codelens-cell resolved)
 
-      ;; Update the display string
-      (let* ((line-start (overlay-start ov))
-             (line (line-number-at-pos line-start t))
-             ;; Find line group in cache (hashtable lookup)
-             (sorted-codelens (gethash line lsp-proxy-codelens--cache))
-             (total-on-line (if sorted-codelens
-                                (length sorted-codelens)
-                              1)))
-        (overlay-put ov 'lsp-proxy-codelens-command command)
-        (overlay-put ov 'before-string
-                     (lsp-proxy-codelens--build-display-string
-                      codelens-cell
-                      line-start
-                      (overlay-get ov 'priority)
-                      total-on-line))))))
+      ;; Record the command first: the renderer reads it back off the overlay to
+      ;; decide whether this lens has anything to show.
+      (overlay-put ov 'lsp-proxy-codelens-command command)
+
+      ;; Re-render the whole line rather than just this overlay. One lens becoming
+      ;; visible changes how many are on the line, and therefore which one carries
+      ;; the trailing newline.
+      (let* ((line (line-number-at-pos (overlay-start ov) t))
+             (cells (or (gethash line lsp-proxy-codelens--cache)
+                        (list codelens-cell))))
+        (with-silent-modifications
+          (lsp-proxy-codelens--render-line-group cells))))))
 
 (defun lsp-proxy-codelens--line-delta ()
   "Calculate the line count delta and update the previous line count cache.
@@ -577,6 +629,14 @@ without a :command property, adding them to `lsp-proxy-codelens--resolve-queue'.
                                         (not (plist-get (lsp-proxy-codelens--item-lsp item) :command)))
                                (push (cons docver new-cell) resolve-queue)))
 
+                    ;; Lay the line out among the lenses that actually have
+                    ;; something to show. The loop above sized separators by each
+                    ;; lens's index among *all* of them, which is only right when
+                    ;; every one of them is resolved -- a server is free to return
+                    ;; some lenses already resolved and others not.
+                    (when in-range-p
+                      (lsp-proxy-codelens--render-line-group new-sorted))
+
                     ;; Track this line as processed if in range
                     (when in-range-p
                       (push line lines-processed))))))))
@@ -644,6 +704,26 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
       (message "Resolving CodeLens command..."))
      (t
       (message "CodeLens command not available")))))
+
+(defun lsp-proxy-codelens-refresh-all ()
+  "Re-fetch CodeLens in every buffer currently showing them.
+
+Called when a server sends `workspace/codeLens/refresh\'.  Nothing else
+signals that lenses went stale, and the stale answer is typically the one a
+server gave while it was still starting up -- jdtls answers
+`textDocument/codeLens\' during project import, with lenses it cannot yet
+resolve.  Without this the buffer keeps that first answer until it is
+reverted by hand.
+
+Every such buffer is refreshed rather than only those belonging to the server
+that asked: the LSP request carries no parameters, so there is nothing to scope
+by, and a refresh arrives about once per project import."
+  (dolist (buf (buffer-list))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (when (and (bound-and-true-p lsp-proxy-codelens-mode)
+                   (bound-and-true-p lsp-proxy-mode))
+          (lsp-proxy-codelens--fetch-codelens))))))
 
 ;;; Integration
 

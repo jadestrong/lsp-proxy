@@ -29,13 +29,10 @@ fn uris_match(a: &Url, b: &Url) -> bool {
     if a == b {
         return true;
     }
-    cfg!(target_os = "windows")
-        && a.scheme() == "file"
-        && b.scheme() == "file"
-        && {
-            let resolved = uri_to_path(a);
-            !resolved.as_os_str().is_empty() && resolved == uri_to_path(b)
-        }
+    cfg!(target_os = "windows") && a.scheme() == "file" && b.scheme() == "file" && {
+        let resolved = uri_to_path(a);
+        !resolved.as_os_str().is_empty() && resolved == uri_to_path(b)
+    }
 }
 
 /// Describe a language server that would not start, in the shape the editor
@@ -204,11 +201,17 @@ impl Editor {
         failures
     }
 
-    pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {
+    pub fn launch_language_servers_for_virtual_document(
+        &mut self,
+        doc_id: DocumentId,
+        language: &str,
+    ) -> Option<Arc<Client>> {
         let doc = self.documents.get_mut(&doc_id)?;
 
         // 获取虚拟文档的语言配置
-        let virtual_language_config = doc.virtual_doc.as_ref()
+        let virtual_language_config = doc
+            .virtual_doc
+            .as_ref()
             .and_then(|virtual_doc| virtual_doc.language_config.clone());
 
         // org block 只需要第一个 server，直接取第一个配置
@@ -242,7 +245,7 @@ impl Editor {
         if let Some(doc) = self.documents.get_mut(&doc_id) {
             doc.insert_virtual_doc_server(language.to_owned(), server.clone());
         }
-        
+
         Some(server)
     }
 
@@ -253,12 +256,15 @@ impl Editor {
 
     /// Cleanup expired virtual document servers across all documents.
     /// Returns a list of (uri, language, client) tuples for servers that were removed.
-    pub fn cleanup_expired_virtual_doc_servers(&mut self, ttl_secs: u64) -> Vec<(Url, String, Arc<Client>)> {
+    pub fn cleanup_expired_virtual_doc_servers(
+        &mut self,
+        ttl_secs: u64,
+    ) -> Vec<(Url, String, Arc<Client>)> {
         let mut removed = Vec::new();
 
         for doc in self.documents.values_mut() {
             let expired_languages = doc.get_expired_virtual_doc_servers(ttl_secs);
-            
+
             for lang in expired_languages {
                 if let Some(entry) = doc.remove_virtual_doc_server(&lang) {
                     log::info!(

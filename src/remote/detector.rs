@@ -31,12 +31,10 @@ impl RemoteDetector {
         //   2. eglot/Emacs 侧经 `file://` 包装的同样路径
         //   3. RPC 同理
         // user@ 是可选的(SSH config 别名没有用户名),file:// 前缀也是可选的。
-        let ssh_regex = Regex::new(
-            r"^(?:file://)?/ssh:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$",
-        )?;
-        let rpc_regex = Regex::new(
-            r"^(?:file://)?/rpc:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$",
-        )?;
+        let ssh_regex =
+            Regex::new(r"^(?:file://)?/ssh:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$")?;
+        let rpc_regex =
+            Regex::new(r"^(?:file://)?/rpc:(?:([^@:/#]+)@)?([^:#/]+)(?:#(\d+))?:(.*)$")?;
 
         Ok(Self {
             ssh_regex,
@@ -116,11 +114,7 @@ impl RemoteDetector {
         match remote_info.host.port {
             Some(port) => format!(
                 "/{}:{}{}#{}:{}",
-                remote_type_str,
-                user_part,
-                remote_info.host.host,
-                port,
-                remote_info.remote_path
+                remote_type_str, user_part, remote_info.host.host, port, remote_info.remote_path
             ),
             None => format!(
                 "/{}:{}{}:{}",

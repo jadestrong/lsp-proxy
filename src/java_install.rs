@@ -74,6 +74,15 @@ pub enum Backend {
 }
 
 impl Backend {
+    /// Short name for the editor's mode-line indicator, where the full
+    /// `display_name` would not fit.
+    pub fn tag(self) -> &'static str {
+        match self {
+            Backend::Intellij => "IntelliJ",
+            Backend::Jdtls => "jdtls",
+        }
+    }
+
     /// Human-readable name for progress messages and errors.
     pub fn display_name(self) -> &'static str {
         match self {
@@ -208,7 +217,10 @@ pub fn validate_bundle(bundle: &ServerBundle) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
-        bail!("server-bundle.json has an invalid version: {:?}", bundle.version);
+        bail!(
+            "server-bundle.json has an invalid version: {:?}",
+            bundle.version
+        );
     }
     if bundle.archive_name.contains("..")
         || bundle.archive_name.contains('/')
@@ -378,16 +390,16 @@ fn require_tool(what: &str, name: &str) -> Result<()> {
 }
 
 /// Resolve the newest build by reading the extension shim's `server-bundle.json`.
-async fn discover_latest_bundle(os: &str, arch: &str, progress: &ProgressFn) -> Result<ServerBundle> {
+async fn discover_latest_bundle(
+    os: &str,
+    arch: &str,
+    progress: &ProgressFn,
+) -> Result<ServerBundle> {
     let target = open_vsx_target(os, arch)?;
     progress(None, "Looking up the latest IntelliJ server".into());
 
     let metadata = run(
-        &[
-            "curl".into(),
-            "-fsSL".into(),
-            open_vsx_latest_url(&target),
-        ],
+        &["curl".into(), "-fsSL".into(), open_vsx_latest_url(&target)],
         "Open VSX lookup",
     )
     .await?;
@@ -639,7 +651,9 @@ async fn resolve_intellij(
             if !confirmed {
                 progress(
                     None,
-                    format!("Archive name for {os}-{arch} is inferred, not confirmed; trying {url}"),
+                    format!(
+                        "Archive name for {os}-{arch} is inferred, not confirmed; trying {url}"
+                    ),
                 );
             }
             Ok((url, v.to_string(), None))
@@ -791,7 +805,11 @@ async fn resolve_jdtls(
 
     progress(None, format!("Resolving jdtls {version}"));
     let listing = run(
-        &["curl".into(), "-fsSL".into(), jdtls_latest_txt_url(&version)],
+        &[
+            "curl".into(),
+            "-fsSL".into(),
+            jdtls_latest_txt_url(&version),
+        ],
         "jdtls archive lookup",
     )
     .await
@@ -810,11 +828,7 @@ async fn resolve_jdtls(
     .await?;
     let sha256 = parse_jdtls_sha256(&sidecar)?;
 
-    Ok((
-        jdtls_download_url(&version, archive),
-        version,
-        Some(sha256),
-    ))
+    Ok((jdtls_download_url(&version, archive), version, Some(sha256)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1059,7 +1073,10 @@ mod tests {
         assert_eq!(open_vsx_target("macos", "aarch64").unwrap(), "darwin-arm64");
         assert_eq!(open_vsx_target("macos", "x86_64").unwrap(), "darwin-x64");
         assert_eq!(open_vsx_target("linux", "x86_64").unwrap(), "linux-x64");
-        assert_eq!(open_vsx_target("windows", "aarch64").unwrap(), "win32-arm64");
+        assert_eq!(
+            open_vsx_target("windows", "aarch64").unwrap(),
+            "win32-arm64"
+        );
         assert!(open_vsx_target("plan9", "x86_64").is_err());
         assert!(open_vsx_target("linux", "riscv64").is_err());
     }
@@ -1076,17 +1093,35 @@ mod tests {
         );
         assert!(confirmed, "linux-x86_64 is the observed URL");
         assert!(!url.contains("download-cdn"), "must not use the CDN host");
-        assert!(!url.contains("kotlin-server"), "must not use the kotlin product");
+        assert!(
+            !url.contains("kotlin-server"),
+            "must not use the kotlin product"
+        );
     }
 
     #[test]
     fn archive_suffixes_per_platform() {
-        assert_eq!(archive_suffix("macos", "aarch64").unwrap(), ("-aarch64.sit".into(), true));
-        assert_eq!(archive_suffix("macos", "x86_64").unwrap(), (".sit".into(), true));
-        assert_eq!(archive_suffix("linux", "x86_64").unwrap(), (".tar.gz".into(), true));
+        assert_eq!(
+            archive_suffix("macos", "aarch64").unwrap(),
+            ("-aarch64.sit".into(), true)
+        );
+        assert_eq!(
+            archive_suffix("macos", "x86_64").unwrap(),
+            (".sit".into(), true)
+        );
+        assert_eq!(
+            archive_suffix("linux", "x86_64").unwrap(),
+            (".tar.gz".into(), true)
+        );
         // arm64 linux and both Windows arches are inferred, not observed.
-        assert_eq!(archive_suffix("linux", "aarch64").unwrap(), ("-aarch64.tar.gz".into(), false));
-        assert_eq!(archive_suffix("windows", "x86_64").unwrap(), (".win.zip".into(), false));
+        assert_eq!(
+            archive_suffix("linux", "aarch64").unwrap(),
+            ("-aarch64.tar.gz".into(), false)
+        );
+        assert_eq!(
+            archive_suffix("windows", "x86_64").unwrap(),
+            (".win.zip".into(), false)
+        );
     }
 
     #[test]
@@ -1148,7 +1183,10 @@ mod tests {
         );
         // `.sit` is a zip despite the extension.
         assert_eq!(extract_argv(Path::new("/tmp/a-1.0.sit"), dest)[0], "unzip");
-        assert_eq!(extract_argv(Path::new("/tmp/a-1.0.win.zip"), dest)[0], "unzip");
+        assert_eq!(
+            extract_argv(Path::new("/tmp/a-1.0.win.zip"), dest)[0],
+            "unzip"
+        );
     }
 
     #[test]
@@ -1264,7 +1302,10 @@ mod jdtls_tests {
             jdtls_latest_txt_url(V),
             jdtls_sha256_url(V, ARCHIVE),
         ] {
-            assert!(url.starts_with(JDTLS_DOWNLOAD_BASE), "escaped the product path: {url}");
+            assert!(
+                url.starts_with(JDTLS_DOWNLOAD_BASE),
+                "escaped the product path: {url}"
+            );
         }
     }
 
@@ -1292,16 +1333,19 @@ mod jdtls_tests {
     /// checksum for, so the version has to appear in the name itself.
     #[test]
     fn rejects_an_archive_name_for_a_different_version() {
-        assert!(validate_jdtls_archive_name(V, "jdt-language-server-1.60.0-202609031315.tar.gz").is_err());
+        assert!(
+            validate_jdtls_archive_name(V, "jdt-language-server-1.60.0-202609031315.tar.gz")
+                .is_err()
+        );
     }
 
     #[test]
     fn rejects_a_malformed_build_timestamp() {
         for bad in [
-            "jdt-language-server-1.61.0-20260903131.tar.gz",   // too short
+            "jdt-language-server-1.61.0-20260903131.tar.gz", // too short
             "jdt-language-server-1.61.0-2026090313155.tar.gz", // too long
-            "jdt-language-server-1.61.0-20260903131a.tar.gz",  // not all digits
-            "jdt-language-server-1.61.0-202609031315.zip",     // wrong extension
+            "jdt-language-server-1.61.0-20260903131a.tar.gz", // not all digits
+            "jdt-language-server-1.61.0-202609031315.zip",   // wrong extension
             "jdt-language-server-1.61.0-202609031315.tar.gz.sha256",
         ] {
             assert!(
@@ -1315,7 +1359,17 @@ mod jdtls_tests {
     fn rejects_unsafe_versions() {
         validate_jdtls_version(V).unwrap();
         validate_jdtls_version("1.9.0").unwrap();
-        for bad in ["", "..", "1.61.0/../..", "../1.61.0", "v1.61.0", "1.61.0-SNAPSHOT", "latest", "1..61", "1.61."] {
+        for bad in [
+            "",
+            "..",
+            "1.61.0/../..",
+            "../1.61.0",
+            "v1.61.0",
+            "1.61.0-SNAPSHOT",
+            "latest",
+            "1..61",
+            "1.61.",
+        ] {
             assert!(validate_jdtls_version(bad).is_err(), "must reject {bad:?}");
         }
     }
@@ -1326,13 +1380,23 @@ mod jdtls_tests {
     fn parses_the_sha256_sidecar_in_both_shapes() {
         assert_eq!(parse_jdtls_sha256(SHA).unwrap(), SHA);
         assert_eq!(parse_jdtls_sha256(&format!("{SHA}\n")).unwrap(), SHA);
-        assert_eq!(parse_jdtls_sha256(&format!("{SHA}  {ARCHIVE}\n")).unwrap(), SHA);
+        assert_eq!(
+            parse_jdtls_sha256(&format!("{SHA}  {ARCHIVE}\n")).unwrap(),
+            SHA
+        );
         assert_eq!(parse_jdtls_sha256(&SHA.to_uppercase()).unwrap(), SHA);
     }
 
     #[test]
     fn rejects_a_bad_sha256_sidecar() {
-        for bad in ["", "not-a-digest", &"a".repeat(63), &"a".repeat(65), &"z".repeat(64), "<html>404</html>"] {
+        for bad in [
+            "",
+            "not-a-digest",
+            &"a".repeat(63),
+            &"a".repeat(65),
+            &"z".repeat(64),
+            "<html>404</html>",
+        ] {
             assert!(parse_jdtls_sha256(bad).is_err(), "must reject {bad:?}");
         }
     }
@@ -1387,7 +1451,9 @@ mod lombok_tests {
     fn the_pinned_digest_is_a_wellformed_sha256() {
         let (version, sha) = (LOMBOK_VERSION, LOMBOK_SHA256);
         assert_eq!(sha.len(), 64, "not a sha256: {sha}");
-        assert!(sha.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(sha
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
         assert!(version.starts_with(|c: char| c.is_ascii_digit()));
         // The jar name embeds the version, so the two cannot drift apart silently.
         assert!(lombok_jar_name().contains(version));
@@ -1507,7 +1573,10 @@ mod backend_tests {
             serde_json::from_str::<Backend>(r#""jdtls""#).unwrap(),
             Backend::Jdtls
         );
-        assert_eq!(serde_json::to_string(&Backend::Jdtls).unwrap(), r#""jdtls""#);
+        assert_eq!(
+            serde_json::to_string(&Backend::Jdtls).unwrap(),
+            r#""jdtls""#
+        );
         assert_eq!(
             serde_json::to_string(&Backend::Intellij).unwrap(),
             r#""intellij""#
@@ -1610,11 +1679,15 @@ mod pipeline_tests {
             .args(&argv[1..])
             .output()
             .unwrap();
-        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
 
         // The launcher is one level down because we do not strip components.
-        let launcher = find_launcher(&dest, exe)
-            .expect("launcher must be found through the archive root");
+        let launcher =
+            find_launcher(&dest, exe).expect("launcher must be found through the archive root");
         assert!(launcher.ends_with(Path::new("bin").join(exe)));
 
         set_executable(&launcher).await.unwrap();
@@ -1645,9 +1718,17 @@ mod pipeline_tests {
         std::fs::write(build.join("bin").join(exe), b"#!/usr/bin/env python3\n").unwrap();
         std::fs::write(build.join("plugins/a.jar"), b"jar").unwrap();
 
-        let archive = tmp.path().join("jdt-language-server-9.9.9-202600000000.tar.gz");
+        let archive = tmp
+            .path()
+            .join("jdt-language-server-9.9.9-202600000000.tar.gz");
         let status = std::process::Command::new("tar")
-            .args(["-czf", archive.to_str().unwrap(), "-C", build.to_str().unwrap(), "."])
+            .args([
+                "-czf",
+                archive.to_str().unwrap(),
+                "-C",
+                build.to_str().unwrap(),
+                ".",
+            ])
             .status()
             .unwrap();
         assert!(status.success());
@@ -1705,7 +1786,9 @@ mod pipeline_tests {
         let expected = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
         verify_checksum(&file, expected).await.unwrap();
         // Case-insensitive, as digests are sometimes published uppercase.
-        verify_checksum(&file, &expected.to_uppercase()).await.unwrap();
+        verify_checksum(&file, &expected.to_uppercase())
+            .await
+            .unwrap();
     }
 }
 
@@ -1728,14 +1811,21 @@ mod live_tests {
         eprintln!("  resolved: {bundle:#?}");
 
         validate_bundle(&bundle).unwrap();
-        assert!(bundle.url.starts_with(DOWNLOAD_BASE), "wrong host/product: {}", bundle.url);
+        assert!(
+            bundle.url.starts_with(DOWNLOAD_BASE),
+            "wrong host/product: {}",
+            bundle.url
+        );
         assert!(!bundle.url.contains("kotlin-server"));
         assert_eq!(bundle.sha256.len(), 64);
 
         // The archive must actually exist and be large: a shim-sized answer means we
         // resolved the wrong artifact.
         let size = remote_size(&bundle.url).await;
-        assert!(size > 100 * 1024 * 1024, "archive suspiciously small: {size} bytes");
+        assert!(
+            size > 100 * 1024 * 1024,
+            "archive suspiciously small: {size} bytes"
+        );
         eprintln!("  archive is {:.0} MB", size as f64 / 1_048_576.0);
     }
 
@@ -1759,7 +1849,10 @@ mod live_tests {
             .expect("jdtls resolution must succeed");
         eprintln!("  resolved: {version} -> {url}");
 
-        assert!(url.starts_with(JDTLS_DOWNLOAD_BASE), "wrong host/product: {url}");
+        assert!(
+            url.starts_with(JDTLS_DOWNLOAD_BASE),
+            "wrong host/product: {url}"
+        );
         validate_jdtls_version(&version).unwrap();
         let sha = sha.expect("a milestone always publishes a digest");
         assert_eq!(sha.len(), 64, "digest is not a sha256: {sha}");
@@ -1767,13 +1860,20 @@ mod live_tests {
         // A milestone archive is tens of MB; an HTML error page or a sidecar-sized
         // answer means we resolved the wrong artifact.
         let size = remote_size(&url).await;
-        assert!(size > 10 * 1024 * 1024, "archive suspiciously small: {size} bytes");
+        assert!(
+            size > 10 * 1024 * 1024,
+            "archive suspiciously small: {size} bytes"
+        );
         eprintln!("  archive is {:.0} MB", size as f64 / 1_048_576.0);
 
         // Pinning the version we just resolved must take the same path and agree.
         let (pinned_url, _, pinned_sha) = resolve_jdtls(Some(&version), &progress).await.unwrap();
         assert_eq!(pinned_url, url);
-        assert_eq!(pinned_sha.as_deref(), Some(sha.as_str()), "a pinned jdtls version must still be checksum-verified");
+        assert_eq!(
+            pinned_sha.as_deref(),
+            Some(sha.as_str()),
+            "a pinned jdtls version must still be checksum-verified"
+        );
     }
     /// Hits the network: fetches the pinned Lombok jar and checks it still digests to
     /// the constant compiled in above.
@@ -1811,4 +1911,3 @@ mod live_tests {
         eprintln!("  digest matches the pinned constant");
     }
 }
-
