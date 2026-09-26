@@ -36,6 +36,7 @@
 
 ;;; External functions
 (declare-function lsp-proxy--execute-command "lsp-proxy")
+(declare-function lsp-proxy--process-locations "lsp-proxy-xref")
 
 ;;; Customization Options
 
@@ -58,10 +59,18 @@ Example: `(`java-mode' `java-ts-mode')'"
   :type 'float
   :group 'lsp-proxy)
 
-(defcustom lsp-proxy-codelens-visible-refresh-delay 0.25
+(defcustom lsp-proxy-codelens-visible-refresh-delay 0.1
   "Delay in seconds before refreshing visible CodeLens after window changes.
 This applies to scroll events and window configuration changes."
   :type 'float
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-codelens-preload-lines 100
+  "Number of lines before and after the viewport to render CodeLens for.
+
+This lets nearby CodeLens resolve before they enter the visible window, making
+ordinary scrolling feel smoother without rendering the whole file up front."
+  :type 'integer
   :group 'lsp-proxy)
 
 (defcustom lsp-proxy-codelens-resolve-batch-size 12
@@ -341,7 +350,8 @@ for later visible-area refreshes."
                ;; Save old cache before updating
                (let ((old-cache lsp-proxy-codelens--cache)
                      (new-cache (lsp-proxy-codelens--build-cache codelens-list))
-                     (range (lsp-proxy-codelens--visible-range))
+                     (range (lsp-proxy-codelens--visible-range
+                             lsp-proxy-codelens-preload-lines))
                      all-lines)
 
                  (when new-cache
@@ -734,23 +744,36 @@ CODELENS-CELL is a cons cell (ITEM . OVERLAY)."
          (item-command (plist-get (lsp-proxy-codelens--item-lsp item) :command))
          (overlay-command (when (and ov (overlayp ov) (overlay-buffer ov))
                             (overlay-get ov 'lsp-proxy-codelens-command)))
-         (command (or item-command overlay-command)))
+         (command (or item-command overlay-command))
+         (command-name (plist-get command :command))
+         (arguments (plist-get command :arguments)))
     (cond
+     ;; These are client-side commands in vscode-java.  The resolved CodeLens
+     ;; already carries the target locations as its third argument; VS Code
+     ;; forwards them to `editor.action.showReferences', and we do the same via
+     ;; xref instead of sending an unknown command back to jdtls.
+     ((and command
+           (member command-name '("java.show.references" "java.show.implementations")))
+      (if-let* ((locations (and (sequencep arguments)
+                                (> (length arguments) 2)
+                                (seq-elt arguments 2))))
+          (lsp-proxy--process-locations locations)
+        (message "No CodeLens locations available")))
      ;; The IntelliJ Run/Debug lens is a client-side-only command in the VS
      ;; Code extension (its DAP integration registers a matching local
      ;; command and never forwards it to the server) — sending it through
      ;; `workspace/executeCommand' just gets back "Unknown command". Route
      ;; it to `lsp-proxy-java''s dape integration instead, when available.
      ;;
-     ((and command (equal (plist-get command :command) "intellij.jvm.runMain"))
+     ((and command (equal command-name "intellij.jvm.runMain"))
       (if (fboundp 'lsp-proxy-java-dape-run-main)
-          (lsp-proxy-java-dape-run-main (plist-get command :arguments))
+          (lsp-proxy-java-dape-run-main arguments)
         (lsp-proxy--error "%s" "Run/Debug from CodeLens needs `dape' installed; see the Debugging section in lsp-proxy-java.el")))
      ;; Execute resolved command
      (command
       (lsp-proxy--execute-command
-       (plist-get command :command)
-       (plist-get command :arguments)
+       command-name
+       arguments
        (lsp-proxy-codelens--item-ls-id item)))
      ;; No command yet: try to resolve. lsp-proxy's capability model only
      ;; tracks "some server supports codeLens" rather than a per-server
@@ -871,7 +894,8 @@ without re-fetching CodeLens from the proxy."
   (when-let* ((_ (and lsp-proxy-codelens-mode
                       lsp-proxy-codelens--cache
                       (eq lsp-proxy-codelens--version (lsp-proxy--doc-version))))
-              (range (lsp-proxy-codelens--visible-range))
+              (range (lsp-proxy-codelens--visible-range
+                      lsp-proxy-codelens-preload-lines))
               (docver lsp-proxy-codelens--version)
               (beg-line (car range))
               (end-line (cdr range))
