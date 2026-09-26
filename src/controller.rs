@@ -26,7 +26,12 @@ const REQUEST_WHITELIST: &[&str] = &[
     "emacs/listWorkspaces",
     "emacs/shutdownWorkspace",
     "textDocument/diagnostic",
+    "codeLens/resolve",
 ];
+
+fn allows_parallel_requests(method: &str) -> bool {
+    REQUEST_WHITELIST.contains(&method)
+}
 
 pub struct Controller {
     sender_for_server: UnboundedSender<Message>,
@@ -251,7 +256,7 @@ impl Controller {
         // Local path (unchanged).
         match msg {
             Message::Request(req) => {
-                if REQUEST_WHITELIST.contains(&req.method.as_str()) {
+                if allows_parallel_requests(&req.method) {
                     self.register_request(&req, now);
                     self.sender_for_server.send(req.into()).unwrap();
                 } else if !self.processing_requests.contains_key(&req.method) {
@@ -459,7 +464,9 @@ impl Controller {
             }
         }
 
-        let duplicate_id = {
+        let duplicate_id = if allows_parallel_requests(&request.method) {
+            None
+        } else {
             let entries = self.req_queue.incoming.entries();
             entries.iter().find_map(|(id, (method, _, _))| {
                 (&request.method == method).then(|| (*id).to_owned())
@@ -695,4 +702,52 @@ fn spawn_remote_worker(
             });
         })
         .expect("failed to spawn remote worker thread");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::HashSet;
+
+    fn test_controller() -> Controller {
+        let (server_tx, _server_rx) = mpsc::unbounded_channel();
+        let (emacs_tx, _emacs_rx) = bounded(8);
+
+        Controller {
+            sender_for_server: server_tx,
+            sender_to_emacs: emacs_tx,
+            req_queue: ReqQueue::default(),
+            processing_requests: HashMap::new(),
+            _remote_manager: None,
+            remote_task_tx: None,
+            remote_result_rx: None,
+            pending_remote_to_emacs: HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn whitelisted_requests_do_not_cancel_each_other_in_incoming_queue() {
+        let mut controller = test_controller();
+        let first = Request::new(1.into(), "codeLens/resolve".to_string(), json!({}));
+        let second = Request::new(2.into(), "codeLens/resolve".to_string(), json!({}));
+        let first_id = first.id.clone();
+        let second_id = second.id.clone();
+
+        controller.register_request(&first, Instant::now());
+        controller.register_request(&second, Instant::now());
+
+        assert!(controller
+            .req_queue
+            .incoming
+            .entries()
+            .iter()
+            .any(|(id, _)| **id == first_id));
+        assert!(controller
+            .req_queue
+            .incoming
+            .entries()
+            .iter()
+            .any(|(id, _)| **id == second_id));
+    }
 }
