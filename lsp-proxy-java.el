@@ -126,6 +126,23 @@ should therefore pass APPEND so scheme-specific providers win."
                return function)
       (error "No Java content provider registered for %s" uri)))
 
+(defun lsp-proxy-java--content (uri)
+  "Return decompiled content for URI as a plist with `:code' and `:language'.
+
+The first request is fetched through the backend-specific content provider and
+then cached for the rest of the Emacs session.  `DOC-URI' is borrowed from an
+ordinary project buffer because language servers route these requests through an
+open project document, not through the virtual decompiled file itself."
+  (or (gethash uri lsp-proxy-java--content-cache)
+      (let* ((doc-uri (or (lsp-proxy-java--routing-uri)
+                          (error "No Java project buffer available to fetch %s" uri)))
+             (content (funcall (lsp-proxy-java--content-provider uri) uri doc-uri))
+             (code (plist-get content :code)))
+        (unless (stringp code)
+          (error "Java content provider returned no code for %s" uri))
+        (puthash uri content lsp-proxy-java--content-cache)
+        content)))
+
 ;;; file-name-handler
 
 (defun lsp-proxy-java--run-real (operation args)
@@ -244,10 +261,12 @@ already work because these names are ordinary absolute paths."
          ('localname (cdr split))
          ('method "lspsrc")
          ('user nil)
-         ('host (string-remove-suffix
-                 "!" (lsp-proxy--decompiled-unescape
-                      (substring (car split)
-                                 (length lsp-proxy--decompiled-prefix)))))
+         ('host (if (equal (car split) lsp-proxy--decompiled-prefix)
+                    "lspsrc"
+                  (string-remove-suffix
+                   "!" (lsp-proxy--decompiled-unescape
+                        (substring (car split)
+                                   (length lsp-proxy--decompiled-prefix))))))
          (_ (car split)))))
 
     ;; A stable, non-nil attribute list. nil breaks callers that expect a mode
@@ -349,6 +368,8 @@ whose extension says nothing about the decompiled language anyway.  The server's
 `:language' is the authoritative answer."
   (when-let* ((uri (and buffer-file-name
                         (lsp-proxy--decompiled-file-name-to-uri buffer-file-name))))
+    (when-let* ((display-name (lsp-proxy--decompiled-display-name buffer-file-name)))
+      (rename-buffer display-name t))
     (let* ((language (plist-get (gethash uri lsp-proxy-java--content-cache) :language))
            (mode (lsp-proxy-java--mode-for-language language)))
       (when (and mode (not (eq major-mode mode)))

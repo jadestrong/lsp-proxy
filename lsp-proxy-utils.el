@@ -436,6 +436,23 @@ Being an ancestor of a name we actually served distinguishes the two exactly.")
   (lsp-proxy--decompiled-register
    (concat lsp-proxy--decompiled-prefix (lsp-proxy--decompiled-escape uri))))
 
+(defun lsp-proxy--decompiled-display-name (name)
+  "Return a short display name for decompiled virtual file NAME."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name))
+              (path (car (split-string uri "[?#]")))
+              (base (file-name-nondirectory path)))
+    (and (not (equal base "")) base)))
+
+(defun lsp-proxy--decompiled-opaque-localname (name)
+  "Return a friendly local name for an opaque decompiled virtual file NAME."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name))
+              (path (car (split-string uri "[?#]"))))
+    (cond
+     ((string-match "\\`jdt://contents/[^/]+/\\(.+\\)\\'" path)
+      (concat "/" (match-string 1 path)))
+     ((lsp-proxy--decompiled-display-name name)
+      (concat "/" (lsp-proxy--decompiled-display-name name))))))
+
 (defun lsp-proxy--decompiled-file-name-to-uri (name)
   "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil.
 For an ancestor directory of the virtual file this returns the URI prefix that
@@ -490,9 +507,13 @@ member path."
       (if bang
           (cons (substring name 0 (1+ bang)) (substring name (1+ bang)))
         ;; No member separator (an opaque URI): treat the whole payload as the
-        ;; local part, keeping the prefix as the "remote" component.
-        (cons (substring lsp-proxy--decompiled-prefix 0 -1)
-              (substring name (1- (length lsp-proxy--decompiled-prefix))))))))
+        ;; local part for I/O, but expose a short display localname to callers
+        ;; such as `file-local-name' and modelines.
+        ;; Returning the prefix without its trailing slash (`/lspsrc:') looks
+        ;; enough like a TRAMP remote prefix to confuse modelines that parse it.
+        (cons lsp-proxy--decompiled-prefix
+              (or (lsp-proxy--decompiled-opaque-localname name)
+                  (substring name (length lsp-proxy--decompiled-prefix))))))))
 
 (defun lsp-proxy--decompiled-buffer-p (&optional buffer)
   "Return non-nil when BUFFER (default current) shows a decompiled virtual source."

@@ -11,7 +11,6 @@ vscode-json-language-server = { command = "vscode-json-language-server", args = 
 vscode-html-language-server = { command = "vscode-html-language-server", args = [
   "--stdio",
 ], config = { provideFormatter = true } }
-jdtls = { command = "jdtls" }
 dart = { command = "dart", args = [
   "language-server",
   "--client-id=emacs.lsp-proxy",
@@ -435,8 +434,14 @@ roots = [
   "BUILD.bazel",
   "MODULE.bazel",
 ]
-# Driven by the JetBrains IntelliJ backend. Alternative: ["jdtls"].
-language-servers = ["intellij"]
+# Driven by the JetBrains IntelliJ backend. To use jdtls instead, see docs/java.md.
+language-servers = [
+  "intellij"
+  # { name = "intellij", support-workspace = [
+  #   "pom.xml",
+  #   "settings.gradle",
+  # ] },
+]
 
 [[language]]
 name = "kotlin"
@@ -600,72 +605,54 @@ file-types = [
   { glob = ".puppeteerrc" },  # https://pptr.dev/guides/configuration
 ]
 language-servers = [ "yaml-language-server" ]
-# JetBrains IntelliJ Language Server (headless).
-# Launches the backend distribution directly over stdio; lsp-proxy replaces the
-# Node wrapper (dist/cli.js) by injecting the same env vars (`environment`) and
-# initializationOptions (`config`) the wrapper used to merge.
-#   - `command` must be an absolute path (no ~/relative expansion) or on PATH.
-#   - Code intelligence requires a supported build system (Maven/Gradle/Bazel)
-#     in the project root AND the build tool (mvn/gradle) available on PATH.
-#   - `eulaHash` = sha256(server/EULA.txt)[:16]; recompute when the backend
-#     (and thus its bundled EULA.txt) is upgraded.
+
+# Eclipse JDT Language Server (jdtls). Usage and field details: docs/java.md.
+[language-server.jdtls]
+command = "jdtls"
+lombok-agent-arg = "--jvm-arg=-javaagent:{jar}"
+
+[language-server.jdtls.config]
+
+[language-server.jdtls.config.settings.java.referencesCodeLens]
+enabled = true
+
+[language-server.jdtls.config.settings.java]
+implementationCodeLens = "all"
+
+# Optional: pin project compile JDKs instead of using automatic detection.
+#   [[language-server.jdtls.config.settings.java.configuration.runtimes]]
+#   name = "JavaSE-1.8"
+#   path = "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home"
+#   default = true
+
+[language-server.jdtls.config.extendedClientCapabilities]
+classFileContentsSupport = true
+progressReportProvider = true
+advancedOrganizeImportsSupport = true
+advancedGenerateAccessorsSupport = true
+overrideMethodsPromptSupport = true
+resolveAdditionalTextEditsSupport = true
+
+
+# JetBrains IntelliJ Language Server. Usage and field details: docs/java.md.
 [language-server.intellij]
 command = "intellij-server"
-# `--eula` is the hash of the bundle's own EULA.txt that the user has accepted. The
-# server requires it for bundled distributions (it is ignored when run from sources)
-# and no longer reads the old `eulaHash` initialization option.
-#
-# Needs server >= 263.3533.0; 263.2689.0 and older reject the unknown option and fail
-# to start -- drop the flag to use one of those. If a future bundle ships different
-# EULA text the server reports a mismatch; recompute with
-#   shasum -a 256 <install-dir>/<version>/EULA.txt | cut -c1-16
-# and override this whole block from ${user-emacs-directory}/lsp-proxy/languages.toml
-# rather than editing this file.
 args = ["--stdio", "--eula=34d850193ee04897"]
-# Other launcher options worth knowing (see `intellij-server --help`):
-#   --region=<value>         africa | americas | apac | china | europe |
-#                            middle_east | oceania | not_set
-#   --data-sharing=<value>   full | anonymous | test | none   (default: none)
-#   --system-path=<path>     where caches and indexes live
-#   --ca-certificate=<file>  extra trusted CA (PEM or DER); 263.3533.0+
-#   --log-level=<value>      TRACE | DEBUG | INFO | WARNING | ERROR | OFF | ALL
+# Optional launcher flags:
+# args = ["--stdio", "--eula=34d850193ee04897", "--log-level=INFO"]
 
 [language-server.intellij.environment]
-# Extra JVM options for the backend (maps to the wrapper's IJ_JAVA_OPTIONS).
 IJ_JAVA_OPTIONS = "-Xmx4g"
-# The env-var route the VS Code extension uses; equivalent to the flags above.
+# Optional server environment:
 # INTELLIJ_DATA_SHARING = "none"
-# Must be one of the values listed under `--region`. "US" is not one of them and is
-# silently dropped.
 # INTELLIJ_REGION = "americas"
 
 [language-server.intellij.config]
 intellijExtensions = true
-# Fallback SDK for symbol resolution. IMPORTANT: the backend only accepts a
-# MODULAR JDK (Java 9+, with lib/modules); a Java 8 JDK (jre/lib/rt.jar layout)
-# is silently rejected -> "Cannot resolve symbol 'String'/'System'".
-# The bundled JBR below resolves symbols but has NO src.zip, so JDK hover shows
-# only signatures. For real JDK Javadoc, install a JDK 17/21 that ships
-# lib/src.zip (Temurin/Zulu full JDK) and point here, e.g.:
-#   defaultSdk = "/Library/Java/JavaVirtualMachines/zulu-21.jdk/Contents/Home"
-# (maven.compiler.target=1.8 from the project's pom still fixes the language
-#  level to 8 on import; the SDK only supplies the classpath + sources.)
+# Optional fallback SDK for symbol resolution:
 # defaultSdk = ""
 buildTools = {}
-# Each entry is { type, path, ... }, where type is "gradle" | "maven" | "bazel" |
-# "json" | "subproject". A "subproject" entry points at a nested project directory
-# whose own .vscode/settings.json `intellij.projects` the server resolves recursively.
-# Maven-only extras: env, system-properties, java-home (java-home also applies to
-# Gradle on newer builds). Bazel-only: project-path.
 projects = []
-# Newer builds accept this; omit it to use the server's own default. Sent as an
-# explicit false by the VS Code client, so setting it here is only needed to opt in.
+# Optional:
 # disableRocksDBWriteAheadLog = false
-# The VS Code extension's DAP integration sends this so the server's CodeLens
-# provider emits "Run"/"Debug" lenses above `main` methods; it declares that the
-# client can handle the `intellij_debugger.runMain` command those lenses carry.
-# Without it the server silently omits those lenses (they were the reason
-# `textDocument/codeLens` came back empty on a Spring Boot `*Application.java`).
-# lsp-proxy doesn't yet wire up that command, so the lens's `command` will be
-# present but running it will just report "no command handler" until that's added.
 runMainCodeLens = true
