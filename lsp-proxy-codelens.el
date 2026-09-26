@@ -23,6 +23,7 @@
 
 (require 'cl-lib)
 (require 'pulse)
+(require 'seq)
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-core)
 
@@ -170,6 +171,11 @@ the entire buffer's overlay list.")
   "Return the language-server id that produced ITEM."
   (plist-get item :language_server_id))
 
+(defun lsp-proxy-codelens--item-key (item)
+  "Return a stable equality key for CodeLens ITEM."
+  (list (lsp-proxy-codelens--item-ls-id item)
+        (lsp-proxy-codelens--item-lsp item)))
+
 (defun lsp-proxy-codelens--build-cache (codelens-list)
   "Build cache from CODELENS-LIST.
 CODELENS-LIST is a vector of items as returned by the proxy (each a plist
@@ -178,16 +184,21 @@ Returns a hash table with line numbers as keys.
 Each value is a sorted list of CODELENS-OVERLAY-CELL where
 CODELENS-OVERLAY-CELL is (ITEM . OVERLAY)."
   (when (and codelens-list (vectorp codelens-list) (length> codelens-list 0))
-    (let ((line-groups (make-hash-table :test 'eq)))
+    (let ((line-groups (make-hash-table :test 'eq))
+          (seen (make-hash-table :test 'equal)))
       ;; Group CodeLens by line number
       (cl-loop for item across codelens-list
                when (and (listp item) (plist-get (lsp-proxy-codelens--item-lsp item) :range))
+               for key = (lsp-proxy-codelens--item-key item)
                for range = (plist-get (lsp-proxy-codelens--item-lsp item) :range)
                for start = (when range (plist-get range :start))
                for line-num = (when start (plist-get start :line))
-               when (and (integerp line-num) (>= line-num 0))
+               when (and (integerp line-num) (>= line-num 0)
+                         (not (gethash key seen)))
                ;; Position in a text document expressed as zero-based line and zero-based character offset.
-               do (push (cons item nil) (gethash (1+ line-num) line-groups)))
+               do (progn
+                    (puthash key t seen)
+                    (push (cons item nil) (gethash (1+ line-num) line-groups))))
 
       ;; Reverse each list to maintain LSP order (sorted by index)
       (maphash (lambda (line codelens-on-line)
@@ -839,6 +850,11 @@ without re-fetching CodeLens from the proxy."
 (defun lsp-proxy-codelens--setup-buffer ()
   "Setup CodeLens for current buffer."
   (when lsp-proxy-codelens-mode
+    ;; `lsp-proxy-activate-codelens-mode' can be called more than once as
+    ;; capabilities are refreshed.  Clear stale overlays/timers before
+    ;; reinitializing buffer-local state, so re-setup never leaves orphan
+    ;; before-strings behind.
+    (lsp-proxy-codelens--cleanup-buffer)
     ;; Initialize buffer-local variables
     (setq lsp-proxy-codelens--cache nil
           lsp-proxy-codelens--prev-line-count nil
@@ -912,7 +928,8 @@ if `lsp-proxy-codelens-mode-config' allows it."
              (boundp 'lsp-proxy-codelens-mode-config)
              (or (eq lsp-proxy-codelens-mode-config t)
                  (and (listp lsp-proxy-codelens-mode-config)
-                      (member major-mode lsp-proxy-codelens-mode-config))))
+                      (member major-mode lsp-proxy-codelens-mode-config)))
+             (not (bound-and-true-p lsp-proxy-codelens-mode)))
     (lsp-proxy-codelens-mode 1)))
 
 ;;; Interaction
