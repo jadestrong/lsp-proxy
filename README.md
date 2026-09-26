@@ -393,7 +393,7 @@ LSP-Proxy includes default configurations for:
 - **C/C++**: clangd
 - **Ruby**: solargraph
 - **Lua**: lua-language-server
-- **Java**: jdtls
+- **Java**: IntelliJ backend, jdtls ([details](docs/java.md))
 - **Dart**: dart
 - **Bash**: bash-language-server
 - **JSON**: vscode-json-language-server
