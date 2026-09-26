@@ -119,6 +119,7 @@ impl Backend {
 }
 
 const OPEN_VSX_API: &str = "https://open-vsx.org/api/JetBrains/intellij-server";
+const JAVA_DEBUG_OPEN_VSX_API: &str = "https://open-vsx.org/api/vscjava/vscode-java-debug";
 const DOWNLOAD_BASE: &str = "https://download.jetbrains.com/language-server/intellij-server";
 
 /// The launcher every archive is expected to contain, relative to its root.
@@ -188,6 +189,10 @@ pub fn download_url(version: &str, os: &str, arch: &str) -> Result<(String, bool
 /// Open VSX endpoint that names the newest extension build for this platform.
 pub fn open_vsx_latest_url(target: &str) -> String {
     format!("{OPEN_VSX_API}/{target}/latest")
+}
+
+pub fn java_debug_open_vsx_latest_url() -> String {
+    format!("{JAVA_DEBUG_OPEN_VSX_API}/latest")
 }
 
 /// Every archive name that is legitimate for VERSION.
@@ -349,6 +354,32 @@ pub fn vsix_url_from_metadata(json: &str) -> Result<String> {
         bail!("Open VSX returned an unexpected VSIX URL: {url}");
     }
     Ok(url.to_string())
+}
+
+pub fn java_debug_vsix_from_metadata(json: &str) -> Result<(String, String)> {
+    let value: serde_json::Value =
+        serde_json::from_str(json).context("Open VSX returned invalid Java Debug metadata")?;
+    let version = value
+        .get("version")
+        .and_then(|v| v.as_str())
+        .context("Open VSX Java Debug response has no version")?;
+    if version.is_empty()
+        || !version.starts_with(|c: char| c.is_ascii_digit())
+        || !version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    {
+        bail!("Open VSX Java Debug response has invalid version: {version:?}");
+    }
+    let url = value
+        .get("files")
+        .and_then(|f| f.get("download"))
+        .and_then(|d| d.as_str())
+        .context("Open VSX Java Debug response has no files.download")?;
+    if !url.starts_with(JAVA_DEBUG_OPEN_VSX_API) || !url.ends_with(".vsix") {
+        bail!("Open VSX returned an unexpected Java Debug VSIX URL: {url}");
+    }
+    Ok((url.to_string(), version.to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -925,6 +956,135 @@ pub async fn install_lombok(
     let _ = tokio::fs::remove_dir_all(&staging).await;
 
     Ok((jar, LOMBOK_VERSION.to_string(), false))
+}
+
+const JAVA_DEBUG_LABEL: &str = "Java Debug";
+const JAVA_DEBUG_JAR_PREFIX: &str = "com.microsoft.java.debug.plugin-";
+
+fn java_debug_jar_in(dir: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+        let path = entry.path();
+        let name = path.file_name()?.to_str()?;
+        if path.is_file() && name.starts_with(JAVA_DEBUG_JAR_PREFIX) && name.ends_with(".jar") {
+            Some(path)
+        } else {
+            None
+        }
+    })
+}
+
+pub fn java_debug_jar_name_from_vsix_listing(listing: &str) -> Option<String> {
+    listing
+        .lines()
+        .map(str::trim)
+        .find(|entry| {
+            entry.starts_with("extension/server/")
+                && entry
+                    .rsplit('/')
+                    .next()
+                    .is_some_and(|name| name.starts_with(JAVA_DEBUG_JAR_PREFIX))
+                && entry.ends_with(".jar")
+                && !entry.contains("..")
+                && !entry.contains('\\')
+        })
+        .map(str::to_string)
+}
+
+pub async fn install_java_debug(
+    install_dir: &Path,
+    force: bool,
+    progress: ProgressFn,
+) -> Result<(PathBuf, String, bool)> {
+    require_tool(JAVA_DEBUG_LABEL, "curl")?;
+    require_tool(JAVA_DEBUG_LABEL, "unzip")?;
+
+    progress(None, "Looking up the latest Java Debug extension".into());
+    let metadata = run(
+        &[
+            "curl".into(),
+            "-fsSL".into(),
+            java_debug_open_vsx_latest_url(),
+        ],
+        "Open VSX Java Debug lookup",
+    )
+    .await?;
+    let (vsix_url, version) = java_debug_vsix_from_metadata(&metadata)?;
+
+    let dest = version_dir(install_dir, &version);
+    if !force {
+        if let Some(jar) = java_debug_jar_in(&dest) {
+            return Ok((jar, version, true));
+        }
+    }
+
+    tokio::fs::create_dir_all(install_dir)
+        .await
+        .with_context(|| format!("could not create {}", install_dir.display()))?;
+    let staging = install_dir.join(format!(
+        ".staging-java-debug-{version}-{}",
+        std::process::id()
+    ));
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+    tokio::fs::create_dir_all(&staging)
+        .await
+        .with_context(|| format!("could not create {}", staging.display()))?;
+
+    let vsix = staging.join("java-debug.vsix");
+    let outcome = async {
+        download_with_progress(JAVA_DEBUG_LABEL, &vsix_url, &vsix, &progress).await?;
+        progress(Some(PCT_UNPACK), "Extracting Java Debug bundle".into());
+        let listing = run(
+            &[
+                "unzip".into(),
+                "-Z1".into(),
+                vsix.to_string_lossy().to_string(),
+            ],
+            "listing Java Debug VSIX",
+        )
+        .await?;
+        let jar_entry = java_debug_jar_name_from_vsix_listing(&listing).context(
+            "Java Debug VSIX has no extension/server/com.microsoft.java.debug.plugin-*.jar",
+        )?;
+        run(
+            &[
+                "unzip".into(),
+                "-jqo".into(),
+                vsix.to_string_lossy().to_string(),
+                jar_entry,
+                "-d".into(),
+                staging.to_string_lossy().to_string(),
+            ],
+            "extracting Java Debug bundle",
+        )
+        .await?;
+        java_debug_jar_in(&staging).context("Java Debug bundle extraction produced no jar")
+    }
+    .await;
+
+    let staged_jar = match outcome {
+        Ok(path) => path,
+        Err(err) => {
+            let _ = tokio::fs::remove_dir_all(&staging).await;
+            return Err(err);
+        }
+    };
+
+    progress(Some(PCT_INSTALL), "Installing Java Debug bundle".into());
+    let _ = tokio::fs::remove_dir_all(&dest).await;
+    tokio::fs::create_dir_all(&dest)
+        .await
+        .with_context(|| format!("could not create {}", dest.display()))?;
+    let jar = dest.join(
+        staged_jar
+            .file_name()
+            .context("staged Java Debug jar has no file name")?,
+    );
+    tokio::fs::rename(&staged_jar, &jar)
+        .await
+        .with_context(|| format!("could not publish {}", jar.display()))?;
+    let _ = tokio::fs::remove_dir_all(&staging).await;
+
+    Ok((jar, version, false))
 }
 
 /// Render the launch argument that loads JAR as a java agent.
@@ -1529,6 +1689,48 @@ mod lombok_tests {
         );
         assert_eq!(out.len(), 2, "the Lombok agent should still be appended");
         assert!(out[1].contains("lombok-1.18.48.jar"));
+    }
+}
+
+#[cfg(test)]
+mod java_debug_tests {
+    use super::*;
+
+    #[test]
+    fn open_vsx_metadata_names_java_debug_vsix_and_version() {
+        let json = r#"{
+          "version": "0.58.2",
+          "files": {
+            "download": "https://open-vsx.org/api/vscjava/vscode-java-debug/0.58.2/file/vscjava.vscode-java-debug-0.58.2.vsix"
+          }
+        }"#;
+        let (url, version) = java_debug_vsix_from_metadata(json).unwrap();
+        assert_eq!(version, "0.58.2");
+        assert!(url.ends_with(".vsix"));
+
+        let foreign = r#"{
+          "version": "0.58.2",
+          "files": { "download": "https://evil.example/debug.vsix" }
+        }"#;
+        assert!(java_debug_vsix_from_metadata(foreign).is_err());
+    }
+
+    #[test]
+    fn finds_debug_bundle_inside_vsix_listing() {
+        let listing = "\
+extension/package.json
+extension/server/com.microsoft.java.debug.plugin-0.58.2.jar
+extension/README.md
+";
+        assert_eq!(
+            java_debug_jar_name_from_vsix_listing(listing).as_deref(),
+            Some("extension/server/com.microsoft.java.debug.plugin-0.58.2.jar")
+        );
+
+        assert!(java_debug_jar_name_from_vsix_listing(
+            "extension/server/../com.microsoft.java.debug.plugin-0.58.2.jar"
+        )
+        .is_none());
     }
 }
 
