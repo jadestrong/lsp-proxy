@@ -229,7 +229,7 @@ impl Registry {
                         &language_config.roots,
                         support_workspace
                     );
-                    
+
                     // try to find existing clients based on support_workspace
                     let reusable_client = match support_workspace {
                         // support multiple workspaces
@@ -417,11 +417,16 @@ fn start_client(
         ls_config.lombok_agent_arg.as_deref(),
         crate::config::lombok_jar_path(),
     );
+    let initialization_options = with_java_debug_bundles(
+        ls_config.config.clone(),
+        name.as_str(),
+        crate::config::java_debug_bundles(),
+    );
 
     let (client, incoming, initialize_notify) = Client::start(
         &ls_config.command,
         &args,
-        ls_config.config.clone(),
+        initialization_options,
         ls_config.experimental.clone(),
         ls_config.environment.clone(),
         &config.roots,
@@ -464,4 +469,74 @@ fn start_client(
     });
 
     Ok(NewClient(client, incoming))
+}
+
+fn with_java_debug_bundles(
+    config: Option<serde_json::Value>,
+    server_name: &str,
+    bundles: &[String],
+) -> Option<serde_json::Value> {
+    if server_name != "jdtls" || bundles.is_empty() {
+        return config;
+    }
+
+    let mut value = config.unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        return Some(value);
+    }
+
+    let object = value.as_object_mut().expect("checked object above");
+    let entry = object
+        .entry("bundles".to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(existing) = entry.as_array_mut() else {
+        return Some(value);
+    };
+
+    for bundle in bundles {
+        if !existing
+            .iter()
+            .any(|item| item.as_str().is_some_and(|path| path == bundle))
+        {
+            existing.push(serde_json::Value::String(bundle.clone()));
+        }
+    }
+
+    Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_java_debug_bundles;
+    use serde_json::json;
+
+    #[test]
+    fn injects_managed_java_debug_bundles_into_jdtls_config() {
+        let config = with_java_debug_bundles(
+            Some(json!({"extendedClientCapabilities": {"classFileContentsSupport": true}})),
+            "jdtls",
+            &["/debug.jar".into()],
+        )
+        .unwrap();
+
+        assert_eq!(config["bundles"], json!(["/debug.jar"]));
+        assert_eq!(
+            config["extendedClientCapabilities"]["classFileContentsSupport"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn does_not_duplicate_or_touch_other_servers() {
+        let config = with_java_debug_bundles(
+            Some(json!({"bundles": ["/debug.jar"]})),
+            "jdtls",
+            &["/debug.jar".into(), "/other.jar".into()],
+        )
+        .unwrap();
+        assert_eq!(config["bundles"], json!(["/debug.jar", "/other.jar"]));
+
+        let untouched = with_java_debug_bundles(None, "intellij", &["/debug.jar".into()]);
+        assert!(untouched.is_none());
+    }
 }

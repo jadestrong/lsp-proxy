@@ -987,6 +987,38 @@ When nil, select a version according to
                  (const :tag "Latest release of any major" latest))
   :group 'lsp-proxy)
 
+(defcustom lsp-proxy-java-debug-console "integratedTerminal"
+  "Console used by Java launch debug sessions.
+An integrated terminal accepts program input.  The internal console sends
+program output to Dape's REPL and cannot accept standard input."
+  :type '(choice (const "integratedTerminal") (const "internalConsole"))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-debug-build-before-launch t
+  "Whether Java debug launches wait for a successful jdtls build."
+  :type 'boolean
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-debug-build-timeout 120
+  "Maximum seconds to wait for the build preceding a Java debug launch."
+  :type 'natnum
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-hot-code-replace-mode 'auto
+  "Control Hot Code Replace for lsp-proxy Java debug sessions.
+Value `auto' asks Java Debug to replace changed classes after completed builds,
+`manual' leaves replacement to explicit debugger commands, and `never' disables
+the feature."
+  :type '(choice (const :tag "After completed builds" auto)
+                 (const :tag "Manual command only" manual)
+                 (const :tag "Disabled" never))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-debug-request-timeout 30000
+  "Java Debug request timeout in milliseconds."
+  :type 'natnum
+  :group 'lsp-proxy)
+
 (defconst lsp-proxy-java--build-files
   '("pom.xml" "build.gradle" "build.gradle.kts" "settings.gradle" "settings.gradle.kts")
   "Files that identify a Java build root.")
@@ -1285,6 +1317,11 @@ With prefix argument FORCE, reinstall an unchanged release."
                    (lsp-proxy-java--parse-environment-entry entry)))
         (setq result (plist-put result (intern (concat ":" name)) value))))))
 
+(defun lsp-proxy-java--ensure-dape ()
+  "Load Dape or report that the optional integration is unavailable."
+  (unless (or (featurep 'dape) (require 'dape nil t))
+    (user-error "Dape is not installed")))
+
 (defun lsp-proxy-java--project-process-environment (&optional uri additions)
   "Return process environment for URI with Project JDK and ADDITIONS."
   (let ((environment (copy-sequence process-environment)))
@@ -1328,12 +1365,14 @@ Apply ENV-ADDITIONS and the Project JDK only to the spawned process."
   (interactive)
   (lsp-proxy-java-build "test"))
 
-(defun lsp-proxy-java--jdtls-execute (command arguments)
-  "Ask jdtls to execute COMMAND with ARGUMENTS."
-  (lsp-proxy--request
-   'workspace/executeCommand
-   (lsp-proxy--build-params
-    (list :command command :arguments (vconcat arguments)))))
+(defun lsp-proxy-java--jdtls-execute (command arguments &optional timeout)
+  "Ask jdtls to execute COMMAND with ARGUMENTS.
+When TIMEOUT is non-nil, pass it to `jsonrpc-request' in seconds."
+  (let ((params (lsp-proxy--build-params
+                 (list :command command :arguments (vconcat arguments)))))
+    (if timeout
+        (lsp-proxy--request 'workspace/executeCommand params :timeout timeout)
+      (lsp-proxy--request 'workspace/executeCommand params))))
 
 (defun lsp-proxy-java--jdtls-classpaths (file scope)
   "Return FILE classpaths for SCOPE from jdtls."
@@ -1364,11 +1403,13 @@ Apply ENV-ADDITIONS and the Project JDK only to the spawned process."
 
 (defun lsp-proxy-java--document-symbols ()
   "Return document symbols for the current buffer."
-  (or (lsp-proxy--request
-       'textDocument/documentSymbol
-       (lsp-proxy--build-params
-        (list :textDocument (lsp-proxy--TextDocumentIdentifier))))
-      (user-error "No document symbols returned")))
+  (let ((symbols (lsp-proxy--request
+                  'textDocument/documentSymbol
+                  (lsp-proxy--build-params
+                   (list :textDocument (lsp-proxy--TextDocumentIdentifier))))))
+    (unless symbols
+      (user-error "No document symbols returned"))
+    (append symbols nil)))
 
 (defun lsp-proxy-java--imenu-name (entry)
   "Return lsp-proxy imenu ENTRY's name."
@@ -1445,6 +1486,29 @@ entries; use the position entry to recover the declaration line."
        (cons (lsp-proxy-java--imenu-name entry)
              (lsp-proxy-java--first-type-path children))))
    entries))
+
+(defun lsp-proxy-java--first-type-position (entries)
+  "Return the first Java type declaration position in imenu ENTRIES."
+  (cl-loop for entry in entries
+           for index from 0
+           for name = (lsp-proxy-java--imenu-name entry)
+           for children = (lsp-proxy-java--imenu-group entry)
+           when children
+           return (or (when-let* ((line (lsp-proxy-java--imenu-group-start-line
+                                         entries index)))
+                        (list :line line
+                              :character
+                              (save-excursion
+                                (goto-char (point-min))
+                                (forward-line line)
+                                (if (and name
+                                         (re-search-forward
+                                          (regexp-quote name)
+                                          (line-end-position) t))
+                                    (- (match-beginning 0)
+                                       (line-beginning-position))
+                                  0))))
+                      (lsp-proxy-java--first-type-position children))))
 
 (defun lsp-proxy-java--method-at-line (entries line)
   "Return the nearest method-like imenu entry in ENTRIES at LINE."
@@ -1533,23 +1597,229 @@ entries; use the position entry to recover the declaration line."
           (list "-jar")
           (lsp-proxy-java--junit-console-launch classpaths class method)))
 
-(defun lsp-proxy-java--ensure-dape-launch ()
-  "Ensure lsp-proxy's Java Dape launch helpers are available."
-  (unless (and (or (featurep 'dape) (require 'dape nil t))
-               (fboundp 'lsp-proxy-java--dape-populate-launch-config))
-    (user-error "Dape support is not available; load `dape' before `lsp-proxy-java'")))
-
-(defun lsp-proxy-java--dape-base-config (file root environment)
-  "Return common Dape launch config for FILE in ROOT with ENVIRONMENT."
+(defun lsp-proxy-java--debug-launch-options (file root project-name environment)
+  "Return common Java Debug launch options for FILE, ROOT and ENVIRONMENT."
   (let ((env (lsp-proxy-java--environment-plist environment)))
     (append
-     (list 'host "127.0.0.1"
-           'lsp-proxy-uri (lsp-proxy--path-to-uri file)
-           'fn #'lsp-proxy-java--dape-populate-launch-config
-           :type lsp-proxy-java-dape-adapter-id
+     (list 'fn #'lsp-proxy-java--debug-prepare
+           'lsp-proxy-java-source file
+           :type "java"
            :request "launch"
-           :cwd root)
+           :cwd root
+           :javaExec (lsp-proxy-java--java-program (lsp-proxy--path-to-uri file))
+           :console lsp-proxy-java-debug-console)
+     (when project-name (list :projectName project-name))
      (when env (list :env env)))))
+
+(defun lsp-proxy-java--debug-settings-json ()
+  "Return lsp-proxy's Java Debug settings as JSON."
+  (json-serialize
+   (list :hotCodeReplace (symbol-name lsp-proxy-java-hot-code-replace-mode)
+         :jdwpRequestTimeout lsp-proxy-java-debug-request-timeout
+         :logLevel "INFO")))
+
+(defun lsp-proxy-java--debug-sync-settings ()
+  "Send lsp-proxy's Java Debug settings to jdtls."
+  (condition-case error-data
+      (lsp-proxy-java--jdtls-execute
+       "vscode.java.updateDebugSettings"
+       (list (lsp-proxy-java--debug-settings-json)))
+    (error
+     (message "lsp-proxy-java could not update Java Debug settings: %s"
+              (error-message-string error-data))
+     nil)))
+
+(defun lsp-proxy-java--debug-adapter-port ()
+  "Ask jdtls to start Java Debug and return its adapter port."
+  (lsp-proxy-java--debug-sync-settings)
+  (let ((port
+         (condition-case err
+             (lsp-proxy-java--jdtls-execute
+              "vscode.java.startDebugSession"
+              nil
+              (max 1.0 (/ lsp-proxy-java-debug-request-timeout 1000.0)))
+           (jsonrpc-error
+            (if (string-match-p "vscode\\.java\\.startDebugSession"
+                                (error-message-string err))
+                (user-error
+                 "JDTLS Java Debug is not available; configure the Java Debug bundle")
+              (signal (car err) (cdr err)))))))
+    (unless (natnump port)
+      (user-error
+       "JDTLS did not start Java Debug; configure its debug bundle"))
+    port))
+
+(defun lsp-proxy-java--debug-prepare (config)
+  "Prepare fresh JDTLS Java Debug resources for CONFIG."
+  (let ((source (plist-get config 'lsp-proxy-java-source)))
+    (with-current-buffer (if source (find-file-noselect source) (current-buffer))
+      (plist-put config 'port (lsp-proxy-java--debug-adapter-port)))))
+
+(defun lsp-proxy-java--debug-main-target-for-class (root class &optional file)
+  "Resolve CLASS and its jdtls project under ROOT.
+When FILE is non-nil, prefer a target declared in FILE."
+  (let* ((items (lsp-proxy-java--jdtls-execute
+                 "vscode.java.resolveMainClass"
+                 (list (lsp-proxy--path-to-uri root))))
+         (matches (seq-filter
+                   (lambda (item)
+                     (and (or (null class)
+                              (equal class (plist-get item :mainClass)))
+                          (or (null file)
+                              (when-let* ((path (plist-get item :filePath)))
+                                (equal (file-truename file)
+                                       (file-truename path))))))
+                   (append items nil))))
+    (unless matches
+      (user-error "JDTLS found no main class%s%s"
+                  (if class (format " `%s'" class) "")
+                  (if file (format " in %s" file) "")))
+    (let* ((choices (mapcar (lambda (item)
+                              (cons (format "%s (%s)"
+                                            (plist-get item :mainClass)
+                                            (plist-get item :projectName))
+                                    item))
+                            matches))
+           (item (if (= (length choices) 1)
+                     (cdar choices)
+                   (cdr (assoc (completing-read "Main class: " choices nil t)
+                               choices)))))
+      (unless (and (stringp (plist-get item :mainClass))
+                   (stringp (plist-get item :projectName)))
+        (user-error "JDTLS returned an invalid main class"))
+      item)))
+
+(defun lsp-proxy-java--debug-main-target (file root)
+  "Resolve FILE's main class and jdtls project under ROOT."
+  (lsp-proxy-java--debug-main-target-for-class root nil file))
+
+(defun lsp-proxy-java--debug-module-name (file)
+  "Return FILE's nearest build module name."
+  (file-name-nondirectory
+   (directory-file-name (lsp-proxy-java--nearest-build-root file))))
+
+(defun lsp-proxy-java--debug-project-name (file)
+  "Resolve FILE's actual jdtls project from its type declaration.
+Fall back to the nearest build module name when jdtls cannot resolve the
+selection."
+  (condition-case err
+      (let* ((position (lsp-proxy-java--first-type-position
+                        (lsp-proxy-java--document-symbols)))
+             (element
+              (and position
+                   (lsp-proxy-java--jdtls-execute
+                    "vscode.java.resolveElementAtSelection"
+                    (list (lsp-proxy--path-to-uri file)
+                          (plist-get position :line)
+                          (plist-get position :character)))))
+             (name (plist-get element :projectName)))
+        (if (and (stringp name) (not (string-empty-p name)))
+            name
+          (lsp-proxy-java--debug-module-name file)))
+    (jsonrpc-error
+     (if (string-match-p "resolveElementAtSelection" (error-message-string err))
+         (lsp-proxy-java--debug-module-name file)
+       (signal (car err) (cdr err))))))
+
+(defun lsp-proxy-java--debug-resolved-classpaths (class &optional project-name)
+  "Resolve Java Debug module and class paths for CLASS.
+PROJECT-NAME, when non-nil, selects the exact jdtls project."
+  (let ((response
+         (lsp-proxy-java--jdtls-execute
+          "vscode.java.resolveClasspath"
+          (if project-name (list class project-name) (list class)))))
+    (unless (and (vectorp response) (= (length response) 2))
+      (user-error "JDTLS Java Debug returned invalid classpaths"))
+    (list (append (aref response 0) nil)
+          (append (aref response 1) nil))))
+
+(defun lsp-proxy-java--debug-build (class project-name root)
+  "Ask jdtls to build CLASS in PROJECT-NAME under ROOT before debugging."
+  (when lsp-proxy-java-debug-build-before-launch
+    (save-some-buffers
+     t (lambda ()
+         (and buffer-file-name
+              (file-in-directory-p buffer-file-name root))))
+    (let ((status
+           (condition-case err
+               (lsp-proxy-java--jdtls-execute
+                "vscode.java.buildWorkspace"
+                (list (json-serialize
+                       (append (list :mainClass class
+                                     :isFullBuild :false)
+                               (when project-name
+                                 (list :projectName project-name)))))
+                lsp-proxy-java-debug-build-timeout)
+             (jsonrpc-error
+              (if (string-match-p "vscode\\.java\\.buildWorkspace"
+                                  (error-message-string err))
+                  'unsupported
+                (signal (car err) (cdr err)))))))
+      (cond
+       ((eq status 'unsupported)
+        (message "JDTLS does not support vscode.java.buildWorkspace; launching without pre-build"))
+       ((not (equal status "SUCCEED"))
+        (user-error "Java launch cancelled: build returned %s" status))))))
+
+(defun lsp-proxy-java--debug-main-config (file root project-name class
+                                               module-paths class-paths)
+  "Return a Java Debug launch config for CLASS in FILE."
+  (append
+   (lsp-proxy-java--debug-launch-options
+    file root project-name lsp-proxy-java-main-environment)
+   (list :mainClass class
+         :modulePaths (vconcat module-paths)
+         :classPaths (vconcat class-paths)
+         :args (combine-and-quote-strings lsp-proxy-java-main-arguments)
+         :vmArgs (combine-and-quote-strings
+                  lsp-proxy-java-main-jvm-arguments))))
+
+(defun lsp-proxy-java--debug-test-config (file root project-name classpaths
+                                               class method)
+  "Return a Java Debug launch config for a JUnit CLASS or METHOD."
+  (let ((launch (lsp-proxy-java--junit-console-launch classpaths class method)))
+    (append
+     (lsp-proxy-java--debug-launch-options
+      file root project-name lsp-proxy-java-test-environment)
+     (list :mainClass "org.junit.platform.console.ConsoleLauncher"
+           :classPaths (vector (car launch))
+           :args (combine-and-quote-strings (cdr launch))
+           :vmArgs (combine-and-quote-strings
+                    lsp-proxy-java-test-jvm-arguments)))))
+
+(defun lsp-proxy-java--debug-populate-launch-config (config)
+  "Populate CONFIG using jdtls Java Debug.
+This is a compatibility path for older Dape configs or CodeLens handlers that
+were originally built for the IntelliJ backend."
+  (setq config (plist-put config :type "java"))
+  (if (not (equal (plist-get config :request) "launch"))
+      (plist-put config 'port (lsp-proxy-java--debug-adapter-port))
+    (let* ((uri (plist-get config 'lsp-proxy-uri))
+           (file (or (and uri (lsp-proxy--uri-to-path uri))
+                     buffer-file-name
+                     (user-error "lsp-proxy-java: no source file for Java Debug launch")))
+           (main-class (plist-get config :mainClass)))
+      (with-current-buffer (find-file-noselect file)
+        (let* ((root (lsp-proxy-java--nearest-build-root file))
+               (target (lsp-proxy-java--debug-main-target-for-class
+                        root main-class file))
+               (class (plist-get target :mainClass))
+               (project-name (plist-get target :projectName))
+               (paths (lsp-proxy-java--debug-resolved-classpaths
+                       class project-name)))
+          (lsp-proxy-java--debug-build class project-name root)
+          (setq config (plist-put config :mainClass class))
+          (setq config (plist-put config :projectName project-name))
+          (setq config (plist-put config :cwd root))
+          (setq config (plist-put config :javaExec
+                                  (lsp-proxy-java--java-program
+                                   (lsp-proxy--path-to-uri file))))
+          (unless (plist-member config :console)
+            (setq config (plist-put config :console lsp-proxy-java-debug-console)))
+          (setq config (plist-put config :modulePaths (vconcat (car paths))))
+          (setq config (plist-put config :classPaths (vconcat (cadr paths))))
+          (setq config (plist-put config 'port (lsp-proxy-java--debug-adapter-port)))
+          config)))))
 
 ;;;###autoload
 (defun lsp-proxy-java-run-main (&optional debug)
@@ -1557,19 +1827,7 @@ entries; use the position entry to recover the declaration line."
 With prefix argument DEBUG, launch it through Dape when available."
   (interactive "P")
   (if debug
-      (let* ((file (lsp-proxy-java--current-file))
-             (root (lsp-proxy-java--nearest-build-root file))
-             (target (lsp-proxy-java--current-target)))
-        (lsp-proxy-java--ensure-dape-launch)
-        (dape
-         (append
-          (lsp-proxy-java--dape-base-config
-           file root lsp-proxy-java-main-environment)
-          (list :mainClass (plist-get target :class)
-                :args (combine-and-quote-strings
-                       lsp-proxy-java-main-arguments)
-                :vmArgs (combine-and-quote-strings
-                         lsp-proxy-java-main-jvm-arguments)))))
+      (lsp-proxy-java-debug-main)
     (let* ((file (lsp-proxy-java--current-file))
            (target (lsp-proxy-java--current-target))
            (class (plist-get target :class))
@@ -1585,38 +1843,58 @@ With prefix argument DEBUG, launch it through Dape when available."
   "Run the JUnit class or method at point.
 With prefix argument DEBUG, launch it through Dape when available."
   (interactive "P")
+  (if debug
+      (lsp-proxy-java-debug-test)
+    (let ((file (lsp-proxy-java--current-file)))
+      (unless (lsp-proxy-java--jdtls-test-file-p file)
+        (user-error "jdtls does not identify the current file as a test"))
+      (let* ((root (lsp-proxy-java--nearest-build-root file))
+             (target (lsp-proxy-java--current-target))
+             (classpaths (lsp-proxy-java--jdtls-classpaths file "test"))
+             (command
+              (lsp-proxy-java--junit-command
+               file classpaths
+               (plist-get target :class)
+               (plist-get target :method))))
+        (lsp-proxy-java--start-compilation
+         command root "test" lsp-proxy-java-test-environment
+         (lsp-proxy--path-to-uri file))))))
+
+;;;###autoload
+(defun lsp-proxy-java-debug-main ()
+  "Debug the current Java main class through jdtls Java Debug and Dape."
+  (interactive)
+  (lsp-proxy-java--ensure-dape)
+  (let* ((file (lsp-proxy-java--current-file))
+         (root (lsp-proxy-java--nearest-build-root file))
+         (target (lsp-proxy-java--debug-main-target file root))
+         (class (plist-get target :mainClass))
+         (project-name (plist-get target :projectName)))
+    (lsp-proxy-java--debug-build class project-name root)
+    (let ((paths (lsp-proxy-java--debug-resolved-classpaths
+                  class project-name)))
+      (dape
+       (lsp-proxy-java--debug-main-config
+        file root project-name class (car paths) (cadr paths))))))
+
+;;;###autoload
+(defun lsp-proxy-java-debug-test ()
+  "Debug the JUnit class or method at point through jdtls Java Debug and Dape."
+  (interactive)
+  (lsp-proxy-java--ensure-dape)
   (let ((file (lsp-proxy-java--current-file)))
     (unless (lsp-proxy-java--jdtls-test-file-p file)
       (user-error "jdtls does not identify the current file as a test"))
     (let* ((root (lsp-proxy-java--nearest-build-root file))
            (target (lsp-proxy-java--current-target))
-           (classpaths (lsp-proxy-java--jdtls-classpaths file "test"))
-           (launch (lsp-proxy-java--junit-console-launch
-                    classpaths
-                    (plist-get target :class)
-                    (plist-get target :method))))
-      (if debug
-          (progn
-            (lsp-proxy-java--ensure-dape-launch)
-            (dape
-             (append
-              (lsp-proxy-java--dape-base-config
-               file root lsp-proxy-java-test-environment)
-              (list :mainClass "org.junit.platform.console.ConsoleLauncher"
-                    :classPaths (vector (car launch))
-                    :args (combine-and-quote-strings (cdr launch))
-                    :vmArgs (combine-and-quote-strings
-                             lsp-proxy-java-test-jvm-arguments)))))
-        (let ((command
-               (lsp-proxy-java--junit-command
-                file classpaths
-                (plist-get target :class)
-                (plist-get target :method))))
-         (lsp-proxy-java--start-compilation
-          command root "test" lsp-proxy-java-test-environment
-          (lsp-proxy--path-to-uri file)))))))
-
-
+           (class (plist-get target :class))
+           (method (plist-get target :method))
+           (project-name (lsp-proxy-java--debug-project-name file))
+           (classpaths (lsp-proxy-java--jdtls-classpaths file "test")))
+      (lsp-proxy-java--debug-build class project-name root)
+      (dape
+       (lsp-proxy-java--debug-test-config
+        file root project-name classpaths class method)))))
 
 (defun lsp-proxy-java--backend (name)
   "Return the descriptor for backend NAME, or signal when it is unknown."
@@ -1755,10 +2033,35 @@ is just deleting a file."
        (lsp-proxy-java--jar-version-key b)
        (lsp-proxy-java--jar-version-key a))))))
 
+(defcustom lsp-proxy-java-debug-install-dir
+  (expand-file-name "java-debug/" lsp-proxy-install-dir)
+  "Directory holding managed Microsoft Java Debug bundle jars.
+
+jdtls loads these jars from its initialization options `bundles' array.  The
+proxy injects the newest installed bundle automatically at startup, so users do
+not need to edit `languages.toml' with machine-local jar paths."
+  :type 'directory
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java-debug-bundles ()
+  "Return the newest managed Java Debug bundle jar as a list."
+  (when (file-directory-p lsp-proxy-java-debug-install-dir)
+    (when-let* ((jar
+                 (car
+                  (sort
+                   (directory-files-recursively
+                    lsp-proxy-java-debug-install-dir
+                    "com\\.microsoft\\.java\\.debug\\.plugin-[0-9].*\\.jar\\'")
+                   (lambda (a b)
+                     (lsp-proxy-java--version<
+                      (lsp-proxy-java--jar-version-key b)
+                      (lsp-proxy-java--jar-version-key a)))))))
+      (list jar))))
+
 (defun lsp-proxy-java--jar-version-key (jar)
   "Return a comparable list of integers for JAR's `lombok-<version>.jar' name."
   (let ((name (file-name-nondirectory jar)))
-    (if (string-match "\\`lombok-\\([0-9.]+\\)" name)
+    (if (string-match "\\(?:\\`lombok-\\|java\\.debug\\.plugin-\\)\\([0-9.]+\\)" name)
         (mapcar #'string-to-number (split-string (match-string 1 name) "\\." t))
       '(0))))
 
@@ -1808,6 +2111,49 @@ The proxy resolves the jar's path at startup, so a fresh install needs
   (lsp-proxy--set-global-status "Lombok" "Installing Lombok")
   (message "[lsp-proxy] Installing Lombok ...")
   (lsp-proxy-java--install-lombok
+   force
+   (lambda (report)
+     (lsp-proxy--clear-global-status)
+     (when report
+       (message "[lsp-proxy] %s. Run M-x lsp-proxy-restart to use it" report)))))
+
+(defun lsp-proxy-java--install-debug (force on-done)
+  "Install the Java Debug jdtls bundle, then call ON-DONE with a report or nil."
+  (let ((dir (file-name-as-directory
+              (expand-file-name lsp-proxy-java-debug-install-dir))))
+    (jsonrpc-async-request
+     lsp-proxy--connection 'emacs/installJavaDebug
+     (list :params (list :installDir dir :force (if force t :json-false)))
+     :success-fn
+     (lambda (result)
+       (let ((version (plist-get result :version))
+             (path (plist-get result :jarPath)))
+         (funcall on-done
+                  (if (eq (plist-get result :alreadyInstalled) t)
+                      (format "Java Debug %s already installed" version)
+                    (format "Installed Java Debug %s (jdtls bundle): %s" version path)))))
+     :error-fn
+     (lambda (err)
+       (lsp-proxy--error "Java Debug install failed: %s" (or (plist-get err :message) err))
+       (funcall on-done nil))
+     :timeout-fn
+     (lambda ()
+       (lsp-proxy--error "Java Debug install timed out")
+       (funcall on-done nil))
+     :timeout 3600)))
+
+;;;###autoload
+(defun lsp-proxy-java-install-debug (&optional force)
+  "Download the Microsoft Java Debug bundle used by jdtls debug commands.
+
+With a prefix argument FORCE, re-download even if the latest resolved bundle is
+already present.  The proxy injects installed bundles into jdtls initialization
+options at startup, so a fresh install needs `lsp-proxy-restart'."
+  (interactive "P")
+  (lsp-proxy--ensure-connection)
+  (lsp-proxy--set-global-status "Java Debug" "Installing Java Debug")
+  (message "[lsp-proxy] Installing Java Debug ...")
+  (lsp-proxy-java--install-debug
    force
    (lambda (report)
      (lsp-proxy--clear-global-status)
@@ -1900,6 +2246,10 @@ install needs `lsp-proxy-restart' before it is visible."
          ;; retract the server install that just succeeded.
          (when (lsp-proxy-java--backend-get backend :wants-lombok)
            (lsp-proxy-java--install-lombok
+            nil
+            (lambda (report)
+              (when report (message "[lsp-proxy] %s" report))))
+           (lsp-proxy-java--install-debug
             nil
             (lambda (report)
               (when report (message "[lsp-proxy] %s" report)))))))
@@ -2560,14 +2910,20 @@ none of this (a plain JDWP host/port), so only the port gets added.
 Uses the bare-symbol scratch key `lsp-proxy-uri' for an
 already-known source URI (from a CodeLens click) to skip the extra
 `resolveClassDocument' round-trip; harmless to omit."
-    (setq config (plist-put config 'port (lsp-proxy-java--dape-start-debug-server)))
-    (if (not (equal (plist-get config :request) "launch"))
-        config
-      (let* ((main-class (or (plist-get config :mainClass)
-                             (user-error "lsp-proxy-java: no `:mainClass' to resolve a launch config for")))
-             (uri (or (plist-get config 'lsp-proxy-uri)
-                      (lsp-proxy-java--dape-resolve-uri main-class))))
-        (lsp-proxy-java--dape-resolve-launch config uri))))
+    (condition-case err
+        (progn
+          (setq config (plist-put config 'port (lsp-proxy-java--dape-start-debug-server)))
+          (if (not (equal (plist-get config :request) "launch"))
+              config
+            (let* ((main-class (or (plist-get config :mainClass)
+                                   (user-error "lsp-proxy-java: no `:mainClass' to resolve a launch config for")))
+                   (uri (or (plist-get config 'lsp-proxy-uri)
+                            (lsp-proxy-java--dape-resolve-uri main-class))))
+              (lsp-proxy-java--dape-resolve-launch config uri))))
+      (user-error
+       (if (string-match-p "start_debug_server" (error-message-string err))
+           (lsp-proxy-java--debug-populate-launch-config config)
+         (signal (car err) (cdr err))))))
 
   ;; Named templates for `M-x dape'. `:mainClass''s form is only evaluated by
   ;; `dape' when reading a config by name (`dape--config-eval'); by the time

@@ -364,6 +364,13 @@ picked up on the next `lsp-proxy-restart'."
                                    (when-let* ((jar (and (fboundp 'lsp-proxy-java-lombok-jar)
                                                          (lsp-proxy-java-lombok-jar))))
                                      (list (format "LSP_PROXY_LOMBOK_JAR=%s" jar)))
+                                   ;; jdtls Java Debug bundles. The proxy merges
+                                   ;; these into initializationOptions.bundles for
+                                   ;; jdtls only.
+                                   (when-let* ((bundles (and (fboundp 'lsp-proxy-java-debug-bundles)
+                                                             (lsp-proxy-java-debug-bundles))))
+                                     (list (format "LSP_PROXY_JAVA_DEBUG_BUNDLES=%s"
+                                                   (mapconcat #'identity bundles path-separator))))
                                    (lsp-proxy--managed-server-path-environment))))
                               (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix

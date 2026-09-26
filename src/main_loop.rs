@@ -896,6 +896,9 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallLombok::METHOD => {
                 self.handle_install_lombok(req);
             }
+            Message::Request(req) if req.method == lsp_ext::InstallJavaDebug::METHOD => {
+                self.handle_install_java_debug(req);
+            }
             Message::Request(req) if req.method == lsp_ext::GetJavaProjectRuntime::METHOD => {
                 self.handle_get_java_project_runtime(req);
             }
@@ -1257,6 +1260,47 @@ impl Application {
                 Ok((jar, version, already_installed)) => Response::new_ok(
                     id,
                     lsp_ext::InstallLombokResult {
+                        jar_path: jar.to_string_lossy().to_string(),
+                        version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => {
+                    Response::new_err(id, jsonrpc::ErrorCode::InternalError, format!("{err:#}"))
+                }
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn handle_install_java_debug(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallJavaDebugParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(err) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        format!("invalid installJavaDebug params: {err}"),
+                    ));
+                    return;
+                }
+            };
+
+        let sender = self.sender.clone();
+        let id = req.id.clone();
+        let install_dir = std::path::PathBuf::from(&params.install_dir);
+        let force = params.force;
+
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone(), "Java Debug");
+            let outcome =
+                crate::java_install::install_java_debug(&install_dir, force, progress).await;
+
+            let response = match outcome {
+                Ok((jar, version, already_installed)) => Response::new_ok(
+                    id,
+                    lsp_ext::InstallJavaDebugResult {
                         jar_path: jar.to_string_lossy().to_string(),
                         version,
                         already_installed,

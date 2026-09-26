@@ -175,6 +175,40 @@ impl Request for InstallLombok {
     const METHOD: &'static str = "emacs/installLombok";
 }
 
+// emacs/installJavaDebug
+//
+// Downloads the Microsoft Java Debug bundle jar that extends jdtls with the
+// `vscode.java.*` debug commands. The editor owns the install directory, while the
+// proxy owns the async download/progress plumbing and injects installed bundles into
+// jdtls initialization options at startup.
+#[derive(Debug)]
+pub enum InstallJavaDebug {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaDebugParams {
+    /// Where to place `<version>/com.microsoft.java.debug.plugin-<version>.jar`.
+    pub install_dir: String,
+    /// Re-download even when the resolved version is already present.
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaDebugResult {
+    pub jar_path: String,
+    pub version: String,
+    /// True when the resolved version was already present and nothing was downloaded.
+    pub already_installed: bool,
+}
+
+impl Request for InstallJavaDebug {
+    type Params = InstallJavaDebugParams;
+    type Result = InstallJavaDebugResult;
+    const METHOD: &'static str = "emacs/installJavaDebug";
+}
+
 // emacs/setJavaProjectRuntime
 //
 // Records a per-workspace project JDK override. This is deliberately separate
@@ -1892,6 +1926,39 @@ mod install_lombok_tests {
         let json = serde_json::to_string(&InstallLombokResult {
             jar_path: "/u/lombok-1.18.48.jar".into(),
             version: "1.18.48".into(),
+            already_installed: true,
+        })
+        .unwrap();
+        assert!(json.contains("\"jarPath\""), "{json}");
+        assert!(json.contains("\"alreadyInstalled\":true"), "{json}");
+    }
+}
+
+#[cfg(test)]
+mod install_java_debug_tests {
+    use super::{InstallJavaDebug, InstallJavaDebugParams, InstallJavaDebugResult};
+    use lsp_types::request::Request as _;
+
+    #[test]
+    fn the_method_name_is_stable() {
+        assert_eq!(InstallJavaDebug::METHOD, "emacs/installJavaDebug");
+    }
+
+    #[test]
+    fn params_and_result_round_trip_through_the_envelope() {
+        let wire = r#"{
+          "id": 8,
+          "method": "emacs/installJavaDebug",
+          "params": { "params": { "installDir": "/u/.emacs.d/lsp-proxy/java-debug/" } }
+        }"#;
+        let req: crate::msg::Request = serde_json::from_str(wire).unwrap();
+        let params: InstallJavaDebugParams = serde_json::from_value(req.params.params).unwrap();
+        assert_eq!(params.install_dir, "/u/.emacs.d/lsp-proxy/java-debug/");
+        assert!(!params.force, "an absent force must mean false");
+
+        let json = serde_json::to_string(&InstallJavaDebugResult {
+            jar_path: "/u/com.microsoft.java.debug.plugin-1.0.0.jar".into(),
+            version: "1.0.0".into(),
             already_installed: true,
         })
         .unwrap();

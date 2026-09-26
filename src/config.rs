@@ -46,6 +46,8 @@ pub fn set_copilot_server_name(name: String) {
 }
 
 static LOMBOK_JAR_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
+static JAVA_DEBUG_BUNDLES: once_cell::sync::OnceCell<Vec<String>> =
+    once_cell::sync::OnceCell::new();
 
 /// Initialise the Lombok agent jar path from `LSP_PROXY_LOMBOK_JAR`.
 ///
@@ -62,6 +64,27 @@ pub fn initialize_lombok_jar_path() {
 /// Path to the managed Lombok agent jar, or `None` when none is installed.
 pub fn lombok_jar_path() -> Option<&'static str> {
     LOMBOK_JAR_PATH.get().map(|s| s.as_str())
+}
+
+/// Initialise managed Java Debug bundle paths from `LSP_PROXY_JAVA_DEBUG_BUNDLES`.
+///
+/// The editor resolves these paths because it owns the install layout. Multiple
+/// entries are separated with the platform path separator, matching PATH-style
+/// environment variables.
+pub fn initialize_java_debug_bundles() {
+    if let Ok(val) = std::env::var("LSP_PROXY_JAVA_DEBUG_BUNDLES") {
+        let bundles: Vec<String> = std::env::split_paths(&val)
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
+        if !bundles.is_empty() {
+            JAVA_DEBUG_BUNDLES.set(bundles).ok();
+        }
+    }
+}
+
+pub fn java_debug_bundles() -> &'static [String] {
+    JAVA_DEBUG_BUNDLES.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Initialise the remote binary path from the `LSP_PROXY_REMOTE_BINARY_PATH`
