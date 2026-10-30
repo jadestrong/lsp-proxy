@@ -273,6 +273,9 @@ impl Document {
 
         for entry in self.language_servers_of_virtual_doc.values() {
             let ls = &entry.client;
+            if !ls.is_initialized() {
+                continue;
+            }
             has_any_servers = true;
 
             let sync_kind = ls.get_text_document_sync_kind();

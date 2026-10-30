@@ -176,7 +176,12 @@ impl Client {
         req_timeout: u64,
         doc_path: Option<&std::path::PathBuf>,
         features: Option<&LanguageServerFeatures>,
-    ) -> registry::Result<(Self, UnboundedReceiver<(usize, Call)>, Arc<Notify>)> {
+    ) -> registry::Result<(
+        Self,
+        UnboundedReceiver<(usize, Call)>,
+        Arc<Notify>,
+        UnboundedSender<(usize, Call)>,
+    )> {
         // find the closest root directory as the LSP workspace
         let default_workspace = SupportWorkspace::default();
         let support_workspace = features
@@ -217,7 +222,7 @@ impl Client {
         let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
         let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
 
-        let (server_rx, server_tx, initialize_notify) =
+        let (server_rx, server_tx, initialize_notify, client_tx) =
             Transport::start(reader, writer, stderr, id, name.clone());
 
         if let Some(features) = features {
@@ -258,7 +263,7 @@ impl Client {
             activate_time: Arc::new(Mutex::new(get_activate_time())),
         };
 
-        Ok((client, server_rx, initialize_notify))
+        Ok((client, server_rx, initialize_notify, client_tx))
     }
 
     pub fn name(&self) -> &str {

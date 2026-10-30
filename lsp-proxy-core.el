@@ -132,6 +132,7 @@ This is used to determine if LSP requests should be sent.")
 (defvar lsp-proxy-diagnostics-max-push-count)
 (defvar lsp-proxy--language)
 (defvar lsp-proxy-mode)
+(declare-function lsp-proxy--confirm-project-activation "lsp-proxy")
 
 ;;; External variables from lsp-proxy-org.el
 (defvar lsp-proxy-enable-org-babel)
@@ -389,6 +390,8 @@ Only sends requests if servers are available."
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
             (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
+            (setq-local lsp-proxy--server-capabilities-received t)
+            (lsp-proxy--confirm-project-activation lsp-proxy--has-any-servers)
             (setq-local lsp-proxy--text-document-sync-kind (or text-document-sync-kind "incremental"))
             (lsp-proxy-activate-inlay-hints-mode)
             (lsp-proxy-diagnostics--request-pull-diagnostics)
@@ -605,6 +608,7 @@ terminated even when Emacs exits without calling `lsp-proxy-restart'."
     (with-temp-buffer lsp-proxy--log-file))
   (find-file lsp-proxy--log-file))
 
+;;;###autoload
 (defun lsp-proxy-open-config-file ()
   "Open the configuration file. If it does not exist, create it first."
   (interactive)

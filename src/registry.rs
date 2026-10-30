@@ -20,6 +20,8 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
 pub type LanguageServerName = String;
+const INITIALIZATION_FAILED_METHOD: &str = "emacs/serverInitializationFailed";
+
 struct NewClient(Arc<Client>, UnboundedReceiver<(usize, Call)>);
 
 #[derive(Error, Debug)]
@@ -46,6 +48,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Debug, PartialEq, Clone)]
 pub enum NotificationFromServer {
     Initialized,
+    InitializationFailed(String),
     Exit,
     PublishDianostics(lsp::PublishDiagnosticsParams),
     ShowMessage(lsp::ShowMessageParams),
@@ -58,6 +61,10 @@ impl NotificationFromServer {
     pub fn parse(method: &str, params: jsonrpc::Params) -> Result<NotificationFromServer> {
         let notification = match method {
             lsp::notification::Initialized::METHOD => Self::Initialized,
+            INITIALIZATION_FAILED_METHOD => {
+                let params: Vec<String> = params.parse()?;
+                Self::InitializationFailed(params.into_iter().next().unwrap_or_default())
+            }
             lsp::notification::Exit::METHOD => Self::Exit,
             lsp::notification::PublishDiagnostics::METHOD => {
                 let params: lsp::PublishDiagnosticsParams = params.parse()?;
@@ -85,6 +92,25 @@ impl NotificationFromServer {
         };
 
         Ok(notification)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{jsonrpc, NotificationFromServer, INITIALIZATION_FAILED_METHOD};
+
+    #[test]
+    fn parses_initialization_failure_notification() {
+        let notification = NotificationFromServer::parse(
+            INITIALIZATION_FAILED_METHOD,
+            jsonrpc::Params::Array(vec![serde_json::json!("initialize timed out")]),
+        )
+        .expect("notification should parse");
+
+        assert_eq!(
+            notification,
+            NotificationFromServer::InitializationFailed("initialize timed out".to_string())
+        );
     }
 }
 
@@ -291,7 +317,7 @@ fn start_client(
     doc_path: Option<&std::path::PathBuf>,
     ls_features: Option<&LanguageServerFeatures>,
 ) -> Result<NewClient> {
-    let (client, incoming, initialize_notify) = Client::start(
+    let (client, incoming, initialize_notify, client_tx) = Client::start(
         &ls_config.command,
         &ls_config.args,
         ls_config.config.clone(),
@@ -324,7 +350,14 @@ fn start_client(
             .await;
 
         if let Err(e) = value {
-            error!("failed to initialize language server: {e}");
+            let message = e.to_string();
+            error!("failed to initialize language server: {message}");
+            let notification = jsonrpc::Notification {
+                jsonrpc: None,
+                method: INITIALIZATION_FAILED_METHOD.to_string(),
+                params: jsonrpc::Params::Array(vec![serde_json::Value::String(message)]),
+            };
+            let _ = client_tx.send((id, notification.into()));
             return;
         }
         // debug!("server {:?} capabilities {:?}", _client.name(), value.ok());
