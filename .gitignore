@@ -8,3 +8,5 @@ lsp-proxy
 lsp-proxy.exe
 /emacs-lsp-proxy
 /emacs-lsp-proxy.exe
+.DS_Store
+.agent-shell
