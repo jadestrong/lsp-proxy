@@ -46,6 +46,23 @@ use std::{
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
+fn should_discard_org_virtual_diagnostics<V, R>(
+    server_id: usize,
+    virtual_document_server_ids: V,
+    regular_document_server_ids: R,
+) -> bool
+where
+    V: IntoIterator<Item = usize>,
+    R: IntoIterator<Item = usize>,
+{
+    virtual_document_server_ids
+        .into_iter()
+        .any(|id| id == server_id)
+        && !regular_document_server_ids
+            .into_iter()
+            .any(|id| id == server_id)
+}
+
 pub fn main_loop(connection: Connection, syn_loader_config: syntax::Configuration) -> Result<()> {
     let (sender_for_application, mut recevier_by_application) = unbounded_channel();
     let (sender_for_controller, receiver_by_controller) = bounded(0);
@@ -495,8 +512,18 @@ impl Application {
                             return;
                         }
                         let doc = self.editor.get(&params.uri);
-                        if doc.is_org_file() {
-                            log::debug!("Disabled pushlishDiagnostics for org file.");
+                        if doc.is_org_file()
+                            && should_discard_org_virtual_diagnostics(
+                                server_id,
+                                doc.language_servers_of_virtual_doc
+                                    .values()
+                                    .map(|entry| entry.client.id()),
+                                doc.language_servers.values().map(|client| client.id()),
+                            )
+                        {
+                            log::debug!(
+                                "Discarding publishDiagnostics from a virtual-document server for an org file."
+                            );
                             return;
                         }
                         if let Some(version) = params.version {
@@ -1366,5 +1393,25 @@ impl Application {
                 "No uri provided".to_string(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_discard_org_virtual_diagnostics;
+
+    #[test]
+    fn discards_diagnostics_from_virtual_document_only_server() {
+        assert!(should_discard_org_virtual_diagnostics(2, [1, 2], [3]));
+    }
+
+    #[test]
+    fn keeps_diagnostics_from_regular_document_server() {
+        assert!(!should_discard_org_virtual_diagnostics(2, [1], [2, 3]));
+    }
+
+    #[test]
+    fn keeps_diagnostics_from_server_registered_for_both_document_types() {
+        assert!(!should_discard_org_virtual_diagnostics(2, [1, 2], [2, 3]));
     }
 }
