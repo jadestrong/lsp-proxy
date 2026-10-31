@@ -145,7 +145,7 @@ impl NotificationFromServer {
 }
 
 #[cfg(test)]
-mod tests {
+mod notification_tests {
     use super::{jsonrpc, NotificationFromServer, INITIALIZATION_FAILED_METHOD};
 
     #[test]
