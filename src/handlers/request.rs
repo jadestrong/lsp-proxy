@@ -16,6 +16,7 @@ use crate::{
     code_action::{
         action_category, action_fixes_diagnostics, action_preferred, CodeActionOrCommandItem,
     },
+    code_lens::CodeLensItem,
     completion_cache::CompletionCache,
     config::{self, DEFAULT_MAX_DIAGNOSTICS_PUSH, MAX_COMPLETION_ITEMS},
     document::{DiagnosticItem, DiagnosticProvider, DocumentId},
@@ -25,8 +26,8 @@ use crate::{
     msg::{self, Context, Message, RequestId, Response},
     syntax::LanguageServerFeature,
     utils::{
-        is_diagnostic_vectors_equal, limit_diagnostics_for_push, lsp_symbols_to_imenu,
-        sort_imenu_entries_grouped, truncate_completion_item,
+        is_diagnostic_vectors_equal, limit_diagnostics_for_push, log_diagnostics_mismatch,
+        lsp_symbols_to_imenu, sort_imenu_entries_grouped, truncate_completion_item,
     },
 };
 
@@ -397,53 +398,54 @@ pub(crate) async fn handle_completion(
                         language_server_name
                     );
                     let items = raw_items
-                    .into_iter()
-                    .map(|item| {
-                        let mut new_item = truncate_completion_item(item);
-                        if let Some(text_edit) = &mut new_item.text_edit {
-                            if let lsp_types::CompletionTextEdit::InsertAndReplace(
-                                replace_text_edit,
-                            ) = text_edit
-                            {
-                                new_item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(
-                                    lsp_types::TextEdit {
-                                        range: replace_text_edit.replace,
-                                        new_text: replace_text_edit.new_text.clone(),
-                                    },
-                                ));
-                            }
-
-                            // Translate textEdit range from virtual doc coordinates back to org file coordinates
-                            if let Some(ref vdoc) = vdoc_ctx {
-                                if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
-                                    &mut new_item.text_edit
+                        .into_iter()
+                        .map(|item| {
+                            let mut new_item = truncate_completion_item(item);
+                            if let Some(text_edit) = &mut new_item.text_edit {
+                                if let lsp_types::CompletionTextEdit::InsertAndReplace(
+                                    replace_text_edit,
+                                ) = text_edit
                                 {
-                                    edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    new_item.text_edit = Some(lsp_types::CompletionTextEdit::Edit(
+                                        lsp_types::TextEdit {
+                                            range: replace_text_edit.replace,
+                                            new_text: replace_text_edit.new_text.clone(),
+                                        },
+                                    ));
                                 }
-                                // Also translate additionalTextEdits for virtual documents
-                                if let Some(ref mut additional_edits) =
-                                    new_item.additional_text_edits
-                                {
-                                    for edit in additional_edits.iter_mut() {
+
+                                // Translate textEdit range from virtual doc coordinates back to org file coordinates
+                                if let Some(ref vdoc) = vdoc_ctx {
+                                    if let Some(lsp_types::CompletionTextEdit::Edit(edit)) =
+                                        &mut new_item.text_edit
+                                    {
                                         edit.range = vdoc.translate_range_from_virtual(edit.range);
+                                    }
+                                    // Also translate additionalTextEdits for virtual documents
+                                    if let Some(ref mut additional_edits) =
+                                        new_item.additional_text_edits
+                                    {
+                                        for edit in additional_edits.iter_mut() {
+                                            edit.range =
+                                                vdoc.translate_range_from_virtual(edit.range);
+                                        }
                                     }
                                 }
                             }
-                        }
-                        let label_len = &new_item.label.chars().count();
-                        CompletionItem {
-                            item: new_item,
-                            language_server_id: if is_support_resolve {
-                                Some(language_server_id)
-                            } else {
-                                None
-                            },
-                            language_server_name: language_server_name.clone(),
-                            start: context.start_point,
-                            end: context.start_point + (*label_len as i32 - *prefix_len as i32),
-                        }
-                    })
-                    .collect();
+                            let label_len = &new_item.label.chars().count();
+                            CompletionItem {
+                                item: new_item,
+                                language_server_id: if is_support_resolve {
+                                    Some(language_server_id)
+                                } else {
+                                    None
+                                },
+                                language_server_name: language_server_name.clone(),
+                                start: context.start_point,
+                                end: context.start_point + (*label_len as i32 - *prefix_len as i32),
+                            }
+                        })
+                        .collect();
 
                     anyhow::Ok(items)
                 }
@@ -498,14 +500,15 @@ pub(crate) async fn handle_completion(
                     filtered_items.len()
                 );
                 if trigger_kind == &lsp_types::CompletionTriggerKind::INVOKED || *prefix_len == 0 {
-                    debug!("completion return all filtered items: {}", filtered_items.len());
+                    debug!(
+                        "completion return all filtered items: {}",
+                        filtered_items.len()
+                    );
                     anyhow::Ok(filtered_items.to_owned())
                 } else {
                     let slice_length = std::cmp::min(*max_items, filtered_items.len());
                     let slice_items = &filtered_items[..slice_length];
-                    debug!(
-                        "completion return slice: max={max_items} slice_len={slice_length}"
-                    );
+                    debug!("completion return slice: max={max_items} slice_len={slice_length}");
                     anyhow::Ok(slice_items.to_owned())
                 }
             };
@@ -727,6 +730,9 @@ pub(crate) async fn handle_execute_command(
                 .map(|_| Response::new_ok(req.id, ""));
             }
         }
+        // Forward the command result back to the client. Commands like the
+        // IntelliJ backend's `decompile` return data ({code, language}) that the
+        // client needs; a bare "" would drop it.
         call_single_language_server::<lsp_types::request::ExecuteCommand>(
             &req,
             params,
@@ -735,12 +741,32 @@ pub(crate) async fn handle_execute_command(
             Some(context.language_server_id),
         )
         .await
-        .map(|_| Response::new_ok(req.id, ""))
+        .map(|(result, _)| Response::new_ok(req.id, result))
     } else {
-        Err(anyhow::Error::msg(format!(
-            "No context params of {:?}",
-            req.method
-        )))
+        // No explicit server context: route to whichever server advertises the
+        // command in its executeCommandProvider. Lets the client invoke a
+        // command (e.g. `decompile`) by name without tracking server ids.
+        let target = language_servers.iter().find(|ls| {
+            ls.capabilities()
+                .execute_command_provider
+                .as_ref()
+                .is_some_and(|options| options.commands.iter().any(|c| *c == params.command))
+        });
+        match target {
+            Some(ls) => call_single_language_server::<lsp_types::request::ExecuteCommand>(
+                &req,
+                params,
+                &language_servers,
+                None,
+                Some(ls.id()),
+            )
+            .await
+            .map(|(result, _)| Response::new_ok(req.id, result)),
+            None => Err(anyhow::Error::msg(format!(
+                "No language server supports command {:?}",
+                params.command
+            ))),
+        }
     }
 }
 
@@ -1165,6 +1191,68 @@ pub(crate) async fn handle_document_highlight(
     .map(|(resp, _)| Response::new_ok(req.id.clone(), resp))
 }
 
+pub(crate) async fn handle_code_lens(
+    req: msg::Request,
+    params: lsp_types::CodeLensParams,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    let language_server = language_servers
+        .iter()
+        .find(|ls| ls.with_feature(LanguageServerFeature::CodeLens));
+    let Some(ls) = language_server else {
+        return Ok(Response::new_ok(req.id, Vec::<CodeLensItem>::new()));
+    };
+    let language_server_id = ls.id();
+    let language_server_name = ls.name().to_string();
+
+    let json = ls
+        .call::<lsp_types::request::CodeLensRequest>(req.id.clone(), params)
+        .await?;
+    let lenses: Option<Vec<lsp_types::CodeLens>> = serde_json::from_value(json)?;
+    let items = lenses
+        .unwrap_or_default()
+        .into_iter()
+        .map(|lsp_item| CodeLensItem {
+            lsp_item,
+            language_server_id,
+            language_server_name: language_server_name.clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(Response::new_ok(req.id, items))
+}
+
+pub(crate) async fn handle_code_lens_resolve(
+    req: msg::Request,
+    code_lens: lsp_types::CodeLens,
+    language_servers: Vec<Arc<Client>>,
+) -> Result<Response> {
+    if let Some(Context::Common(context)) = &req.params.context {
+        call_single_language_server::<lsp_types::request::CodeLensResolve>(
+            &req,
+            code_lens,
+            &language_servers,
+            None,
+            Some(context.language_server_id),
+        )
+        .await
+        .map(|(resolved, language_server_name)| {
+            Response::new_ok(
+                req.id,
+                CodeLensItem {
+                    lsp_item: resolved,
+                    language_server_id: context.language_server_id,
+                    language_server_name,
+                },
+            )
+        })
+    } else {
+        Err(anyhow::Error::msg(format!(
+            "No CodeLens Resolve Context {:?}",
+            req.params
+        )))
+    }
+}
+
 pub(crate) async fn handle_rename(
     req: msg::Request,
     params: lsp_types::RenameParams,
@@ -1230,8 +1318,29 @@ pub(crate) async fn handle_pull_diagnostic_response(
     result: lsp_types::DocumentDiagnosticReportResult,
     document_id: DocumentId,
     limit_diagnostics: bool,
+    pull_generation: u64,
 ) {
     job::dispatch(move |editor| {
+        // Discard the whole response if a newer pull batch has already been applied
+        // for this document; see `Document::accept_pull_generation`.
+        //
+        // This has to happen before anything is written, `previous_diagnostic_id`
+        // included: recording the resultId of a report we then threw away would let
+        // the next pull send it as `previousResultId`, the server could legitimately
+        // answer `Unchanged`, and those diagnostics would never arrive at all.
+        //
+        // `related_documents` is skipped along with it — those reports come from the
+        // same superseded analysis.
+        // A missing document is not a supersession — fall through so the report's
+        // `related_documents` are still applied to whatever is still open, as before.
+        if let Some(doc) = editor.document_mut(document_id) {
+            if !doc.accept_pull_generation(pull_generation) {
+                log::debug!(
+                    "Discarding pull diagnostics for document {document_id}: batch {pull_generation} was superseded"
+                );
+                return;
+            }
+        }
         let related_documents = match result {
             lsp_types::DocumentDiagnosticReportResult::Report(report) => {
                 let (result_id, related_documents, diagnostics) = match report {
@@ -1254,9 +1363,18 @@ pub(crate) async fn handle_pull_diagnostic_response(
                     doc.previous_diagnostic_id = result_id;
                     if let Some(diags) = diagnostics {
                         let old_diags = doc.get_diagnostics_by_provider(&provider);
-                        if old_diags.is_none()
-                            || !is_diagnostic_vectors_equal(old_diags.as_ref().unwrap(), &diags)
-                        {
+                        let diagnostics_changed = match &old_diags {
+                            None => true,
+                            Some(old) => !is_diagnostic_vectors_equal(old, &diags),
+                        };
+                        // Own a copy of the previous set now (only when there is a genuine
+                        // mismatch to explain, not on the first-ever publish) before
+                        // `doc.replace_diagnostics' below takes a `&mut doc' borrow that
+                        // would otherwise outlive `old_diags'.
+                        let previous_diagnostics: Option<Vec<lsp_types::Diagnostic>> = old_diags
+                            .filter(|_| diagnostics_changed)
+                            .map(|old| old.into_iter().cloned().collect());
+                        if diagnostics_changed {
                             let diagnostics: Vec<DiagnosticItem> = diags
                                 .iter()
                                 .map(|diag| DiagnosticItem {
@@ -1277,11 +1395,23 @@ pub(crate) async fn handle_pull_diagnostic_response(
                                 None => vec![],
                             };
 
+                            let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
+                                .get()
+                                .copied()
+                                .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
+                            let total_count = all_diagnostics.len();
+                            if limit_diagnostics && total_count > max_diagnostics_push {
+                                if let Some(previous) = &previous_diagnostics {
+                                    log_diagnostics_mismatch(
+                                        &doc.uri,
+                                        &previous.iter().collect::<Vec<_>>(),
+                                        &diags,
+                                        max_diagnostics_push,
+                                    );
+                                }
+                            }
+
                             let diagnostics = if limit_diagnostics {
-                                let max_diagnostics_push = config::MAX_DIAGNOSTICS_PUSH
-                                    .get()
-                                    .copied()
-                                    .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
                                 limit_diagnostics_for_push(&all_diagnostics, max_diagnostics_push)
                             } else {
                                 all_diagnostics
@@ -1462,6 +1592,13 @@ pub(crate) async fn handle_forward_request(
 
     match target_server {
         Some(ls) => {
+            // Fire-and-forget for methods the server declares as notifications.
+            // Sending one as a request would block until the request timeout for a
+            // reply the server is never going to produce.
+            if params.notify {
+                ls.notify_method(params.method.clone(), params.params)?;
+                return Ok(Response::new_ok(req.id, serde_json::Value::Null));
+            }
             // Forward the request using the call_method
             let json = ls
                 .call_method(req.id.clone(), params.method.clone(), params.params)

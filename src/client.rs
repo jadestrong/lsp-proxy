@@ -55,6 +55,84 @@ pub struct RegisteredCapability {
     pub register_options: Option<lsp_types::TextDocumentRegistrationOptions>,
 }
 
+/// The `textDocument/publishDiagnostics` capabilities we advertise.
+///
+/// `versionSupport` states whether we *interpret* the `version` field of a
+/// `publishDiagnostics` notification. We do not — matching
+/// vscode-languageclient, which advertises `false` and whose `handleDiagnostics`
+/// reads only `uri` and `diagnostics`.
+///
+/// This used to be `true` while `main_loop` enforced `version == doc.version`,
+/// which made the push channel unusable. A server that stamps the version it
+/// analysed rather than the client's newest is behaving correctly, but under
+/// continuous typing its notifications never match, so every one was discarded —
+/// and because nothing re-requests a push, the final analysis was lost for good.
+///
+/// Extracted from the `initialize` capabilities literal purely so this decision
+/// Workspace-level client capabilities sent at `initialize`.
+///
+/// Extracted so the declarations can be asserted on directly: several of them are
+/// promises about behaviour implemented elsewhere, and a silent change to one is
+/// indistinguishable from the feature simply not working.
+fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
+    lsp::WorkspaceClientCapabilities {
+        configuration: Some(true),
+        did_change_configuration: Some(lsp::DynamicRegistrationClientCapabilities {
+            dynamic_registration: Some(false),
+        }),
+        workspace_folders: Some(true),
+        apply_edit: Some(true),
+        symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
+            dynamic_registration: Some(false),
+            ..Default::default()
+        }),
+        execute_command: Some(lsp::DynamicRegistrationClientCapabilities {
+            dynamic_registration: Some(false),
+        }),
+        inlay_hint: Some(lsp::InlayHintWorkspaceClientCapabilities {
+            refresh_support: Some(false),
+        }),
+        // Without this a server never tells us its lenses became
+        // available, and there is no other signal that they did: jdtls
+        // answers `textDocument/codeLens` while it is still importing,
+        // so the first (unresolved) answer would stand until the buffer
+        // was reverted by hand. Note this is the *workspace* capability,
+        // distinct from `text_document.code_lens` below.
+        code_lens: Some(lsp::CodeLensWorkspaceClientCapabilities {
+            refresh_support: Some(true),
+        }),
+        workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
+            document_changes: Some(true),
+            resource_operations: Some(vec![
+                lsp::ResourceOperationKind::Create,
+                lsp::ResourceOperationKind::Rename,
+                lsp::ResourceOperationKind::Delete,
+            ]),
+            failure_handling: Some(lsp::FailureHandlingKind::Abort),
+            normalizes_line_endings: Some(false),
+            change_annotation_support: None,
+        }),
+        did_change_watched_files: Some(lsp::DidChangeWatchedFilesClientCapabilities {
+            dynamic_registration: Some(true),
+            relative_pattern_support: Some(false),
+        }),
+        file_operations: Some(lsp::WorkspaceFileOperationsClientCapabilities {
+            will_rename: Some(true),
+            did_rename: Some(true),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// is covered by a test.
+fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabilities {
+    lsp::PublishDiagnosticsClientCapabilities {
+        version_support: Some(false),
+        ..Default::default()
+    }
+}
+
 #[derive(Debug)]
 pub struct Client {
     id: usize,
@@ -88,7 +166,7 @@ impl Client {
         let file_root = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&file_root).ok();
 
@@ -190,7 +268,7 @@ impl Client {
         let root_path = find_lsp_workspace(
             doc_path.map(|p| p.as_path()),
             root_markers,
-            support_workspace
+            support_workspace,
         );
         let root_uri = lsp::Url::from_file_path(&root_path).ok();
 
@@ -201,9 +279,27 @@ impl Client {
             doc_path,
             root_path
         );
+        let config = crate::java_project::configure_jdtls_project_runtime(
+            &name,
+            config,
+            &root_path,
+            doc_path.map(|p| p.as_path()),
+        );
 
-        // Resolve path to the binary
-        let cmd = which::which(cmd).map_err(|err| anyhow::anyhow!(err))?;
+        // Resolve path to the binary.
+        //
+        // "Not on PATH" is separated from every other lookup failure: it is the
+        // expected outcome whenever a server is configured but not installed, and it
+        // is the only one with an actionable next step for the user. The caller
+        // relays it to the editor as `emacs/serverStartFailure`; folding it into
+        // `Other` would leave that failure as an `error!` line nobody sees at the
+        // default log level.
+        let cmd = which::which(cmd).map_err(|err| match err {
+            which::Error::CannotFindBinaryPath => {
+                registry::Error::ExecutableNotFound(cmd.to_string())
+            }
+            other => registry::Error::Other(anyhow::anyhow!(other)),
+        })?;
 
         let process = Command::new(cmd)
             .envs(server_envirment)
@@ -432,20 +528,26 @@ impl Client {
                 Some(OneOf::Left(true) | OneOf::Right(InlayHintServerCapabilities::Options(_)))
             ),
             LanguageServerFeature::PullDiagnostics => capabilities.diagnostic_provider.is_some(),
+            LanguageServerFeature::CodeLens => capabilities.code_lens_provider.is_some(),
         }
     }
 
     pub fn supports_registered_feature(&self, feature: LanguageServerFeature) -> bool {
         let registered_capabilities = self.registered_capabilities.lock();
-        if feature == LanguageServerFeature::Format {
-            return registered_capabilities
-                .iter()
-                .any(|cap| cap.method == lsp_types::request::Formatting::METHOD);
-        }
-        false
+        let method = match feature {
+            LanguageServerFeature::Format => lsp_types::request::Formatting::METHOD,
+            LanguageServerFeature::CodeLens => lsp_types::request::CodeLensRequest::METHOD,
+            _ => return false,
+        };
+        registered_capabilities
+            .iter()
+            .any(|cap| cap.method == method)
     }
 
-    async fn request<R: lsp::request::Request>(&self, params: R::Params) -> Result<R::Result>
+    pub(crate) async fn request<R: lsp::request::Request>(
+        &self,
+        params: R::Params,
+    ) -> Result<R::Result>
     where
         R::Params: serde::Serialize,
         R::Result: core::fmt::Debug, // TODO temporary
@@ -468,6 +570,23 @@ impl Client {
     }
 
     /// Call an arbitrary method on the language server
+    /// Send `method` as a notification, with the method name known only at runtime.
+    ///
+    /// The notification twin of [`Self::call_method`]. `notify` cannot serve here
+    /// because it takes the method from a `Notification` type's `METHOD` constant,
+    /// and a forwarded method's name is not known until the editor names it.
+    pub fn notify_method(&self, method: String, params: Value) -> Result<()> {
+        let notification = jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method,
+            params: Self::value_into_params(params),
+        };
+        self.server_tx
+            .send(Payload::Notification(notification))
+            .map_err(|e| Error::Other(e.into()))?;
+        Ok(())
+    }
+
     pub fn call_method(
         &self,
         req_id: RequestId,
@@ -476,7 +595,7 @@ impl Client {
     ) -> impl Future<Output = Result<Value>> {
         let server_tx = self.server_tx.clone();
         let timeout_secs = self.req_timeout;
-        
+
         async move {
             use std::time::Duration;
             use tokio::time::timeout;
@@ -487,7 +606,7 @@ impl Client {
                 method,
                 params: Self::value_into_params(params),
             };
-            
+
             let (tx, mut rx) = channel::<Result<Value>>(1);
             server_tx
                 .send(Payload::Request {
@@ -639,45 +758,7 @@ impl Client {
             root_uri: self.root_uri.clone(),
             initialization_options: Some(self.config.clone().unwrap_or(json!({}))),
             capabilities: lsp::ClientCapabilities {
-                workspace: Some(lsp::WorkspaceClientCapabilities {
-                    configuration: Some(true),
-                    did_change_configuration: Some(lsp::DynamicRegistrationClientCapabilities {
-                        dynamic_registration: Some(false),
-                    }),
-                    workspace_folders: Some(true),
-                    apply_edit: Some(true),
-                    symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
-                        dynamic_registration: Some(false),
-                        ..Default::default()
-                    }),
-                    execute_command: Some(lsp::DynamicRegistrationClientCapabilities {
-                        dynamic_registration: Some(false),
-                    }),
-                    inlay_hint: Some(lsp::InlayHintWorkspaceClientCapabilities {
-                        refresh_support: Some(false),
-                    }),
-                    workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
-                        document_changes: Some(true),
-                        resource_operations: Some(vec![
-                            lsp::ResourceOperationKind::Create,
-                            lsp::ResourceOperationKind::Rename,
-                            lsp::ResourceOperationKind::Delete,
-                        ]),
-                        failure_handling: Some(lsp::FailureHandlingKind::Abort),
-                        normalizes_line_endings: Some(false),
-                        change_annotation_support: None,
-                    }),
-                    did_change_watched_files: Some(lsp::DidChangeWatchedFilesClientCapabilities {
-                        dynamic_registration: Some(true),
-                        relative_pattern_support: Some(false),
-                    }),
-                    file_operations: Some(lsp::WorkspaceFileOperationsClientCapabilities {
-                        will_rename: Some(true),
-                        did_rename: Some(true),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }),
+                workspace: Some(workspace_capabilities()),
                 text_document: Some(lsp::TextDocumentClientCapabilities {
                     completion: Some(lsp::CompletionClientCapabilities {
                         completion_item: Some(lsp::CompletionItemCapability {
@@ -758,13 +839,13 @@ impl Client {
                         dynamic_registration: Some(false),
                         related_document_support: Some(true),
                     }),
-                    publish_diagnostics: Some(lsp::PublishDiagnosticsClientCapabilities {
-                        version_support: Some(true),
-                        ..Default::default()
-                    }),
+                    publish_diagnostics: Some(publish_diagnostics_capabilities()),
                     inlay_hint: Some(lsp::InlayHintClientCapabilities {
                         dynamic_registration: Some(false),
                         resolve_support: None,
+                    }),
+                    code_lens: Some(lsp::CodeLensClientCapabilities {
+                        dynamic_registration: Some(true),
                     }),
                     definition: Some(lsp::GotoCapability {
                         dynamic_registration: Some(true),
@@ -1034,5 +1115,65 @@ impl Client {
             },
             None => "none".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::publish_diagnostics_capabilities;
+
+    /// The switch the whole "stuck on Loading" fix hangs from.
+    ///
+    /// A server only sends `workspace/codeLens/refresh` if the client says it can
+    /// handle it. jdtls answers `textDocument/codeLens` while it is still importing
+    /// — with lenses it cannot yet resolve — so without this declaration that first
+    /// answer stands forever and the editor shows placeholders until the buffer is
+    /// reverted by hand. Turning this back to false reintroduces exactly that.
+    #[test]
+    fn declares_workspace_code_lens_refresh_support() {
+        assert_eq!(
+            super::workspace_capabilities()
+                .code_lens
+                .expect("workspace.codeLens must be declared")
+                .refresh_support,
+            Some(true)
+        );
+
+        // What the server actually reads. The Rust field name is snake_case and the
+        // wire name is not, so asserting only the former would not catch a
+        // serialisation attribute going missing.
+        let json = serde_json::to_value(super::workspace_capabilities()).unwrap();
+        assert_eq!(
+            json.get("codeLens").and_then(|c| c.get("refreshSupport")),
+            Some(&serde_json::Value::Bool(true)),
+            "wire shape changed: {json}"
+        );
+    }
+
+    /// The inlay-hint refresh declaration sits right beside the code-lens one and is
+    /// deliberately the opposite; pinning both keeps a future edit from "fixing" the
+    /// wrong neighbour.
+    #[test]
+    fn does_not_declare_inlay_hint_refresh_support() {
+        assert_eq!(
+            super::workspace_capabilities()
+                .inlay_hint
+                .expect("workspace.inlayHint must be declared")
+                .refresh_support,
+            Some(false)
+        );
+    }
+
+    /// Guards the fix for "diagnostics always dropped": advertising
+    /// `versionSupport: true` is only honest if we actually interpret the field,
+    /// and we deliberately do not (see `publish_diagnostics_capabilities` and the
+    /// `PublishDianostics` arm in `main_loop`). Flipping this back to `true`
+    /// without also adding real version handling reintroduces the bug.
+    #[test]
+    fn does_not_advertise_publish_diagnostics_version_support() {
+        assert_eq!(
+            publish_diagnostics_capabilities().version_support,
+            Some(false)
+        );
     }
 }

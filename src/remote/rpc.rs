@@ -95,10 +95,7 @@ impl RpcClient {
     /// forward them to Emacs (e.g. for `textDocument/publishDiagnostics`).
     /// When `None`, they are silently dropped — useful for tests and for
     /// code paths that only care about request/response round-trips.
-    pub fn new<S>(
-        stream: S,
-        unsolicited: Option<TokioUnboundedSender<Message>>,
-    ) -> Result<Self>
+    pub fn new<S>(stream: S, unsolicited: Option<TokioUnboundedSender<Message>>) -> Result<Self>
     where
         S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
     {
@@ -119,10 +116,7 @@ impl RpcClient {
     /// this zombie and rebuilds the tunnel. This catches "tunnel is alive,
     /// but remote stopped responding" cases that pure stream-EOF detection
     /// misses.
-    async fn heartbeat_loop(
-        sender: UnboundedSender<OutgoingCommand>,
-        dead: Arc<AtomicBool>,
-    ) {
+    async fn heartbeat_loop(sender: UnboundedSender<OutgoingCommand>, dead: Arc<AtomicBool>) {
         let mut consecutive_misses: u32 = 0;
         loop {
             tokio::time::sleep(HEARTBEAT_INTERVAL).await;
@@ -165,9 +159,7 @@ impl RpcClient {
                 }
                 _ => {
                     consecutive_misses += 1;
-                    warn!(
-                        "heartbeat: ping miss {consecutive_misses}/{MAX_MISSED_HEARTBEATS}"
-                    );
+                    warn!("heartbeat: ping miss {consecutive_misses}/{MAX_MISSED_HEARTBEATS}");
                     if consecutive_misses >= MAX_MISSED_HEARTBEATS {
                         warn!(
                             "heartbeat: {MAX_MISSED_HEARTBEATS} consecutive misses, marking RPC client dead"
@@ -209,9 +201,7 @@ impl RpcClient {
                 Ok(response)
             }
             Err(_) => {
-                warn!(
-                    "RPC request timeout after 30s: method={method} orig_id={orig_id:?}"
-                );
+                warn!("RPC request timeout after 30s: method={method} orig_id={orig_id:?}");
                 Err(anyhow!("RPC request timeout"))
             }
         }
@@ -562,10 +552,7 @@ mod tests {
         let error = response.error.map(|e| RpcError {
             code: e.code.code() as i32,
             message: e.message,
-            data: e
-                .data
-                .as_ref()
-                .and_then(|d| serde_json::to_vec(d).ok()),
+            data: e.data.as_ref().and_then(|d| serde_json::to_vec(d).ok()),
         });
         Ok(Envelope {
             id: None,
@@ -647,9 +634,7 @@ mod tests {
 
     /// Stand up a client↔server pair connected over an in-memory duplex
     /// stream. Returns the client so the test can drive it.
-    async fn spawn_pair(
-        notifications: Arc<Mutex<Vec<MsgNotification>>>,
-    ) -> RpcClient {
+    async fn spawn_pair(notifications: Arc<Mutex<Vec<MsgNotification>>>) -> RpcClient {
         let (client_side, server_side) = tokio::io::duplex(1 << 16);
 
         // RpcClient wants futures::{AsyncRead, AsyncWrite}. Tokio's DuplexStream
@@ -681,7 +666,11 @@ mod tests {
 
         let resp = client.send_request(req).await.expect("request ok");
         assert_eq!(resp.id, crate::msg::RequestId::from(7));
-        assert!(resp.error.is_none(), "expected no error, got {:?}", resp.error);
+        assert!(
+            resp.error.is_none(),
+            "expected no error, got {:?}",
+            resp.error
+        );
         let result = resp.result.expect("result should be present");
         assert_eq!(result["method"], "textDocument/hover");
         assert_eq!(result["echoed_uri"], "file:///tmp/foo.rs");

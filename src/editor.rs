@@ -1,6 +1,7 @@
 use crate::{
     client::Client,
     document::{Document, DocumentId},
+    lsp_ext,
     registry::Registry,
     syntax,
     utils::uri_to_path,
@@ -13,6 +14,50 @@ use std::{
     path::Path,
     sync::Arc,
 };
+
+/// Whether two document URIs identify the same document.
+///
+/// Exact URI equality first, which is the only correct test for virtual documents
+/// (`jar:`/`jrt:`). The path comparison is a Windows-only concession: the same file
+/// can arrive spelled with different drive-letter casing or separators.
+///
+/// It is deliberately gated on both URIs being `file:`. `uri_to_path` maps every
+/// non-`file:` URI to an empty `PathBuf`, so an ungated path comparison makes all
+/// virtual documents compare equal to each other — two different decompiled
+/// sources would resolve to whichever was opened first.
+fn uris_match(a: &Url, b: &Url) -> bool {
+    if a == b {
+        return true;
+    }
+    cfg!(target_os = "windows") && a.scheme() == "file" && b.scheme() == "file" && {
+        let resolved = uri_to_path(a);
+        !resolved.as_os_str().is_empty() && resolved == uri_to_path(b)
+    }
+}
+
+/// Describe a language server that would not start, in the shape the editor
+/// consumes.
+///
+/// `not_on_path` is read off the typed `ExecutableNotFound` variant rather than by
+/// sniffing the error string: that variant exists precisely so this decision is a
+/// match and not a substring search, and it is the one failure with a specific next
+/// step ("install it, then restart the proxy") rather than a generic apology.
+fn describe_start_failure(
+    name: &str,
+    command: Option<&str>,
+    err: &crate::registry::Error,
+) -> lsp_ext::ServerStartFailureParams {
+    let not_on_path = matches!(err, crate::registry::Error::ExecutableNotFound(_));
+    lsp_ext::ServerStartFailureParams {
+        name: name.to_string(),
+        // Falls back to the server name: every `languages.toml` entry has a
+        // `command`, so this only happens if the config vanished between the lookup
+        // and here, and the name is still the useful thing to print.
+        command: command.unwrap_or(name).to_string(),
+        not_on_path,
+        message: err.to_string(),
+    }
+}
 
 pub struct Editor {
     pub next_document_id: DocumentId,
@@ -71,21 +116,11 @@ impl Editor {
     }
 
     pub fn document_by_uri(&self, uri: &Url) -> Option<&Document> {
-        if cfg!(target_os = "windows") {
-            self.documents()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
-        } else {
-            self.documents().find(|doc| doc.uri() == uri)
-        }
+        self.documents().find(|doc| uris_match(doc.uri(), uri))
     }
 
     pub fn document_by_uri_mut(&mut self, uri: &Url) -> Option<&mut Document> {
-        if cfg!(target_os = "windows") {
-            self.documents_mut()
-                .find(|doc| uri_to_path(doc.uri()) == uri_to_path(uri))
-        } else {
-            self.documents_mut().find(|doc| doc.uri() == uri)
-        }
+        self.documents_mut().find(|doc| uris_match(doc.uri(), uri))
     }
 
     pub fn new_document(&mut self, uri: &Url, language: Option<&str>) -> &Document {
@@ -98,11 +133,23 @@ impl Editor {
         self.documents.get(&id).unwrap()
     }
 
-    pub fn launch_language_servers(&mut self, doc_id: DocumentId) {
+    /// Start the language servers configured for a document.
+    ///
+    /// Returns every configured server that failed to start. The caller relays those
+    /// to the editor (`emacs/serverStartFailure`): the `error!` below is invisible at
+    /// the default log level, and a document with zero attached servers is otherwise
+    /// reported to the user as "no language server config found for this file" —
+    /// which is the opposite of what happened when the config is right and the
+    /// binary is simply missing.
+    pub fn launch_language_servers(
+        &mut self,
+        doc_id: DocumentId,
+    ) -> Vec<lsp_ext::ServerStartFailureParams> {
         let Some(doc) = self.documents.get_mut(&doc_id) else {
-            return;
+            return Vec::new();
         };
         let (language_config, doc_path) = (doc.language_config.clone(), doc.path());
+        let mut failures: Vec<lsp_ext::ServerStartFailureParams> = Vec::new();
         let language_servers =
             language_config
                 .as_ref()
@@ -116,6 +163,14 @@ impl Editor {
                             "Failed to initialize the language servers for `{}` - `{}` {{ {} }}",
                             language_config.language_id, lang, err,
                         );
+                                failures.push(describe_start_failure(
+                                    &lang,
+                                    self.syn_loader
+                                        .language_server_configs()
+                                        .get(&lang)
+                                        .map(|cfg| cfg.command.as_str()),
+                                    &err,
+                                ));
                                 None
                             }
                         })
@@ -123,7 +178,7 @@ impl Editor {
                 });
 
         if language_servers.is_empty() && doc.language_servers.is_empty() {
-            return;
+            return failures;
         }
 
         // only spawn new language servers if the servers aren't the same
@@ -143,13 +198,20 @@ impl Editor {
         }
 
         doc.language_servers = language_servers;
+        failures
     }
 
-    pub fn launch_language_servers_for_virtual_document(&mut self, doc_id: DocumentId, language: &str) -> Option<Arc<Client>> {
+    pub fn launch_language_servers_for_virtual_document(
+        &mut self,
+        doc_id: DocumentId,
+        language: &str,
+    ) -> Option<Arc<Client>> {
         let doc = self.documents.get_mut(&doc_id)?;
 
         // 获取虚拟文档的语言配置
-        let virtual_language_config = doc.virtual_doc.as_ref()
+        let virtual_language_config = doc
+            .virtual_doc
+            .as_ref()
             .and_then(|virtual_doc| virtual_doc.language_config.clone());
 
         // org block 只需要第一个 server，直接取第一个配置
@@ -159,11 +221,11 @@ impl Editor {
             .and_then(|language_config| {
                 // 只取第一个语言服务器配置
                 let first_ls_feature = language_config.language_servers.first()?;
-                
+
                 // 使用 iterator 的 next() 只获取第一个，避免启动多个 server
                 let mut iter = self.language_servers.get(language_config, doc_path.as_ref());
                 let (name, result) = iter.next()?;
-                
+
                 match result {
                     Ok(client) => Some((name, client)),
                     Err(err) => {
@@ -183,7 +245,7 @@ impl Editor {
         if let Some(doc) = self.documents.get_mut(&doc_id) {
             doc.insert_virtual_doc_server(language.to_owned(), server.clone());
         }
-        
+
         Some(server)
     }
 
@@ -194,12 +256,15 @@ impl Editor {
 
     /// Cleanup expired virtual document servers across all documents.
     /// Returns a list of (uri, language, client) tuples for servers that were removed.
-    pub fn cleanup_expired_virtual_doc_servers(&mut self, ttl_secs: u64) -> Vec<(Url, String, Arc<Client>)> {
+    pub fn cleanup_expired_virtual_doc_servers(
+        &mut self,
+        ttl_secs: u64,
+    ) -> Vec<(Url, String, Arc<Client>)> {
         let mut removed = Vec::new();
 
         for doc in self.documents.values_mut() {
             let expired_languages = doc.get_expired_virtual_doc_servers(ttl_secs);
-            
+
             for lang in expired_languages {
                 if let Some(entry) = doc.remove_virtual_doc_server(&lang) {
                     log::info!(

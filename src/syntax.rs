@@ -156,6 +156,7 @@ pub enum LanguageServerFeature {
     RenameSymbol,
     InlayHints,
     PullDiagnostics,
+    CodeLens,
 }
 
 impl Display for LanguageServerFeature {
@@ -182,6 +183,7 @@ impl Display for LanguageServerFeature {
             RenameSymbol => "rename-symbol",
             InlayHints => "inlay-hints",
             PullDiagnostics => "pull-diagnostics",
+            CodeLens => "code-lens",
         };
         write!(f, "{feature}",)
     }
@@ -273,7 +275,7 @@ where
             || !matches!(features.support_workspace, SupportWorkspace::Bool(false))
             || !features.library_directories.is_empty()
             || !features.config_files.is_empty();
-        
+
         let features = if has_non_default_fields {
             LanguageServerFeatureConfiguration::Features {
                 only_features: features.only.clone(),
@@ -300,6 +302,15 @@ pub struct LanguageServerConfiguration {
     pub args: Vec<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub environment: HashMap<String, String>,
+    /// How this server wants a Lombok java agent passed on its command line, e.g.
+    /// `"--jvm-arg=-javaagent:{jar}"`. `{jar}` is replaced with the managed jar's
+    /// absolute path, and the argument is appended only when such a jar exists.
+    ///
+    /// Declared per server rather than decided by matching a server's name: the
+    /// knowledge "this launcher takes agents *this* way" belongs in the same config
+    /// that already knows the launcher's command and arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lombok_agent_arg: Option<String>,
     #[serde(default, skip_serializing, deserialize_with = "deserialize_lsp_config")]
     pub config: Option<serde_json::Value>,
     #[serde(default = "default_timeout")]
@@ -401,7 +412,11 @@ impl Loader {
         })
     }
 
-    pub fn language_config_for_file_name(&self, path: &Path, language: Option<&str>) -> Option<Arc<LanguageConfiguration>> {
+    pub fn language_config_for_file_name(
+        &self,
+        path: &Path,
+        language: Option<&str>,
+    ) -> Option<Arc<LanguageConfiguration>> {
         // Find all the language configurations that match this file name
         // or a suffix of the file name.
         let configuration_id = self

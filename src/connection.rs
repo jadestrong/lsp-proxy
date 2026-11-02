@@ -19,7 +19,10 @@ fn force_stdin_blocking() {
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
         if flags < 0 {
-            warn!("stdio reader: F_GETFL failed on stdin: {}", io::Error::last_os_error());
+            warn!(
+                "stdio reader: F_GETFL failed on stdin: {}",
+                io::Error::last_os_error()
+            );
             return;
         }
         if (flags & libc::O_NONBLOCK) != 0 {

@@ -32,6 +32,9 @@ pub enum MethodCall {
     RegisterCapability(lsp_types::RegistrationParams),
     UnregisterCapability(lsp_types::UnregistrationParams),
     ShowMessageRequest(lsp_types::ShowMessageRequestParams),
+    /// `workspace/codeLens/refresh`. Carries no parameters: it means "everything you
+    /// were told about code lenses may now be stale", not "this file changed".
+    CodeLensRefresh,
 }
 
 impl MethodCall {
@@ -42,6 +45,7 @@ impl MethodCall {
                 let params: lsp_types::ConfigurationParams = params.parse()?;
                 Self::WorkspaceConfiguration(params)
             }
+            lsp_types::request::CodeLensRefresh::METHOD => Self::CodeLensRefresh,
             lsp_types::request::RegisterCapability::METHOD => {
                 let params: lsp_types::RegistrationParams = params.parse()?;
                 Self::RegisterCapability(params)
@@ -69,5 +73,84 @@ impl MethodCall {
         };
 
         Ok(request)
+    }
+}
+
+#[cfg(test)]
+mod show_message_request_tests {
+    use super::MethodCall;
+    use crate::lsp::jsonrpc;
+
+    fn params(v: serde_json::Value) -> jsonrpc::Params {
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// `window/showMessageRequest` must parse with its actions intact: dropping them
+    /// is what reduced the prompt to a log line with no way to answer.
+    #[test]
+    fn parses_actions() {
+        let call = MethodCall::parse(
+            "window/showMessageRequest",
+            params(serde_json::json!({
+                "type": 2,
+                "message": "Build tool conflicts are detected in workspace. Which one would you like to use?",
+                "actions": [{"title": "Maven"}, {"title": "Gradle"}, {"title": "Bazel"}]
+            })),
+        )
+        .expect("must parse");
+        match call {
+            MethodCall::ShowMessageRequest(p) => {
+                assert_eq!(p.typ, lsp_types::MessageType::WARNING);
+                let actions = p.actions.expect("actions must survive parsing");
+                assert_eq!(actions.len(), 3);
+                assert_eq!(actions[2].title, "Bazel");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    /// Actions are optional in the spec.
+    #[test]
+    fn parses_without_actions() {
+        let call = MethodCall::parse(
+            "window/showMessageRequest",
+            params(serde_json::json!({"type": 3, "message": "hi"})),
+        )
+        .expect("must parse");
+        match call {
+            MethodCall::ShowMessageRequest(p) => assert!(p.actions.is_none()),
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod code_lens_refresh_tests {
+    use super::MethodCall;
+    use crate::lsp::jsonrpc;
+
+    /// The server→client request that tells us lenses went stale must be recognised
+    /// here, or `main_loop` answers MethodNotFound and the editor is never told.
+    #[test]
+    fn workspace_code_lens_refresh_parses_as_a_method_call() {
+        assert_eq!(
+            MethodCall::parse("workspace/codeLens/refresh", jsonrpc::Params::None).unwrap(),
+            MethodCall::CodeLensRefresh
+        );
+    }
+
+    /// It carries no parameters, so an empty object must parse just as well as none —
+    /// servers differ on which they send.
+    #[test]
+    fn code_lens_refresh_ignores_whatever_params_arrive() {
+        for params in [
+            jsonrpc::Params::None,
+            jsonrpc::Params::Map(serde_json::Map::new()),
+        ] {
+            assert_eq!(
+                MethodCall::parse("workspace/codeLens/refresh", params).unwrap(),
+                MethodCall::CodeLensRefresh
+            );
+        }
     }
 }

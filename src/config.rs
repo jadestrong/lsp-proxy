@@ -20,8 +20,7 @@ pub static ENABLE_SNIPPETS: once_cell::sync::OnceCell<bool> = once_cell::sync::O
 pub static COPILOT_SERVER_NAME: once_cell::sync::OnceCell<String> =
     once_cell::sync::OnceCell::new();
 
-static REMOTE_BINARY_PATH: once_cell::sync::OnceCell<String> =
-    once_cell::sync::OnceCell::new();
+static REMOTE_BINARY_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
 
 pub fn set_max_completion_items(max_items: usize) {
     MAX_COMPLETION_ITEMS.set(max_items).ok();
@@ -44,6 +43,48 @@ pub fn set_enable_snippets(enable: bool) {
 
 pub fn set_copilot_server_name(name: String) {
     COPILOT_SERVER_NAME.set(name).ok();
+}
+
+static LOMBOK_JAR_PATH: once_cell::sync::OnceCell<String> = once_cell::sync::OnceCell::new();
+static JAVA_DEBUG_BUNDLES: once_cell::sync::OnceCell<Vec<String>> =
+    once_cell::sync::OnceCell::new();
+
+/// Initialise the Lombok agent jar path from `LSP_PROXY_LOMBOK_JAR`.
+///
+/// The editor resolves it, for the same reason it resolves the managed servers'
+/// `bin/` directories: it owns the install layout. Call once at startup.
+pub fn initialize_lombok_jar_path() {
+    if let Ok(val) = std::env::var("LSP_PROXY_LOMBOK_JAR") {
+        if !val.is_empty() {
+            LOMBOK_JAR_PATH.set(val).ok();
+        }
+    }
+}
+
+/// Path to the managed Lombok agent jar, or `None` when none is installed.
+pub fn lombok_jar_path() -> Option<&'static str> {
+    LOMBOK_JAR_PATH.get().map(|s| s.as_str())
+}
+
+/// Initialise managed Java Debug bundle paths from `LSP_PROXY_JAVA_DEBUG_BUNDLES`.
+///
+/// The editor resolves these paths because it owns the install layout. Multiple
+/// entries are separated with the platform path separator, matching PATH-style
+/// environment variables.
+pub fn initialize_java_debug_bundles() {
+    if let Ok(val) = std::env::var("LSP_PROXY_JAVA_DEBUG_BUNDLES") {
+        let bundles: Vec<String> = std::env::split_paths(&val)
+            .filter(|path| !path.as_os_str().is_empty())
+            .map(|path| path.to_string_lossy().to_string())
+            .collect();
+        if !bundles.is_empty() {
+            JAVA_DEBUG_BUNDLES.set(bundles).ok();
+        }
+    }
+}
+
+pub fn java_debug_bundles() -> &'static [String] {
+    JAVA_DEBUG_BUNDLES.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
 /// Initialise the remote binary path from the `LSP_PROXY_REMOTE_BINARY_PATH`
@@ -192,8 +233,196 @@ pub fn default_syntax_loader() -> syntax::Configuration {
 fn timestamp_now() -> String {
     use time::macros::format_description;
     let fmt = format_description!("[year][month][day]-[hour][minute][second]");
-    let now = time::OffsetDateTime::now_local()
-        .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
     now.format(fmt)
         .unwrap_or_else(|_| "00000000-000000".to_string())
+}
+
+#[cfg(test)]
+mod builtin_config_tests {
+    use super::default_lang_config;
+
+    /// The built-in `languages.toml` must deserialize into the real configuration
+    /// types, not merely parse as TOML.
+    ///
+    /// `default_syntax_loader` panics on failure, and it runs before anything else,
+    /// so a malformed entry for one language takes down the proxy for every language
+    /// — with a message about serialization rather than about the block that is
+    /// wrong. `toml::from_str` succeeding is not enough to catch that: a field of the
+    /// wrong shape parses fine as TOML and only fails at `try_into`.
+    #[test]
+    fn the_builtin_config_deserializes() {
+        default_lang_config()
+            .try_into::<crate::syntax::Configuration>()
+            .expect("built-in languages.toml must deserialize");
+    }
+
+    /// Both Java backends must be defined, and defined the way they are launched.
+    ///
+    /// The `command` assertion is the load-bearing one: the official launcher derives
+    /// its per-project `-data` workspace from the directory it starts in, while `args`
+    /// here is a fixed list that cannot vary per project. Replacing it with a
+    /// hand-assembled `java -jar ...equinox.launcher...` would therefore pin every
+    /// project to one shared workspace.
+    #[test]
+    fn both_java_backends_are_configured() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let servers = &config.language_server;
+
+        let jdtls = servers
+            .get("jdtls")
+            .expect("jdtls must be defined as a language server");
+        assert_eq!(
+            jdtls.command, "jdtls",
+            "must invoke the official launcher, not a hand-assembled java command"
+        );
+        assert!(
+            !jdtls.args.iter().any(|a| a.contains("equinox.launcher")),
+            "args must not hand-assemble the launcher: {:?}",
+            jdtls.args
+        );
+        assert!(
+            servers.contains_key("intellij"),
+            "the existing backend must stay defined"
+        );
+    }
+
+    /// jdtls must declare how it takes a java agent, and IntelliJ must not.
+    ///
+    /// This is the whole switch for Lombok support: the proxy appends the rendered
+    /// argument only for a server that declares one. A typo in the key name (it is
+    /// kebab-case on the wire, snake_case in Rust) deserializes to `None` without any
+    /// error, and the only symptom would be Lombok silently not working again — which
+    /// is indistinguishable from not having installed the jar.
+    #[test]
+    fn jdtls_declares_how_it_takes_a_java_agent() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let servers = &config.language_server;
+
+        let template = servers
+            .get("jdtls")
+            .expect("jdtls must be defined")
+            .lombok_agent_arg
+            .as_deref()
+            .expect("jdtls must declare `lombok-agent-arg`");
+        assert!(
+            template.contains("{jar}"),
+            "the template must have somewhere to put the jar: {template:?}"
+        );
+        assert!(
+            template.contains("-javaagent:"),
+            "the rendered argument must load a java agent: {template:?}"
+        );
+        assert!(
+            template.starts_with("--jvm-arg="),
+            "`bin/jdtls` passes JVM options through `--jvm-arg=`, not directly: {template:?}"
+        );
+        // Rendering it must produce exactly what the launcher documents.
+        assert_eq!(
+            crate::java_install::render_agent_arg(template, "/x/lombok-1.18.48.jar"),
+            "--jvm-arg=-javaagent:/x/lombok-1.18.48.jar"
+        );
+
+        assert!(
+            servers
+                .get("intellij")
+                .expect("intellij must be defined")
+                .lombok_agent_arg
+                .is_none(),
+            "the IntelliJ backend understands Lombok natively and must not be given an agent"
+        );
+    }
+
+    /// Every declared `extendedClientCapabilities` switch must have a client handler.
+    ///
+    /// Declaring one without its handler is worse than leaving it off: the server
+    /// then sends commands or notifications nothing can act on, and the feature looks
+    /// broken rather than absent. This pins the exact set so adding a switch has to be
+    /// a deliberate edit here as well as in the client.
+    #[test]
+    fn jdtls_declares_only_implemented_client_capabilities() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let caps = config
+            .language_server
+            .get("jdtls")
+            .and_then(|s| s.config.as_ref())
+            .and_then(|c| c.get("extendedClientCapabilities"))
+            .and_then(|c| c.as_object())
+            .expect("jdtls must declare extendedClientCapabilities");
+
+        let mut declared: Vec<&str> = caps
+            .iter()
+            .filter(|(_, v)| v.as_bool() == Some(true))
+            .map(|(k, _)| k.as_str())
+            .collect();
+        declared.sort_unstable();
+
+        assert_eq!(
+            declared,
+            vec![
+                // goto-definition into a dependency; handled by the editor's
+                // `java/classFileContents` fetch.
+                "classFileContentsSupport",
+                // handled by `lsp-proxy-java--client-command-handlers`
+                "advancedGenerateAccessorsSupport",
+                "advancedOrganizeImportsSupport",
+                "overrideMethodsPromptSupport",
+                // import progress; handled by `progress_report_to_progress` here
+                "progressReportProvider",
+                // no prompt and no command: the ordinary completion path applies the
+                // extra edits already
+                "resolveAdditionalTextEditsSupport",
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>(),
+            "a switch here without a client handler makes the server send commands \
+             nothing can run"
+        );
+    }
+
+    /// Kotlin stays on the IntelliJ backend: jdtls does not serve Kotlin at all, so
+    /// switching it would leave Kotlin files with no server rather than a different
+    /// one.
+    #[test]
+    fn kotlin_is_not_switched_to_jdtls() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let kotlin = config
+            .language
+            .iter()
+            .find(|l| l.language_id == "kotlin")
+            .expect("kotlin must stay configured");
+        let names: Vec<&str> = kotlin
+            .language_servers
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"jdtls"),
+            "kotlin must not be routed to jdtls, got {names:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod lombok_jar_path_tests {
+    /// The editor hands the agent's location over as an environment variable, the
+    /// same way it hands over the remote binary path. Nothing else reads that
+    /// variable, so a typo in either half is invisible until Lombok quietly fails to
+    /// load — which looks exactly like not having installed it.
+    ///
+    /// The backing cell is a process-wide `OnceCell`, so this must stay the only test
+    /// that initialises it; a second one would race for the single write.
+    #[test]
+    fn the_jar_path_arrives_through_the_environment() {
+        assert!(
+            super::lombok_jar_path().is_none(),
+            "nothing should have initialised this yet"
+        );
+        std::env::set_var("LSP_PROXY_LOMBOK_JAR", "/x/lombok-1.18.48.jar");
+        super::initialize_lombok_jar_path();
+        assert_eq!(super::lombok_jar_path(), Some("/x/lombok-1.18.48.jar"));
+        std::env::remove_var("LSP_PROXY_LOMBOK_JAR");
+    }
 }

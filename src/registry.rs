@@ -7,7 +7,7 @@ use crate::{
     lsp_ext,
     msg::RequestId,
     syntax::{self, LanguageConfiguration, LanguageServerConfiguration, LanguageServerFeatures},
-    utils::{path, find_lsp_workspace},
+    utils::{find_lsp_workspace, path},
 };
 use anyhow::anyhow;
 use futures_util::stream::SelectAll;
@@ -39,6 +39,13 @@ pub enum Error {
     StreamClosed,
     #[error("Unhandled")]
     Unhandled,
+    /// The configured `command` is not on PATH. Its own variant rather than a
+    /// stringly-typed `Other` because the caller has to match on it: this is the one
+    /// start-up failure with a specific, actionable next step for the user ("install
+    /// it, then restart the proxy"), and it is an expected path whenever a server is
+    /// configured but not installed.
+    #[error("language server executable {0:?} was not found on PATH")]
+    ExecutableNotFound(String),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
@@ -55,6 +62,13 @@ pub enum NotificationFromServer {
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
     ForwardRequest(lsp_ext::TsserverRequestParams),
+    ImportLog(lsp_ext::ImportLogParams),
+    ChooseAction(lsp_ext::ChooseActionParams),
+    RunEditorCommand(lsp_ext::RunEditorCommandParams),
+    /// jdtls's own status stream; translated onto `intellij/importLog` downstream.
+    LanguageStatus(lsp_ext::LanguageStatusParams),
+    /// jdtls's own progress stream; translated onto `$/progress` downstream.
+    LanguageProgressReport(lsp_ext::LanguageProgressReportParams),
 }
 
 impl NotificationFromServer {
@@ -86,6 +100,41 @@ impl NotificationFromServer {
                 let params: Vec<lsp_ext::TsserverRequestParams> = params.parse()?;
                 Self::ForwardRequest(params.into_iter().next().unwrap())
             }
+            lsp_ext::ImportLog::METHOD => {
+                let params: lsp_ext::ImportLogParams = params.parse()?;
+                Self::ImportLog(params)
+            }
+            lsp_ext::ChooseAction::METHOD => {
+                let params: lsp_ext::ChooseActionParams = params.parse()?;
+                Self::ChooseAction(params)
+            }
+            lsp_ext::RunEditorCommand::METHOD => {
+                let params: lsp_ext::RunEditorCommandParams = params.parse()?;
+                Self::RunEditorCommand(params)
+            }
+            // jdtls speaks its own status/progress channels instead of
+            // `window/logMessage` + `$/progress`. Both are translated onto the
+            // channels the editor already renders (see `lsp_ext`), so nothing on the
+            // Emacs side has to learn a new notification.
+            //
+            // The `?` on each parse matters: a payload whose shape drifted must
+            // surface as a parse failure rather than as `Error::Unhandled`. The main
+            // loop branches on exactly that variant — `Unhandled` is an `info!`,
+            // everything else an `error!` — so swallowing the difference would make a
+            // renamed field indistinguishable from a method the proxy does not
+            // support, and silent at the default log level.
+            //
+            // The concrete variant is `Error::Rpc`, not `Error::Parse`: `Params::parse`
+            // wraps serde failures as `jsonrpc::Error::invalid_params` first. That is
+            // pre-existing behaviour shared with every other arm here.
+            lsp_ext::LanguageStatus::METHOD => {
+                let params: lsp_ext::LanguageStatusParams = params.parse()?;
+                Self::LanguageStatus(params)
+            }
+            lsp_ext::LanguageProgressReport::METHOD => {
+                let params: lsp_ext::LanguageProgressReportParams = params.parse()?;
+                Self::LanguageProgressReport(params)
+            }
             _ => {
                 return Err(Error::Unhandled);
             }
@@ -96,7 +145,7 @@ impl NotificationFromServer {
 }
 
 #[cfg(test)]
-mod tests {
+mod notification_tests {
     use super::{jsonrpc, NotificationFromServer, INITIALIZATION_FAILED_METHOD};
 
     #[test]
@@ -133,6 +182,25 @@ impl Registry {
         }
     }
 
+    /// The client most recently activated for a server name.
+    ///
+    /// Used for documents that have no workspace of their own — files under a
+    /// configured `library-directories` entry, and virtual documents. Never
+    /// panics on lock contention: a missed `try_lock` only makes that client
+    /// compare as least-recent, which is preferable to bringing the proxy down.
+    fn most_recently_activated(clients: &[Arc<Client>]) -> Option<Arc<Client>> {
+        clients
+            .iter()
+            .max_by_key(|client| {
+                client
+                    .activate_time
+                    .try_lock()
+                    .map(|time| *time)
+                    .unwrap_or_default()
+            })
+            .cloned()
+    }
+
     pub fn get<'a>(
         &'a mut self,
         language_config: &'a LanguageConfiguration,
@@ -146,6 +214,40 @@ impl Registry {
                       library_directories,
                       ..
                 } = feature;
+                // A document with no filesystem path is a virtual document: a
+                // `jar:`/`jrt:` decompiled source, whose content the language
+                // server itself produced. It has no workspace of its own, so it
+                // must not reach the root-matching logic below —
+                // `find_lsp_workspace(None, ..)` falls back to the proxy's CWD,
+                // which would either spawn a second server rooted at the CWD or,
+                // for a support-workspace client, register the CWD as a workspace
+                // folder.
+                //
+                // Attach it to the most recently activated client instead. This is
+                // the same rule `library-directories` already uses for files that
+                // live outside the workspace, generalised to documents that live
+                // nowhere at all.
+                if doc_path.is_none() {
+                    return match self.inner.get(name).and_then(|clients| Self::most_recently_activated(clients)) {
+                        Some(client) => {
+                            debug!(
+                                "Attaching virtual document to active client '{}' at {:?}",
+                                name, client.root_path
+                            );
+                            (name.to_owned(), Ok(client))
+                        }
+                        // Deliberately not started: there is no meaningful root to
+                        // give a server for a document that exists only inside an
+                        // archive. Opening a project file first gives it one.
+                        None => (
+                            name.to_owned(),
+                            Err(Error::Other(anyhow!(
+                                "No running '{name}' server to attach this virtual document to; open a file from the project first"
+                            ))),
+                        ),
+                    };
+                }
+
                 if let Some(clients) = self.inner.get(name) {
                     // find the root path of the current file based on the support_workspace strategy
                     let file_root = find_lsp_workspace(
@@ -153,7 +255,7 @@ impl Registry {
                         &language_config.roots,
                         support_workspace
                     );
-                    
+
                     // try to find existing clients based on support_workspace
                     let reusable_client = match support_workspace {
                         // support multiple workspaces
@@ -177,15 +279,25 @@ impl Registry {
                     }
 
                     // If library_directories exists, check whether the file belongs to it; if it does, return the latest active client.
-                    if library_directories.iter().any(|dir| {
-                        path::path_is_ancestor_of(dir, &doc_path.unwrap().to_string_lossy())
-                    }) {
-                        if let Some(client) = clients
+                    //
+                    // `doc_path` is Some here — the None case returned above — so
+                    // this reads it structurally rather than unwrapping. The old
+                    // `doc_path.unwrap()` was only unreachable by accident: a
+                    // pathless document could never get a language config, so it
+                    // never reached this line. Making the languageId fallback work
+                    // for pathless documents removed that coupling and would have
+                    // turned this into a live panic for any server configured with
+                    // `library-directories`.
+                    let in_library_dir = doc_path.is_some_and(|path| {
+                        let path = path.to_string_lossy();
+                        library_directories
                             .iter()
-                            .max_by_key(|item| *item.activate_time.try_lock().unwrap())
-                        {
+                            .any(|dir| path::path_is_ancestor_of(dir, &path))
+                    });
+                    if in_library_dir {
+                        if let Some(client) = Self::most_recently_activated(clients) {
                             debug!("Using library directory client for '{}' at {:?}", name, client.root_path);
-                            return (name.to_owned(), Ok(client.clone()));
+                            return (name.to_owned(), Ok(client));
                         }
                     }
                 }
@@ -240,7 +352,8 @@ impl Registry {
         let id = self.counter;
         self.counter += 1;
 
-        let NewClient(client, incoming) = start_client(id, name, ls_config, config, doc_path, features)?;
+        let NewClient(client, incoming) =
+            start_client(id, name, ls_config, config, doc_path, features)?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -260,11 +373,15 @@ impl Registry {
             .iter()
             .filter_map(|features @ LanguageServerFeatures { name, .. }| {
                 if self.inner.contains_key(name) {
-                    let client =
-                        match self.start_client(name.clone(), language_config, doc_path.as_ref(), Some(features)) {
-                            Ok(client) => client,
-                            error => return Some(error),
-                        };
+                    let client = match self.start_client(
+                        name.clone(),
+                        language_config,
+                        doc_path.as_ref(),
+                        Some(features),
+                    ) {
+                        Ok(client) => client,
+                        error => return Some(error),
+                    };
 
                     self.inner
                         .entry(name.to_string())
@@ -317,10 +434,25 @@ fn start_client(
     doc_path: Option<&std::path::PathBuf>,
     ls_features: Option<&LanguageServerFeatures>,
 ) -> Result<NewClient> {
+    // jdtls cannot see Lombok-generated members without the agent, and reports every
+    // one of them as an undefined method. The server declares how it takes an agent
+    // (`lombok-agent-arg` in `languages.toml`); this is a no-op for every server that
+    // does not, so the two backends share one unconditional code path.
+    let args = crate::java_install::with_lombok_agent(
+        &ls_config.args,
+        ls_config.lombok_agent_arg.as_deref(),
+        crate::config::lombok_jar_path(),
+    );
+    let initialization_options = with_java_debug_bundles(
+        ls_config.config.clone(),
+        name.as_str(),
+        crate::config::java_debug_bundles(),
+    );
+
     let (client, incoming, initialize_notify, client_tx) = Client::start(
         &ls_config.command,
-        &ls_config.args,
-        ls_config.config.clone(),
+        &args,
+        initialization_options,
         ls_config.experimental.clone(),
         ls_config.environment.clone(),
         &config.roots,
@@ -370,4 +502,74 @@ fn start_client(
     });
 
     Ok(NewClient(client, incoming))
+}
+
+fn with_java_debug_bundles(
+    config: Option<serde_json::Value>,
+    server_name: &str,
+    bundles: &[String],
+) -> Option<serde_json::Value> {
+    if server_name != "jdtls" || bundles.is_empty() {
+        return config;
+    }
+
+    let mut value = config.unwrap_or_else(|| serde_json::json!({}));
+    if !value.is_object() {
+        return Some(value);
+    }
+
+    let object = value.as_object_mut().expect("checked object above");
+    let entry = object
+        .entry("bundles".to_string())
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    let Some(existing) = entry.as_array_mut() else {
+        return Some(value);
+    };
+
+    for bundle in bundles {
+        if !existing
+            .iter()
+            .any(|item| item.as_str().is_some_and(|path| path == bundle))
+        {
+            existing.push(serde_json::Value::String(bundle.clone()));
+        }
+    }
+
+    Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_java_debug_bundles;
+    use serde_json::json;
+
+    #[test]
+    fn injects_managed_java_debug_bundles_into_jdtls_config() {
+        let config = with_java_debug_bundles(
+            Some(json!({"extendedClientCapabilities": {"classFileContentsSupport": true}})),
+            "jdtls",
+            &["/debug.jar".into()],
+        )
+        .unwrap();
+
+        assert_eq!(config["bundles"], json!(["/debug.jar"]));
+        assert_eq!(
+            config["extendedClientCapabilities"]["classFileContentsSupport"],
+            json!(true)
+        );
+    }
+
+    #[test]
+    fn does_not_duplicate_or_touch_other_servers() {
+        let config = with_java_debug_bundles(
+            Some(json!({"bundles": ["/debug.jar"]})),
+            "jdtls",
+            &["/debug.jar".into(), "/other.jar".into()],
+        )
+        .unwrap();
+        assert_eq!(config["bundles"], json!(["/debug.jar", "/other.jar"]));
+
+        let untouched = with_java_debug_bundles(None, "intellij", &["/debug.jar".into()]);
+        assert!(untouched.is_none());
+    }
 }

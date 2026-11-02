@@ -1,0 +1,799 @@
+;;; lsp-proxy-java-intellij.el --- IntelliJ Java backend integration for lsp-proxy -*- lexical-binding: t; -*-
+
+;; Copyright (C) 2026-2026 JadeStrong
+
+;;; Commentary:
+
+;; JetBrains IntelliJ backend specific integration: jar:/jrt: decompiled content,
+;; file templates, managed IntelliJ server metadata, ModCommand/editor callbacks,
+;; import log, Dape integration and hover command navigation.
+
+;;; Code:
+
+(require 'cl-lib)
+(require 'json)
+(require 'seq)
+(require 'subr-x)
+(require 'url-util)
+(require 'lsp-proxy-java)
+(require 'lsp-proxy-utils)
+(require 'lsp-proxy-core)
+
+(declare-function dape "dape" (config &optional skip-compile))
+(declare-function jsonrpc-request "jsonrpc")
+(declare-function lsp-proxy-rename "lsp-proxy")
+
+(defun lsp-proxy-java--fetch-via-decompile (uri doc-uri)
+  "Fetch URI with the `decompile' command, routed through DOC-URI."
+  (let* ((result (jsonrpc-request
+                  lsp-proxy--connection 'workspace/executeCommand
+                  (list :uri doc-uri
+                        :params (list :command "decompile"
+                                      :arguments (vector uri)))))
+         (code (plist-get result :code)))
+    (unless (stringp code)
+      (error "decompile returned no content for %s" uri))
+    (list :code code :language (plist-get result :language))))
+
+(lsp-proxy-java-register-content-provider
+ (lambda (_uri) t)
+ #'lsp-proxy-java--fetch-via-decompile
+ t)
+
+;;; File templates
+;;
+;; "File and Code Templates": fill a newly created empty file from a template
+;; whose variables (`${PACKAGE_NAME}', `${NAME}', the Velocity `#if' directives)
+;; are expanded by the language server — the only side that knows the project
+;; model, e.g. which source root the file sits under.
+;;
+;; Same server contract as `decompile': `workspace/executeCommand' with command
+;; `interpolateFileTemplate' and arguments [FILE-URI, TEMPLATE], answering with
+;; the interpolated text in which a single `|' marks the caret.
+;;
+;; Ported from community/vscode-extension-core/src/fileTemplates.ts, with three
+;; deliberate differences:
+;;
+;;  * Trigger.  VSCode listens on `workspace.onDidCreateFiles', an explorer event
+;;    Emacs has no equivalent of.  The analogue is visiting a file that does not
+;;    exist yet, which is how a file gets created here.  Opening an existing empty
+;;    file deliberately does not trigger, so browsing never prompts.
+;;
+;;  * `$' is escaped before the caret marker becomes `$0'.  VSCode hands the whole
+;;    reply to `SnippetString', so a literal `$' in the result (a shell variable,
+;;    a Kotlin string template) is silently reread as snippet syntax.  Only the
+;;    caret marker should be snippet syntax.
+;;
+;;  * No reformatting pass.  The original runs `editor.action.formatDocument' and
+;;    then repairs the caret, because that formatter leaves a stray blank line
+;;    where the caret was.  That repair is specific to it; yasnippet already
+;;    indents what it expands.
+
+(defcustom lsp-proxy-java-file-templates
+  '(
+    ("java"
+     ("Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic class ${NAME} {\n\t|\n}")
+     ("Interface"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic interface ${NAME} {\n\t|\n}")
+     ("Record"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic record ${NAME}(|) {\n}")
+     ("Enum"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic enum ${NAME} {\n\t|\n}")
+     ("Annotation"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic @interface ${NAME} {\n\t|\n}")
+     ("Exception"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME};\n\n#end\npublic class ${NAME} extends RuntimeException {\n    public ${NAME}(String message) {\n        super(message);\n    }\n}")
+     )
+    ("kotlin"
+     ("Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nclass ${NAME} {\n\t|\n}")
+     ("File"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\n|")
+     ("Interface"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\ninterface ${NAME} {\n\t|\n}")
+     ("Data Class"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\ndata class ${NAME}(|)\n")
+     ("Enum"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nenum class ${NAME} {\n\t|\n}")
+     ("Annotation"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nannotation class ${NAME}(|)")
+     ("Object"
+      . "#if (${PACKAGE_NAME} && ${PACKAGE_NAME} != \"\")package ${PACKAGE_NAME}\n\n#end\nobject ${NAME} {\n\t|\n}")
+     )
+    )
+  "File templates for the JVM languages served by the IntelliJ backend.
+
+Keyed by language, then by template name.  Values are templates in the server's
+own syntax; their variables are interpolated by the server, not here.  A single
+`|' marks where the caret should end up.
+
+The defaults are the full set the backend's own VSCode extension ships (its
+`jetbrains.templates.*' settings)."
+  :type '(alist :key-type (string :tag "Language")
+          :value-type (alist :key-type (string :tag "Name")
+                       :value-type (string :tag "Template")))
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-file-templates-on-create t
+  "Whether to offer a template when a new JVM source file is created.
+
+Non-nil mirrors the VSCode extension, which applies one as soon as an empty file
+appears; with a single template configured it applies without asking.
+Set to nil to insert templates only on demand, via
+\\[lsp-proxy-java-insert-file-template]."
+  :type 'boolean
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java--templates ()
+  "Return the templates for this buffer's language, or nil.
+Reads `lsp-proxy--language', which `lsp-proxy-mode' sets when it attaches."
+  (when-let* ((language (and (boundp 'lsp-proxy--language) lsp-proxy--language)))
+    (cdr (assoc language lsp-proxy-java-file-templates))))
+
+(defun lsp-proxy-java--select-template (templates)
+  "Return the template text to use from TEMPLATES, or nil if cancelled.
+A single entry is used without prompting, matching the VSCode extension."
+  (cond ((null templates) nil)
+        ((null (cdr templates)) (cdar templates))
+        ;; Raised from `find-file-hook', so `this-command' is the unrelated
+        ;; find-file command; see `lsp-proxy--completing-read'.
+        (t (when-let* ((name (lsp-proxy--completing-read
+                              "Select a file template: "
+                              (mapcar #'car templates))))
+             (cdr (assoc name templates))))))
+
+(defun lsp-proxy-java--template-to-snippet (content)
+  "Turn interpolated CONTENT into a snippet string.
+
+Everything the server produced is literal text, so `$' and `\\' are escaped
+first; only then does the caret marker become the exit point.  The other order
+would let a literal `$' be read as snippet syntax."
+  (let ((escaped (replace-regexp-in-string "[\\$]" "\\\\\\&" content)))
+    ;; Only the first marker counts — there is exactly one caret.
+    (if (string-match "|" escaped)
+        (concat (substring escaped 0 (match-beginning 0))
+                "$0"
+                (substring escaped (match-end 0)))
+      escaped)))
+
+(defun lsp-proxy-java--insert-template (content)
+  "Insert interpolated CONTENT, honouring the caret marker.
+Expands as a snippet when yasnippet is available, otherwise inserts the text and
+leaves point where the marker was."
+  (if-let* ((snippet-fn (and (fboundp 'eglot--snippet-expansion-fn)
+                             (eglot--snippet-expansion-fn))))
+      (funcall snippet-fn (lsp-proxy-java--template-to-snippet content))
+    (let ((caret (string-search "|" content)))
+      (insert (if caret
+                  (concat (substring content 0 caret) (substring content (1+ caret)))
+                content))
+      (when caret (goto-char (+ (point-min) caret))))))
+
+(defun lsp-proxy-java--request-template (template)
+  "Interpolate TEMPLATE for this buffer via the server, then insert the result.
+
+The request carries this buffer's own URI so the proxy routes it to this file's
+language servers; the server reads the target from the arguments.  Sending it
+also opens the document when it is not open yet, which
+`lsp-proxy--async-request' does for every request."
+  (let ((buffer (current-buffer))
+        (uri (plist-get (lsp-proxy--TextDocumentIdentifier) :uri))
+        (tick (buffer-chars-modified-tick)))
+    (lsp-proxy--async-request
+     'workspace/executeCommand
+     (lsp-proxy--build-params
+      (list :command "interpolateFileTemplate"
+            :arguments (vector uri template)))
+     :success-fn
+     (lambda (content)
+       (when (and (buffer-live-p buffer) (stringp content) (not (string-empty-p content)))
+         (with-current-buffer buffer
+           ;; The reply is asynchronous, so the buffer may have been typed into
+           ;; meanwhile. Only a still-empty, untouched buffer may be written to.
+           (if (and (zerop (buffer-size)) (eq tick (buffer-chars-modified-tick)))
+               (lsp-proxy-java--insert-template content)
+             (lsp-proxy--info "File template skipped: %s changed since the request"
+                              (buffer-name))))))
+     ;; A server without the command is not worth interrupting for; the original
+     ;; likewise only logs.
+     :error-fn (lambda (err)
+                 (lsp-proxy--warn "Could not interpolate file template: %s"
+                                  (or (plist-get err :message) err)))
+     :timeout-fn #'ignore)))
+
+;;;###autoload
+(defun lsp-proxy-java-insert-file-template ()
+  "Insert a file template into the current buffer.
+Prompts when several templates exist for the buffer's language."
+  (interactive)
+  (unless (bound-and-true-p lsp-proxy-mode)
+    (user-error "lsp-proxy is not active in this buffer"))
+  (let ((templates (lsp-proxy-java--templates)))
+    (unless templates
+      (user-error "No file templates for this language; see `lsp-proxy-java-file-templates'"))
+    (if-let* ((template (lsp-proxy-java--select-template templates)))
+        (lsp-proxy-java--request-template template)
+      (message "No template selected"))))
+
+(defun lsp-proxy-java--maybe-insert-template ()
+  "Offer a file template when visiting a newly created, still-empty file.
+
+Runs from `find-file-hook'.  Requires the file not to exist on disk yet: that is
+what makes this a file being created rather than an empty file being browsed."
+  (when (and lsp-proxy-java-file-templates-on-create
+             (bound-and-true-p lsp-proxy-mode)
+             buffer-file-name
+             (zerop (buffer-size))
+             (not (file-exists-p buffer-file-name))
+             ;; Virtual decompiled sources are served by us, never created.
+             (not (lsp-proxy--decompiled-buffer-p)))
+    (when-let* ((templates (lsp-proxy-java--templates))
+                (template (lsp-proxy-java--select-template templates)))
+      (lsp-proxy-java--request-template template))))
+
+(add-hook 'find-file-hook #'lsp-proxy-java--maybe-insert-template)
+
+(defcustom lsp-proxy-java-server-install-dir
+  (expand-file-name "servers/intellij/" lsp-proxy-install-dir)
+  "Directory holding managed IntelliJ language server installs."
+  :type 'directory
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-server-version nil
+  "IntelliJ server build to install, e.g. \"263.2689.0\", or nil for the latest."
+  :type '(choice (const :tag "Latest" nil) string)
+  :group 'lsp-proxy)
+
+(lsp-proxy-java-register-backend
+ "intellij"
+ :install-dir 'lsp-proxy-java-server-install-dir
+ :version     'lsp-proxy-java-server-version
+ :exe         "intellij-server"
+ :exe-windows "intellij-server.exe"
+ :tag         "IntelliJ"
+ :label       "IntelliJ server"
+ :wants-lombok nil
+ :runtime-requires nil)
+
+;;; ModCommand action picker
+;;
+;; `intellij/chooseAction' arrives when a code action needs the user to pick between
+;; several variants (the IntelliJ ModCommand flow). The proxy asks us, we answer with
+;; the chosen entry's `index', and it delivers that to the server as
+;; `workspace/executeCommand chooseModCommandAction'.
+;;
+;; Dismissing returns nil, which the proxy leaves unanswered: the server protocol has
+;; no cancellation message here, so any index we invented would run an action the user
+;; did not pick.
+
+(defun lsp-proxy-java--handle-choose-action (msg)
+  "Let the user pick one of MSG's entries; return its `index' or nil."
+  (lsp-proxy--dbind (:title title :entries entries) msg
+    (let* ((entries (append entries nil))
+           (choices (mapcar (lambda (entry)
+                              (cons (plist-get entry :name) (plist-get entry :index)))
+                            entries)))
+      (when choices
+        (condition-case nil
+            (let ((name (lsp-proxy--completing-read
+                         (if (and title (not (string-empty-p title)))
+                             (format "%s " title)
+                           "Choose action: ")
+                         (mapcar #'car choices))))
+              ;; `alist-get' with a string key needs `equal'; the index may legitimately
+              ;; be 0, so a plain `or' fallback would be wrong.
+              (alist-get name choices nil nil #'equal))
+          (quit nil))))))
+
+;;; Editor commands driven by the server
+;;
+;; `intellij/runEditorCommand' arrives when a ModCommand needs the *editor* to do
+;; something rather than the document: the motivating case is a refactoring whose
+;; last step is an inline rename, which LSP cannot express at all — a server may not
+;; send `workspace/executeCommand' to a client, and it cannot start a rename session
+;; itself. (Live templates need none of this; they travel as a `SnippetTextEdit',
+;; which is ordinary LSP.)
+;;
+;; The ids are VS Code's, so this is a translation table rather than a dispatcher:
+;; only commands with a sensible Emacs equivalent are run, and anything unknown is
+;; logged and dropped. Dropping is the right failure here — the document edits of
+;; the ModCommand have already been applied by the time this arrives, so refusing
+;; the follow-up leaves the buffer correct, just not with a rename prompt open.
+
+(defcustom lsp-proxy-java-editor-command-alist
+  '(("editor.action.rename" . lsp-proxy-rename))
+  "How `intellij/runEditorCommand' ids map onto Emacs commands.
+Each entry is (VSCODE-COMMAND-ID . EMACS-COMMAND).  EMACS-COMMAND is
+called interactively, so a command that prompts (like
+`lsp-proxy-rename') prompts as usual.  Ids with no entry are ignored."
+  :type '(alist :key-type (string :tag "VS Code command id")
+                :value-type (function :tag "Emacs command"))
+  :group 'lsp-proxy)
+
+(defun lsp-proxy-java--handle-run-editor-command (msg)
+  "Run the editor command MSG asks for, if it maps onto one we have.
+MSG is the `intellij/runEditorCommand' payload: `{command, arguments?}'.
+The arguments are not passed on — every id mapped so far acts on point,
+which the server cannot move and does not try to."
+  (lsp-proxy--dbind (:command command) msg
+    (let ((mapped (alist-get command lsp-proxy-java-editor-command-alist nil nil #'equal)))
+      (cond
+       ((null mapped)
+        (lsp-proxy--message "Ignoring unmapped editor command `%s' (see `lsp-proxy-java-editor-command-alist')"
+                            command))
+       ((not (commandp mapped))
+        (lsp-proxy--warn "`%s' maps to `%s', which is not a command" command mapped))
+       (t
+        ;; Deferred so the notification handler returns before a prompting
+        ;; command takes over the minibuffer; reading input from inside the
+        ;; filter would block the connection until the user answered.
+        (run-at-time 0 nil (lambda () (call-interactively mapped))))))))
+
+;;; Import log
+;;
+;; `intellij/importLog' reports the build tool (Maven/Gradle/Bazel) resolving the
+;; project. It gets its own buffer rather than going to `*lsp-proxy-log*' because it
+;; is a discrete operation whose outcome the user has to act on: until the import
+;; succeeds nothing resolves, and the reason it failed is only ever in these lines.
+
+(defcustom lsp-proxy-java-import-log-max-lines 2000
+  "Maximum number of lines to keep in the import log buffer.
+Nil disables trimming."
+  :type '(choice (const :tag "Unlimited" nil) integer)
+  :group 'lsp-proxy)
+
+(defcustom lsp-proxy-java-import-log-auto-display 'on-failure
+  "When to show the import log buffer without being asked.
+
+VS Code reveals its Build panel both when an import starts and when it fails,
+which is unobtrusive there because the panel is a docked tab. In Emacs the
+equivalent steals a window, so starting an import — which happens on every
+project open — is a poor trigger. A failure is worth interrupting for, since
+otherwise nothing tells the user why no symbol resolves."
+  :type '(choice (const :tag "Never" nil)
+                 (const :tag "When an import fails" on-failure)
+                 (const :tag "When an import starts or fails" on-start))
+  :group 'lsp-proxy)
+
+(defconst lsp-proxy-java-import-log-buffer-name "*lsp-proxy-java-import*"
+  "Name of the buffer holding build-tool import output.")
+
+(defvar lsp-proxy-java--import-log-root nil
+  "Workspace root of the entry written to the import log most recently.
+Used to insert a heading when output starts coming from a different module.")
+
+(defvar-keymap lsp-proxy-java-import-log-mode-map
+  :doc "Keymap for `lsp-proxy-java-import-log-mode'."
+  ;; Deliberately not on `g': in `special-mode' that key means revert, and erasing
+  ;; the only record of why an import failed is a poor thing to do on a reflex.
+  "C-c C-k" #'lsp-proxy-java-import-log-clear)
+
+(define-derived-mode lsp-proxy-java-import-log-mode special-mode "Import Log"
+  "Major mode for the build-tool import log.
+
+\\{lsp-proxy-java-import-log-mode-map}"
+  (buffer-disable-undo)
+  (setq-local window-point-insertion-type t))
+
+(defun lsp-proxy-java--import-log-buffer ()
+  "Return the import log buffer, creating it if necessary."
+  (or (get-buffer lsp-proxy-java-import-log-buffer-name)
+      (with-current-buffer (get-buffer-create lsp-proxy-java-import-log-buffer-name)
+        (lsp-proxy-java-import-log-mode)
+        (current-buffer))))
+
+(defun lsp-proxy-java--import-log-insert (text root)
+  "Append TEXT to the import log, attributing it to workspace ROOT."
+  (with-current-buffer (lsp-proxy-java--import-log-buffer)
+    (let ((inhibit-read-only t)
+          ;; Only follow the output in windows whose point is already at the end,
+          ;; so a user reading back through a long import is not yanked away.
+          (at-end (mapcar (lambda (win) (cons win (= (window-point win) (point-max))))
+                          (get-buffer-window-list nil nil t))))
+      (save-excursion
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        ;; A heading whenever the module changes: in a monorepo several imports run
+        ;; and their lines would otherwise be indistinguishable.
+        (when (and root (not (equal root lsp-proxy-java--import-log-root)))
+          (insert (propertize (format "%s--- %s ---\n"
+                                      (if (bobp) "" "\n")
+                                      (abbreviate-file-name root))
+                              'face 'font-lock-comment-face)))
+        (insert text "\n")
+        (setq lsp-proxy-java--import-log-root (or root lsp-proxy-java--import-log-root))
+        (when (integerp lsp-proxy-java-import-log-max-lines)
+          (let ((excess (- (line-number-at-pos (point-max))
+                           lsp-proxy-java-import-log-max-lines)))
+            (when (> excess 0)
+              (goto-char (point-min))
+              (forward-line excess)
+              (delete-region (point-min) (point))))))
+      (dolist (entry at-end)
+        (when (cdr entry)
+          (set-window-point (car entry) (point-max)))))))
+
+(defun lsp-proxy-java--handle-import-log (msg)
+  "Render an `intellij/importLog' notification MSG."
+  (lsp-proxy--dbind (:type type :message message :tool tool
+                     :failed failed :succeeded succeeded :started started
+                     :rootPath root)
+      msg
+    (let ((failed (and failed (not (eq failed :json-false))))
+          (succeeded (and succeeded (not (eq succeeded :json-false))))
+          (started (and started (not (eq started :json-false)))))
+      (cond
+       (started
+        ;; Carries no message worth showing; it only marks the beginning.
+        (lsp-proxy-java--import-log-insert
+         (propertize (format "%s import started" (or tool "Build"))
+                     'face 'font-lock-comment-face)
+         root)
+        (when (eq lsp-proxy-java-import-log-auto-display 'on-start)
+          (lsp-proxy-java-open-import-log)))
+       (t
+        (lsp-proxy-java--import-log-insert
+         (if type (lsp-proxy--propertize message type) message)
+         root)
+        (cond
+         (failed
+          (when (memq lsp-proxy-java-import-log-auto-display '(on-start on-failure))
+            (lsp-proxy-java-open-import-log))
+          ;; The entry point VS Code puts in its status bar; here the echo area is
+          ;; the only place guaranteed to be visible from any buffer.
+          (lsp-proxy--warn "%s import failed. See `%s' (M-x lsp-proxy-java-open-import-log)."
+                           (or tool "Build")
+                           lsp-proxy-java-import-log-buffer-name))
+         (succeeded
+          (lsp-proxy--info "%s import finished." (or tool "Build")))))))))
+
+;;;###autoload
+(defun lsp-proxy-java-open-import-log ()
+  "Display the build-tool import log."
+  (interactive)
+  (let ((buffer (lsp-proxy-java--import-log-buffer)))
+    (with-current-buffer buffer
+      (when (= (buffer-size) 0)
+        (let ((inhibit-read-only t))
+          (insert (propertize
+                   "No import output yet.\n\nThe IntelliJ language server writes here while Maven, Gradle or Bazel\nresolves the project.\n"
+                   'face 'font-lock-comment-face)))))
+    (display-buffer buffer)))
+
+(defun lsp-proxy-java-import-log-clear ()
+  "Erase the import log."
+  (interactive)
+  (with-current-buffer (lsp-proxy-java--import-log-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer))
+    (setq lsp-proxy-java--import-log-root nil)))
+
+;;; Debugging (dape)
+;;
+;; Wires `dape' (if installed — soft dependency, see the `when' below) to
+;; the IntelliJ backend's own DAP endpoint.
+;;
+;; The backend hosts IntelliJ's XDebugger behind a DAP server: a plain
+;; `workspace/executeCommand' with command `start_debug_server' (no
+;; arguments) returns a fresh TCP port; connecting to it and sending a DAP
+;; `initialize' with `adapterID = "intellij_jvm"' gets you a real
+;; debug session (breakpoints, stepping, variables) with no VS Code
+;; pieces involved.
+;;
+;; `launch' does NOT rely on the DAP endpoint to resolve
+;; `:cwd'/`:classPaths'/`:javaExec' on its own — empirically it doesn't (or
+;; doesn't reliably): omitting them produced a JVM that started but
+;; couldn't find the main class at all (wrong/empty classpath). The VS
+;; Code extension resolves these explicitly with `workspace/executeCommand'
+;; before launching, and that DOES work (verified: matching a real
+;; `cwd'/JDK/`@argfile' classpath in the launched process). This mirrors
+;; that exactly instead of trusting the adapter to self-resolve.
+;;
+;; That resolution is one `intellij.java.resolveLaunch' call, which answers
+;; the whole launch — `javaExec', classpath, module path, module content
+;; roots, working directory — with the config's own values sent as
+;; `overrides' so the server decides how they combine. It replaced three
+;; per-fragment commands (`resolveClasspath', `resolveWorkingDirectory',
+;; `resolveJavaExecutable') that no longer exist, so there is nothing to
+;; fall back to: a backend that does not know it is too old for this file.
+;;
+;; The same rename swept the rest of this integration — the Run/Debug
+;; CodeLens command `intellij_debugger.runMain' → `intellij.jvm.runMain',
+;; and the adapter id `intellij_debugger' → `intellij_jvm'. Launching
+;; *through* a build tool (`intellij_gradle',
+;; `intellij.java.resolveBuildToolLaunch', the `intellij: build'
+;; pre-launch task) is a separate feature and is not wired up here: it
+;; needs a whole second launch shape, and a JVM launch behaves as it
+;; always has — it runs whatever is already compiled.
+;;
+;; `attach' is unaffected — a plain JDWP `:hostName'/`:port' still needs
+;; no resolution.
+;;
+;; `dape' config plists mix two key conventions: bare symbols (`host',
+;; `port', `command', `modes', `ensure', `fn') are dape's own bookkeeping
+;; and never reach the wire; keyword symbols (`:type', `:request',
+;; `:mainClass', ...) are sent verbatim as the DAP `launch'/`attach'
+;; request body (`:type' additionally becomes the `initialize' request's
+;; `adapterID'). The bare `port' is dape's *own* connection to the
+;; server's DAP endpoint; a keyword `:port' (attach only) is the JDWP
+;; target port sent to the adapter — same-looking, different keys,
+;; deliberately both present in the attach config. The scratch key
+;; `lsp-proxy-uri' (also bare) smuggles an already-known source URI into
+;; `lsp-proxy-java--dape-populate-launch-config' without leaking into the
+;; DAP body, for the same reason.
+
+;; A bare top-level `require' (not nested in the `when' below) so the
+;; byte-compiler actually loads `dape' when compiling on a machine that has
+;; it, instead of merely deciding at runtime whether to call it — a
+;; `require' buried inside a conditional's test is not given that
+;; compile-time treatment, and every reference below would otherwise warn
+;; "not known to be defined" even when `dape' is genuinely installed.
+(require 'dape nil t)
+
+;; Same reasoning applies to `defun': one nested inside the `when' below
+;; isn't given top-level treatment either, so a later function in the same
+;; block calling an earlier one still warns "not known to be defined".
+;; These four declarations are only about silencing that; the real
+;; definitions are the ones below, conditionally, same as everything else
+;; in this section.
+(declare-function lsp-proxy-java--dape-execute-command "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-compact "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-start-debug-server "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-resolve-uri "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-resolve-launch "lsp-proxy-java")
+(declare-function lsp-proxy-java--dape-populate-launch-config "lsp-proxy-java")
+(declare-function lsp-proxy-java--project-java-executable "lsp-proxy-java")
+
+(defcustom lsp-proxy-java-dape-adapter-id "intellij_jvm"
+  "The `:type'/DAP `adapterID' the backend's debug endpoint is addressed by.
+Anything the backend does not know gets \"No debugger adapter found for
+given adapter id\".
+
+`intellij_jvm' is the current name.  `intellij_debugger' is what it was
+called before, kept working by the backend as an alias, so it is the one
+to set if the server predates the rename.  `intellij_gradle' — a launch
+that runs *through* the build tool — needs a differently shaped config
+than this file builds and is not usable by setting this alone.
+
+The named `dape-configs' templates capture this when `dape' loads, so
+set it before then; `lsp-proxy-java-dape-run-main' (the Run/Debug
+CodeLens) reads it afresh on every launch."
+  :type '(choice (const :tag "intellij_jvm (current)" "intellij_jvm")
+                 (const :tag "intellij_debugger (pre-rename alias)" "intellij_debugger")
+                 (string :tag "Other adapter id"))
+  :group 'lsp-proxy)
+
+(when (featurep 'dape)
+
+
+  (defun lsp-proxy-java--dape-execute-command (command &optional argument)
+    "Send `workspace/executeCommand' COMMAND, synchronously, and return its result.
+ARGUMENT, if given, is wrapped as the command's single positional
+argument, matching the shape every `intellij.java.*'/
+`start_debug_server' custom command expects. Signals a `user-error' if
+the request fails."
+    (condition-case err
+        (lsp-proxy--request
+         'workspace/executeCommand
+         (lsp-proxy--build-params
+          (list :command command
+               :arguments (if argument (vector argument) (vector))))
+         :timeout 10)
+      (jsonrpc-error
+       (user-error "lsp-proxy-java: `%s' failed: %s" command (error-message-string err)))))
+
+  (defun lsp-proxy-java--dape-start-debug-server ()
+    "Ask the language server for a fresh DAP endpoint port."
+    (let ((port (lsp-proxy-java--dape-execute-command "start_debug_server")))
+      (unless (numberp port)
+        (user-error "lsp-proxy-java: `start_debug_server' returned %S, expected a port number" port))
+      port))
+
+  (defun lsp-proxy-java--dape-resolve-uri (main-class)
+    "Resolve the source file URI for MAIN-CLASS via the language server."
+    (or (plist-get
+         (lsp-proxy-java--dape-execute-command
+          "intellij.java.resolveClassDocument" (list :fqn main-class))
+         :uri)
+        (user-error "lsp-proxy-java: could not resolve a source file for `%s'" main-class)))
+
+  (defun lsp-proxy-java--dape-compact (plist)
+    "Return PLIST without the keys whose value is nil.
+Absent and nil are the same thing to the backend's optional fields, but
+they are not the same on the wire: a nil plist value would be sent as
+JSON null, which is a value rather than an omission."
+    (let (out)
+      (while plist
+        (when (cadr plist)
+          (setq out (append out (list (car plist) (cadr plist)))))
+        (setq plist (cddr plist)))
+      out))
+
+  (defun lsp-proxy-java--dape-resolve-launch (config uri)
+    "Fill CONFIG with the runtime paths for URI's module, and return it.
+
+One `intellij.java.resolveLaunch' call answers the whole launch in a
+single read action — `javaExec', classpath, module path, module content
+roots and working directory — with CONFIG's own values passed along as
+`overrides' so the *server* decides how they combine.  This is what the
+VS Code extension's `resolveJvmLaunchConfig' (`dap.ts') does, and the
+reason it is one call rather than several: every fragment a client has
+to remember to copy is a fragment it can silently drop."
+    (let* ((java-exec (or (plist-get config :javaExec)
+                          (lsp-proxy-java--project-java-executable uri)))
+           (paths (lsp-proxy-java--dape-execute-command
+                   "intellij.java.resolveLaunch"
+                   (lsp-proxy-java--dape-compact
+                    (list :uri uri
+                          :cwd (plist-get config :cwd)
+                          :overrides
+                          (lsp-proxy-java--dape-compact
+                           (list :classPaths (plist-get config :classPaths)
+                                 :modulePaths (plist-get config :modulePaths)
+                                 :moduleName (plist-get config :moduleName)
+                                 :javaExec java-exec)))))))
+      ;; Already merged with the overrides sent above, so this is copied
+      ;; rather than combined with whatever CONFIG had.
+      (setq config (plist-put config :classPaths (or (plist-get paths :classpath) [])))
+      ;; For a JPMS launch the answer carries the module path and the owning
+      ;; module name, so the main class runs from the module path
+      ;; (`-m moduleName/mainClass') instead of the classpath.
+      (setq config (plist-put config :modulePaths (or (plist-get paths :modulePath) [])))
+      (when-let* ((mn (plist-get paths :moduleName)))
+        (setq config (plist-put config :moduleName mn)))
+      ;; A build tool may compile one module into several directories and only
+      ;; the one holding `module-info.class' is the module; the adapter patches
+      ;; the rest back in with `--patch-module' once they exist on disk.
+      (setq config (plist-put config :moduleContentPaths
+                              (or (plist-get paths :moduleContentPaths) [])))
+      ;; The module's project directory, unless CONFIG named one. Without
+      ;; either, the launched process inherits lsp-proxy's own directory.
+      (when-let* ((wd (plist-get paths :workingDirectory)))
+        (setq config (plist-put config :cwd wd)))
+      ;; Never absent: a launch with neither a configured nor a project JDK is
+      ;; refused by the server, which is the only side that can tell the two
+      ;; apart.
+      (when-let* ((java (plist-get paths :javaExec)))
+        (setq config (plist-put config :javaExec java)))
+      config))
+
+  (defun lsp-proxy-java--dape-populate-launch-config (config)
+    "`fn' for the IntelliJ launch/attach configs.
+
+Always fetches a fresh debug-server `port'.  For `:request \"launch\"'
+also resolves `:cwd', `:classPaths'/`:modulePaths'/`:moduleName' and
+`:javaExec' for the module owning `:mainClass', mirroring the VS Code
+extension's launch resolution (`dap.ts') — see this section's Commentary
+for why that resolution can't be skipped.  `:request \"attach\"' needs
+none of this (a plain JDWP host/port), so only the port gets added.
+
+Uses the bare-symbol scratch key `lsp-proxy-uri' for an
+already-known source URI (from a CodeLens click) to skip the extra
+`resolveClassDocument' round-trip; harmless to omit."
+    (condition-case err
+        (progn
+          (setq config (plist-put config 'port (lsp-proxy-java--dape-start-debug-server)))
+          (if (not (equal (plist-get config :request) "launch"))
+              config
+            (let* ((main-class (or (plist-get config :mainClass)
+                                   (user-error "lsp-proxy-java: no `:mainClass' to resolve a launch config for")))
+                   (uri (or (plist-get config 'lsp-proxy-uri)
+                            (lsp-proxy-java--dape-resolve-uri main-class))))
+              (lsp-proxy-java--dape-resolve-launch config uri))))
+      (user-error
+       (if (string-match-p "start_debug_server" (error-message-string err))
+           (lsp-proxy-java--debug-populate-launch-config config)
+         (signal (car err) (cdr err))))))
+
+  ;; Named templates for `M-x dape'. `:mainClass''s form is only evaluated by
+  ;; `dape' when reading a config by name (`dape--config-eval'); by the time
+  ;; `fn' (`lsp-proxy-java--dape-populate-launch-config') runs, it's already a
+  ;; concrete string.
+  (with-eval-after-load 'dape
+    (add-to-list 'dape-configs
+                `(intellij-launch
+                  modes (java-mode java-ts-mode kotlin-mode)
+                  host "127.0.0.1"
+                  fn lsp-proxy-java--dape-populate-launch-config
+                  :type ,lsp-proxy-java-dape-adapter-id
+                  :request "launch"
+                  :mainClass (read-string "Main class (fully qualified): ")))
+    (add-to-list 'dape-configs
+                `(intellij-attach
+                  modes (java-mode java-ts-mode kotlin-mode)
+                  host "127.0.0.1"
+                  fn lsp-proxy-java--dape-populate-launch-config
+                  :type ,lsp-proxy-java-dape-adapter-id
+                  :request "attach"
+                  :hostName "127.0.0.1"
+                  :port (read-number "JDWP port: " 5005))))
+
+  ;;;###autoload
+  (defun lsp-proxy-java-dape-run-main (arguments)
+    "Handle the IntelliJ Run/Debug lens command's ARGUMENTS.
+ARGUMENTS is the command's raw `:arguments' vector as delivered by the
+proxy — its first element is `{mainClass, uri?, noDebug?}', mirroring
+the VS Code extension's `RunMainArgs'. Builds a minimal config
+(`:mainClass' plus the already-known `uri', stashed under the bare
+`lsp-proxy-uri' key) and lets `lsp-proxy-java--dape-populate-launch-config'
+\(via `fn') resolve the rest, same as the named `dape-configs'
+templates. Meant to be called from `lsp-proxy-codelens.el' when a
+CodeLens command matches \"intellij.jvm.runMain\"."
+    (let* ((args (and (vectorp arguments) (> (length arguments) 0) (aref arguments 0)))
+           (main-class (and args (plist-get args :mainClass)))
+           (uri (and args (plist-get args :uri)))
+           (no-debug (and args (eq (plist-get args :noDebug) t))))
+      (unless main-class
+        (user-error "lsp-proxy-java: the Run/Debug lens had no mainClass in its arguments"))
+      (dape
+       (append
+        (list 'host "127.0.0.1"
+              :type lsp-proxy-java-dape-adapter-id
+              :request "launch"
+              :mainClass main-class
+              'fn #'lsp-proxy-java--dape-populate-launch-config)
+        (when uri (list 'lsp-proxy-uri uri))
+        (when no-debug (list :noDebug t)))))))
+
+;;; Navigate to location (hover command links)
+
+;; The IntelliJ backend embeds navigation links directly in hover markdown —
+;; e.g. "Go to Super Method" on a method's hover — as a Markdown command URI
+;; `[label](command:jetbrains.navigateToLocation?ARGS)', ARGS being a
+;; percent-encoded JSON array `[uri, line, character]' (0-indexed). The VS
+;; Code extension only makes these clickable inside the hover popup; this
+;; command instead extracts and jumps to them directly from point, no popup
+;; or click required.
+
+(defconst lsp-proxy-java--navigate-link-regexp
+  "\\[\\([^]]+\\)\\](command:jetbrains\\.navigateToLocation\\?\\([^)]+\\))"
+  "Matches a `jetbrains.navigateToLocation' Markdown command link.
+Group 1 is the link label, group 2 the percent-encoded JSON
+`[uri, line, character]' argument array.")
+
+(defun lsp-proxy-java--navigate-links-in-string (markdown)
+  "Return each `jetbrains.navigateToLocation' link in MARKDOWN.
+Each element is (LABEL URI LINE CHARACTER)."
+  (let (links (start 0))
+    (while (string-match lsp-proxy-java--navigate-link-regexp markdown start)
+      (let* ((label (match-string 1 markdown))
+             (args (json-parse-string (url-unhex-string (match-string 2 markdown))
+                                      :array-type 'list)))
+        (push (cons label args) links))
+      (setq start (match-end 0)))
+    (nreverse links)))
+
+;;;###autoload
+(defun lsp-proxy-java-navigate-at-point ()
+  "Jump to the `jetbrains.navigateToLocation' hover link at point.
+Requests hover at point and, if its markdown embeds exactly one such
+link (e.g. \"Go to Super Method\"), jumps straight to it; with more
+than one, prompts to choose. Meant to be bound to a key so a method
+name can be navigated without opening the hover popup and clicking."
+  (interactive)
+  (unless lsp-proxy--support-hover
+    (lsp-proxy--error "%s" "Server doesn't support hover"))
+  (lsp-proxy--async-request
+   'textDocument/hover
+   (lsp-proxy--build-params (lsp-proxy--TextDocumentPositionParams))
+   :success-fn
+   (lambda (hover-help)
+     (let ((links (and hover-help (not (string-empty-p hover-help))
+                       (lsp-proxy-java--navigate-links-in-string hover-help))))
+       (pcase links
+         ('nil (lsp-proxy--message "%s" "No navigable link at point"))
+         (`(,only) (pcase-let ((`(,_ ,uri ,line ,character) only))
+                     (lsp-proxy--goto-uri-position uri line character)))
+         (_ (let* ((choice (completing-read "Go to: " (mapcar #'car links) nil t))
+                   (link (assoc choice links)))
+              (pcase-let ((`(,_ ,uri ,line ,character) link))
+                (lsp-proxy--goto-uri-position uri line character)))))))))
+
+(defun lsp-proxy-java-intellij-unload-function ()
+  "Deregister IntelliJ-specific hooks.  See `unload-feature'."
+  (remove-hook 'find-file-hook #'lsp-proxy-java--maybe-insert-template)
+  nil)
+
+(provide 'lsp-proxy-java-intellij)
+;;; lsp-proxy-java-intellij.el ends here

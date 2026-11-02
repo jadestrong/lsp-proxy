@@ -165,6 +165,106 @@ FORMAT and ARGS is the same as for `message'."
   `(-let ((,(lsp-proxy--transform-pattern pattern) ,source))
      ,@body))
 
+;;; Global status indicator
+;;
+;; A slot in `global-mode-string' for one long background operation — installing a
+;; language server, deploying the remote binary. Those run for minutes, are started
+;; from an arbitrary buffer, and report progress several times a second.
+;;
+;; The echo area is the wrong place for that: it is overwritten by anything else
+;; that speaks, it clobbers minibuffer input the user is in the middle of, and a
+;; download ticking every 700ms leaves hundreds of lines in `*Messages*'. The
+;; mode-line holds a value without competing for attention, so the ticks go here
+;; and only the terminal events (started, finished, failed) stay in the echo area.
+
+(defcustom lsp-proxy-global-status-prefix "⤓"
+  "String shown before the global status in the mode line."
+  :type 'string
+  :group 'lsp-proxy)
+
+(defvar lsp-proxy--global-status nil
+  "Plist of the running background operation, or nil when none.
+
+Keys: `:label' (short name for the mode line), `:message' (full text, shown
+as a tooltip) and `:percentage' (an integer, or nil for a phase with no
+measurable size).
+
+Deliberately global rather than buffer-local: the operation belongs to the
+proxy, not to a buffer, and starting one from `*scratch*' must still show up
+while the user works elsewhere.")
+
+(defconst lsp-proxy--global-status-construct
+  '(:eval (lsp-proxy--global-status-string))
+  "The `global-mode-string' entry that renders `lsp-proxy--global-status'.
+A constant so it can be removed again by identity.")
+
+(defun lsp-proxy--global-status-string ()
+  "Render `lsp-proxy--global-status' for the mode line, or nil when idle.
+
+Kept short, and padded to a fixed width, because a segment that changes
+width on every update shifts everything after it in the mode line.  The
+untruncated text is in the tooltip."
+  (when lsp-proxy--global-status
+    (let ((label (plist-get lsp-proxy--global-status :label))
+          (message (plist-get lsp-proxy--global-status :message))
+          (percentage (plist-get lsp-proxy--global-status :percentage)))
+      (propertize
+       (concat lsp-proxy-global-status-prefix
+               label
+               (if (numberp percentage)
+                   ;; Padded: the installer never reports 100, so this is always
+                   ;; three columns wide.
+                   (format " %2d%%" percentage)
+                 "…")
+               " ")
+       'face 'mode-line-emphasis
+       'help-echo (or message label)))))
+
+(defun lsp-proxy--set-global-status (label message &optional percentage)
+  "Show LABEL in the mode line, with MESSAGE as its tooltip.
+PERCENTAGE, when a number, is displayed alongside LABEL."
+  (setq lsp-proxy--global-status
+        (list :label label :message message :percentage percentage))
+  ;; A string is a valid `global-mode-string', but `add-to-list' needs a list.
+  (unless (listp global-mode-string)
+    (setq global-mode-string (list global-mode-string)))
+  (add-to-list 'global-mode-string lsp-proxy--global-status-construct)
+  ;; Notifications arrive in a process filter, which does not itself trigger a
+  ;; redisplay; without this the indicator sits at whatever it last showed. `t'
+  ;; updates every window, not just the selected one.
+  (force-mode-line-update t))
+
+(defun lsp-proxy--clear-global-status ()
+  "Remove the global status from the mode line."
+  (setq lsp-proxy--global-status nil)
+  (when (listp global-mode-string)
+    (setq global-mode-string
+          (delq lsp-proxy--global-status-construct global-mode-string)))
+  (force-mode-line-update t))
+
+(defun lsp-proxy--completing-read (prompt choices)
+  "Read one of CHOICES with PROMPT, requiring a match.
+
+Differs from a bare `completing-read' only in rebinding `this-command'
+first, which matters for prompts we raise outside a command.
+
+Ivy identifies a prompt by its `:caller', and plain `completing-read'
+has no way to pass one, so `ivy-read' falls back to `this-command'.
+Raised from a process filter or a hook, that is whatever unrelated
+command the user last typed, and ivy then applies *its* configuration to
+our candidates: the display transformer from
+`ivy--display-transformers-alist' and the initial input from
+`ivy-initial-inputs-alist'.  With `counsel-M-x' left over there, the
+former reads each candidate as a command name and appends its alias --
+turning an action titled \"Use Gradle\" into \"Use Gradle (nil)\", since
+`symbol-function' of the interned title is nil and nil satisfies
+`symbolp' -- while the latter pre-fills the minibuffer with \"^\".
+
+Binding it to this function is also simply more accurate: the prompt was
+raised by lsp-proxy, not by the last thing the user ran."
+  (let ((this-command 'lsp-proxy--completing-read))
+    (completing-read prompt choices nil t)))
+
 ;;; Path utilities
 
 (defun lsp-proxy--fix-path-casing (path)
@@ -183,23 +283,275 @@ If the system is not Windows, return the original path."
 
 (declare-function w32-long-file-name "w32proc.c" (fn))
 
+;;; Virtual names for decompiled sources
+;;
+;; Language servers hand us `jar:'/`jrt:' URIs for JDK/library sources that have
+;; no path on disk. A URI is not a file name in Emacs' model (`file-name-absolute-p'
+;; is nil for it), so exposing one as `buffer-file-name' breaks every piece of
+;; path arithmetic in Emacs and in third-party packages.
+;;
+;; Instead we follow TRAMP: map each URI to a genuine *absolute* file name and
+;; let a `file-name-handler-alist' entry (see `lsp-proxy-java') supply the
+;; content. The shape is
+;;
+;;     /lspsrc:/<original-uri, minimally escaped>
+;;
+;; e.g. jrt:///opt/jdk!/modules/java.base/java/lang/System.class becomes
+;;      /lspsrc:/jrt:%2F%2F/opt/jdk!/modules/java.base/java/lang/System.class
+;;
+;; This mirrors TRAMP's `/method:host:/remote/path': the payload is embedded
+;; *verbatim* and stays path-shaped, so it reads like a path, `file-name-nondirectory'
+;; gives a real basename, and anything that shortens paths for display (ibuffer,
+;; doom-modeline, recentf) has something sensible to shorten.  Escaping is kept to
+;; the three characters a file name genuinely cannot carry, which is why the
+;; original text remains legible.
+;;
+;; Two shape constraints are load-bearing:
+;;
+;;  * The `/' immediately after `lspsrc:' is required.  Without it the name
+;;    (`/lspsrc:jrt:...') matches `tramp-file-name-regexp' as method `lspsrc' +
+;;    host `jrt' + localname, and TRAMP claims it and fails with
+;;    "Method `lspsrc' is not known".  With the slash, TRAMP's mandatory second
+;;    colon cannot line up, so the URI may keep its own colons verbatim.
+;;
+;;  * The escaped form must be a fixed point of `expand-file-name': no run of
+;;    two or more slashes, no `.'/`..' path segment, and no leading or trailing
+;;    slash in the payload.  Those are exactly what the escaping removes.
+;;
+;; Everything in this section is a pure string transform: it must never perform
+;; I/O or RPC, because `lsp-proxy--uri-to-path' is called once per location in
+;; results as large as a project-wide `textDocument/references'.
+
+(defconst lsp-proxy--decompiled-prefix "/lspsrc:/"
+  "Prefix marking a virtual file name backed by the `decompile' command.
+The trailing slash is required to keep TRAMP from claiming the name; see the
+commentary above.")
+
+(defconst lsp-proxy--decompiled-file-name-regexp
+  (concat "\\`" (regexp-quote lsp-proxy--decompiled-prefix))
+  "Regexp matching a decompiled virtual file name.
+
+Matches the prefix only, not a full name: primitives normalise names before
+dispatching — `file-directory-p' routes `directory-file-name' first — so the
+handler is also asked about ancestor directories of the file.  Anchoring on
+more than the prefix makes those operations silently miss the handler.")
+
+(defconst lsp-proxy--decompiled-scheme-regexp
+  "\\`\\(?:jar\\|jrt\\|jdt\\):"
+  "Regexp matching a URI scheme whose contents are served by a language server.
+
+Deliberately a compile-time constant rather than a lookup of whatever backend is
+currently attached.  `lsp-proxy--uri-to-path' consults this once per location in
+results as large as a project-wide `textDocument/references', so a runtime query
+here would cost one lookup per result; and the set of schemes is a property
+of the protocol, not of the session.
+
+Adding a scheme is therefore an edit to this string.  The schemes are named for
+what produces them, not for who: `jar:'/`jrt:' come from JVM archive and runtime
+images, `jdt:' from an Eclipse-style opaque content identifier.")
+
+(defun lsp-proxy--decompiled-scheme-p (uri)
+  "Return non-nil when URI names content a language server has to supply."
+  (let ((u (if (keywordp uri) (substring (symbol-name uri) 1) uri)))
+    (and (stringp u) (string-match-p lsp-proxy--decompiled-scheme-regexp u))))
+
+(defun lsp-proxy--decompiled-escape (uri)
+  "Escape URI just enough to be usable as the tail of a virtual file name.
+Only `%', slash runs and `.'/`..' segments are touched; every other character —
+including the URI's own colons and any non-ASCII — is kept verbatim, which is
+what keeps the resulting name readable."
+  (let* (;; Escape `%' first so the escapes we add below are unambiguous.
+         (s (replace-regexp-in-string "%" "%25" uri t t))
+         ;; Collapse runs of slashes: keep one real separator, escape the rest.
+         (s (replace-regexp-in-string
+             "//+"
+             (lambda (run)
+               (concat (mapconcat #'identity
+                                  (make-list (1- (length run)) "%2F") "")
+                       "/"))
+             s t t))
+         ;; The prefix already supplies the leading separator, and a trailing
+         ;; slash would make the name look like a directory.
+         (s (replace-regexp-in-string "\\`/" "%2F" s t t))
+         (s (replace-regexp-in-string "/\\'" "%2F" s t t)))
+    ;; No empty segments remain, so a segment-wise pass is safe and cannot miss
+    ;; adjacent dot segments the way a single regexp over the whole string would.
+    (mapconcat (lambda (seg)
+                 (pcase seg ("." "%2E") (".." "%2E%2E") (_ seg)))
+               (split-string s "/")
+               "/")))
+
+(defun lsp-proxy--decompiled-unescape (tail)
+  "Inverse of `lsp-proxy--decompiled-escape' for TAIL.
+Single left-to-right pass, so an escape we introduced is never confused with
+one that was already present in the original URI."
+  (replace-regexp-in-string
+   "%25\\|%2F\\|%2E"
+   (lambda (m) (pcase m ("%25" "%") ("%2F" "/") ("%2E" ".")))
+   tail t t))
+
+(defvar lsp-proxy--decompiled-known-names (make-hash-table :test 'equal)
+  "Set of virtual names handed out by `lsp-proxy--decompiled-uri-to-file-name'.
+
+Needed because the name embeds the URI losslessly, which means every ancestor
+directory of a member is itself a well-formed name for its own shorter URI —
+so, unlike a scheme that derives the basename, the name's *form* cannot tell a
+servable member from one of the directories above it.  Recording what we handed
+out answers that exactly, and keeps probes for `.git' or `.dir-locals.el' inside
+the tree from being reported as existing files.")
+
+(defconst lsp-proxy--decompiled-source-extensions
+  '("java" "kt" "kts" "class" "scala" "groovy" "clj")
+  "Extensions treated as servable members when the name is not in the registry.
+Only a fallback for names restored from a previous session (desktop, recentf),
+where the registry is empty; names produced in this session are matched exactly.")
+
+(defvar lsp-proxy--decompiled-known-dirs (make-hash-table :test 'equal)
+  "Set of virtual directories that are ancestors of a name we handed out.
+
+Needed to keep the virtual filesystem self-consistent.  Reporting every
+prefix-matching name as a directory would make probes inside the tree — `.git',
+`.dir-locals.el' — look like existing directories, and `locate-dominating-file'
+would stop at a bogus root.  Reporting none of them makes `file-exists-p' deny a
+directory that `file-directory-p' affirms, which breaks any caller that
+sanity-checks a directory: flycheck validates `default-directory' with
+`file-exists-p' and errors out with \":working-directory ... does not exist\".
+
+Being an ancestor of a name we actually served distinguishes the two exactly.")
+
+(defun lsp-proxy--decompiled-register (name)
+  "Record NAME as a served virtual file, plus each of its ancestor directories."
+  (puthash name t lsp-proxy--decompiled-known-names)
+  (let ((dir (file-name-directory name)))
+    (while (and dir
+                (string-prefix-p lsp-proxy--decompiled-prefix dir)
+                (not (gethash dir lsp-proxy--decompiled-known-dirs)))
+      (puthash dir t lsp-proxy--decompiled-known-dirs)
+      (let ((parent (file-name-directory (directory-file-name dir))))
+        (setq dir (unless (equal parent dir) parent)))))
+  name)
+
+(defun lsp-proxy--decompiled-uri-to-file-name (uri)
+  "Return the virtual absolute file name representing URI."
+  (lsp-proxy--decompiled-register
+   (concat lsp-proxy--decompiled-prefix (lsp-proxy--decompiled-escape uri))))
+
+(defun lsp-proxy--decompiled-display-name (name)
+  "Return a short display name for decompiled virtual file NAME."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name))
+              (path (car (split-string uri "[?#]")))
+              (base (file-name-nondirectory path)))
+    (and (not (equal base "")) base)))
+
+(defun lsp-proxy--decompiled-opaque-localname (name)
+  "Return a friendly local name for an opaque decompiled virtual file NAME."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name))
+              (path (car (split-string uri "[?#]"))))
+    (cond
+     ((string-match "\\`jdt://contents/[^/]+/\\(.+\\)\\'" path)
+      (concat "/" (match-string 1 path)))
+     ((lsp-proxy--decompiled-display-name name)
+      (concat "/" (lsp-proxy--decompiled-display-name name))))))
+
+(defun lsp-proxy--decompiled-file-name-to-uri (name)
+  "Return the original `jar:'/`jrt:' URI encoded in NAME, or nil.
+For an ancestor directory of the virtual file this returns the URI prefix that
+directory corresponds to, which is not itself a servable URI; use
+`lsp-proxy--decompiled-file-name-p' to test for the real thing."
+  (when (and (stringp name)
+             (string-prefix-p lsp-proxy--decompiled-prefix name))
+    (lsp-proxy--decompiled-unescape
+     (substring name (length lsp-proxy--decompiled-prefix)))))
+
+(defun lsp-proxy--decompiled-member-extension (name)
+  "Return the source extension of the member NAME encodes, or nil.
+
+Not `file-name-extension' on NAME itself: the payload is a URI, and a URI
+may end in a `?query' or `#fragment' that is part of the server's identifier
+rather than of the member path.  An opaque content URI shaped
+`jdt://contents/<module>/<pkg>/<Type>.class?=<query>' is the case that forced
+this — `file-name-extension' answers `class?=<query>\' there, which matches no
+known extension, so the name would be judged unservable.
+
+Pure string work, like everything else in this section."
+  (when-let* ((uri (lsp-proxy--decompiled-file-name-to-uri name)))
+    (let ((path (car (split-string uri "[?#]"))))
+      (file-name-extension (file-name-nondirectory path)))))
+
+(defun lsp-proxy--decompiled-file-name-p (name)
+  "Return non-nil when NAME denotes a servable decompiled member.
+Nil for the archive's intermediate directories and for probes at names we never
+handed out (`.git', `.dir-locals.el', backup names), so the handler can report
+those as nonexistent instead of claiming everything under the prefix."
+  (and (stringp name)
+       (string-prefix-p lsp-proxy--decompiled-prefix name)
+       (or (gethash name lsp-proxy--decompiled-known-names)
+           (member (lsp-proxy--decompiled-member-extension name)
+                   lsp-proxy--decompiled-source-extensions))
+       t))
+
+(defun lsp-proxy--decompiled-name-split (name)
+  "Split NAME into (PREFIX . LOCALNAME) at the archive/member boundary.
+
+PREFIX and LOCALNAME concatenate back to NAME exactly — that is the contract
+`file-remote-p' must satisfy, and it is what lets `file-local-name' return just
+the member path.  Display code reuses this without knowing anything about us:
+doom-modeline, for instance, runs `buffer-file-name' through `file-local-name'
+before formatting, which is precisely how it shortens TRAMP names.
+
+The split is at the *last* `!/', so a nested archive yields the innermost
+member path."
+  (when (and (stringp name)
+             (string-prefix-p lsp-proxy--decompiled-prefix name))
+    (let ((bang (string-match-p "!/[^!]*\\'" name)))
+      (if bang
+          (cons (substring name 0 (1+ bang)) (substring name (1+ bang)))
+        ;; No member separator (an opaque URI): treat the whole payload as the
+        ;; local part for I/O, but expose a short display localname to callers
+        ;; such as `file-local-name' and modelines.
+        ;; Returning the prefix without its trailing slash (`/lspsrc:') looks
+        ;; enough like a TRAMP remote prefix to confuse modelines that parse it.
+        (cons lsp-proxy--decompiled-prefix
+              (or (lsp-proxy--decompiled-opaque-localname name)
+                  (substring name (length lsp-proxy--decompiled-prefix))))))))
+
+(defun lsp-proxy--decompiled-buffer-p (&optional buffer)
+  "Return non-nil when BUFFER (default current) shows a decompiled virtual source."
+  (and (lsp-proxy--decompiled-file-name-to-uri
+        (buffer-local-value 'buffer-file-name (or buffer (current-buffer))))
+       t))
+
+(defun lsp-proxy--decompiled-directory-p (name)
+  "Return non-nil when NAME is a directory inside a decompiled archive.
+
+True only for ancestors of a name we actually served (see
+`lsp-proxy--decompiled-known-dirs'), so path walks see a consistent tree while
+probes for files we do not serve still miss."
+  (and (stringp name)
+       (gethash (file-name-as-directory name) lsp-proxy--decompiled-known-dirs)
+       t))
+
 (defun lsp-proxy--path-to-uri (path)
   "Convert PATH to an LSP `file://' URI.
 Unlike `eglot-path-to-uri', this preserves a TRAMP prefix (`/ssh:host:')
 rather than stripping it. lsp-proxy's Rust backend uses that prefix as
 the sole signal for routing the request to a remote LSP server; if we
 let eglot drop it, every buffer looks local and remote mode never
-engages."
-  (let ((remote-prefix (and path (file-remote-p path))))
-    (if remote-prefix
-        (concat "file://"
-                remote-prefix
-                (url-hexify-string
-                 (substring path (length remote-prefix))
-                 url-path-allowed-chars))
-      (concat "file://"
-              (if (eq system-type 'windows-nt) "/" "")
-              (url-hexify-string path url-path-allowed-chars)))))
+engages.
+
+A decompiled virtual name round-trips back to the original `jar:'/`jrt:'
+URI rather than being wrapped in a bogus `file:///lspsrc:/...'."
+  (or (lsp-proxy--decompiled-file-name-to-uri path)
+      (let ((remote-prefix (and path (file-remote-p path))))
+        (if remote-prefix
+            (concat "file://"
+                    remote-prefix
+                    (url-hexify-string
+                     (substring path (length remote-prefix))
+                     url-path-allowed-chars))
+          (concat "file://"
+                  (if (eq system-type 'windows-nt) "/" "")
+                  (url-hexify-string path url-path-allowed-chars))))))
 
 (defun lsp-proxy--TextDocumentIdentifier ()
   "Build a TextDocumentIdentifier for the current buffer.
@@ -241,14 +593,34 @@ itself — we must NOT glue the project's own remote-prefix on top, or
 the path ends up with the method/host segment doubled (which then
 fails to open on the remote FS)."
   (when (keywordp uri) (setq uri (substring (symbol-name uri) 1)))
-  (let* ((remote-prefix (and lsp-proxy--current-project-root
-                             (file-remote-p lsp-proxy--current-project-root)))
+  (let* ((project-root lsp-proxy--current-project-root)
+         ;; Only a genuine TRAMP prefix may be glued onto a resolved path. A
+         ;; decompiled buffer reports `file-remote-p' too (that is what gives it
+         ;; TRAMP's short display), so if such a name ever ends up cached as the
+         ;; project root, an unguarded `file-remote-p' here would prefix every
+         ;; real `file://' location with `/lspsrc:/...!' — corrupting navigation
+         ;; out of a decompiled buffer back into project sources.
+         (remote-prefix (and project-root
+                             (not (lsp-proxy--decompiled-file-name-to-uri project-root))
+                             (file-remote-p project-root)))
          (url (url-generic-parse-url uri)))
     ;; Only parse file:// URIs, leave other URIs untouched as
     ;; `file-name-handler-alist' should know how to handle them
     ;; (bug#58790).
     (if (string= "file" (url-type url))
-        (let* ((retval (url-unhex-string (url-filename url)))
+        ;; `url-unhex-string' yields the percent-decoded *bytes*; decoding them
+        ;; as UTF-8 is what turns them back into a real Emacs string. This is
+        ;; the exact inverse of `url-hexify-string' in `lsp-proxy--path-to-uri',
+        ;; which encodes multibyte input as UTF-8, and matches the LSP spec.
+        ;;
+        ;; Skipping the decode still *opens* the file (Emacs re-encodes the raw
+        ;; bytes on the way to the syscall) but produces a string that is not
+        ;; `equal' to the same path anywhere else in Emacs. That silently breaks
+        ;; every path-keyed lookup for non-ASCII file names — notably
+        ;; `lsp-proxy--diagnostics-map', which is written under this path and
+        ;; read back under `buffer-file-name', so diagnostics never render.
+        (let* ((retval (decode-coding-string
+                        (url-unhex-string (url-filename url)) 'utf-8))
                (already-tramp (or (string-prefix-p "/ssh:" retval)
                                   (string-prefix-p "/rpc:" retval)))
                ;; Remove the leading "/" for local MS Windows-style paths.
@@ -262,7 +634,24 @@ fails to open on the remote FS)."
           (if already-tramp
               normalized
             (concat remote-prefix normalized)))
-      uri)))
+      ;; `jar:'/`jrt:' become virtual absolute file names whose content the
+      ;; `lsp-proxy-java' handler fetches on first read. This is a pure string
+      ;; transform on purpose — no RPC here, or a references result spanning the
+      ;; JDK would fire one synchronous request per location.
+      ;;
+      ;; Any other non-file scheme passes through untouched so
+      ;; `file-name-handler-alist' can deal with it (bug#58790).
+      (if (lsp-proxy--decompiled-scheme-p uri)
+          (lsp-proxy--decompiled-uri-to-file-name uri)
+        uri))))
+
+(defun lsp-proxy--goto-uri-position (uri line character &optional other-window)
+  "Open URI and move point to the 0-indexed LSP position LINE/CHARACTER.
+Goes through `lsp-proxy--uri-to-path', so `jar:'/`jrt:' URIs land on
+their virtual decompiled buffer exactly like any other xref target."
+  (let ((path (lsp-proxy--uri-to-path uri)))
+    (if other-window (find-file-other-window path) (find-file path))
+    (goto-char (eglot--lsp-position-to-point (list :line line :character character)))))
 
 ;;; Request parameters
 

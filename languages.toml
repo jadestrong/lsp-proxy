@@ -11,7 +11,6 @@ vscode-json-language-server = { command = "vscode-json-language-server", args = 
 vscode-html-language-server = { command = "vscode-html-language-server", args = [
   "--stdio",
 ], config = { provideFormatter = true } }
-jdtls = { command = "jdtls" }
 dart = { command = "dart", args = [
   "language-server",
   "--client-id=emacs.lsp-proxy",
@@ -426,8 +425,38 @@ language-servers = [{name = "vscode-json-language-server", support-workspace = t
 [[language]]
 name = "java"
 file-types = ["java", "jav", "pde"]
-roots = ["pom.xml", "build.gradle", "build.gradle.kts"]
-language-servers = ["jdtls"]
+roots = [
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+  "settings.gradle",
+  "settings.gradle.kts",
+  "BUILD.bazel",
+  "MODULE.bazel",
+]
+# Driven by the JetBrains IntelliJ backend. To use jdtls instead, see docs/java.md.
+language-servers = [
+  "intellij"
+  # { name = "intellij", support-workspace = [
+  #   "pom.xml",
+  #   "settings.gradle",
+  # ] },
+]
+
+[[language]]
+name = "kotlin"
+language-id = "kotlin"
+file-types = ["kt", "kts"]
+roots = [
+  "build.gradle.kts",
+  "settings.gradle.kts",
+  "build.gradle",
+  "settings.gradle",
+  "pom.xml",
+  "BUILD.bazel",
+  "MODULE.bazel",
+]
+language-servers = ["intellij"]
 
 [[language]]
 name = "dart"
@@ -576,3 +605,54 @@ file-types = [
   { glob = ".puppeteerrc" },  # https://pptr.dev/guides/configuration
 ]
 language-servers = [ "yaml-language-server" ]
+
+# Eclipse JDT Language Server (jdtls). Usage and field details: docs/java.md.
+[language-server.jdtls]
+command = "jdtls"
+lombok-agent-arg = "--jvm-arg=-javaagent:{jar}"
+
+[language-server.jdtls.config]
+
+[language-server.jdtls.config.settings.java.referencesCodeLens]
+enabled = true
+
+[language-server.jdtls.config.settings.java]
+implementationCodeLens = "all"
+
+# Optional: pin project compile JDKs instead of using automatic detection.
+#   [[language-server.jdtls.config.settings.java.configuration.runtimes]]
+#   name = "JavaSE-1.8"
+#   path = "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home"
+#   default = true
+
+[language-server.jdtls.config.extendedClientCapabilities]
+classFileContentsSupport = true
+progressReportProvider = true
+advancedOrganizeImportsSupport = true
+advancedGenerateAccessorsSupport = true
+overrideMethodsPromptSupport = true
+resolveAdditionalTextEditsSupport = true
+
+
+# JetBrains IntelliJ Language Server. Usage and field details: docs/java.md.
+[language-server.intellij]
+command = "intellij-server"
+args = ["--stdio", "--eula=34d850193ee04897"]
+# Optional launcher flags:
+# args = ["--stdio", "--eula=34d850193ee04897", "--log-level=INFO"]
+
+[language-server.intellij.environment]
+IJ_JAVA_OPTIONS = "-Xmx4g"
+# Optional server environment:
+# INTELLIJ_DATA_SHARING = "none"
+# INTELLIJ_REGION = "americas"
+
+[language-server.intellij.config]
+intellijExtensions = true
+# Optional fallback SDK for symbol resolution:
+# defaultSdk = ""
+buildTools = {}
+projects = []
+# Optional:
+# disableRocksDBWriteAheadLog = false
+runMainCodeLens = true
