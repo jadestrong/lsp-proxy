@@ -274,6 +274,10 @@ impl Application {
                             .collect();
                         Ok(json!(result))
                     }
+                    Ok(MethodCall::CodeLensRefresh) => {
+                        self.send_notification::<lsp_ext::CodeLensRefresh>(());
+                        Ok(serde_json::Value::Null)
+                    }
                     Ok(MethodCall::RegisterCapability(params)) => {
                         // Set when a registration changes something
                         // `get_server_capabilities` reports, so the editor can be told.
@@ -372,9 +376,7 @@ impl Application {
                         if announced_capabilities_changed {
                             self.editor
                                 .documents()
-                                .filter(|doc| {
-                                    doc.language_servers().any(|ls| ls.id() == server_id)
-                                })
+                                .filter(|doc| doc.language_servers().any(|ls| ls.id() == server_id))
                                 .for_each(|doc| {
                                     self.send_notification::<lsp_ext::CustomServerCapabilities>(
                                         doc.get_server_capabilities(),
@@ -696,6 +698,22 @@ impl Application {
                         // Relayed verbatim: the command ids are VS Code's, and which
                         // Emacs command each maps to is the editor's decision.
                         self.send_notification::<lsp_ext::RunEditorCommand>(params)
+                    }
+                    NotificationFromServer::LanguageStatus(params) => {
+                        let language_server = language_server!();
+                        let mut params = lsp_ext::language_status_to_import_log(&params);
+                        params.root_path =
+                            Some(language_server.root_path.to_string_lossy().to_string());
+                        self.send_notification::<lsp_ext::ImportLog>(params)
+                    }
+                    NotificationFromServer::LanguageProgressReport(params) => {
+                        let language_server = language_server!();
+                        self.send_notification::<lsp_ext::CustomProgress>(
+                            lsp_ext::CustomProgressParams {
+                                root_path: language_server.root_path.to_string_lossy().to_string(),
+                                params: lsp_ext::progress_report_to_progress(&params),
+                            },
+                        )
                     }
                     NotificationFromServer::ImportLog(mut params) => {
                         // Stamped with the server's root rather than the editor's project
@@ -1143,6 +1161,87 @@ impl Application {
         Ok(())
     }
 
+    fn forward_show_message_request(
+        &mut self,
+        server_id: usize,
+        server_request_id: crate::msg::RequestId,
+        params: lsp_types::ShowMessageRequestParams,
+    ) {
+        let editor_request_id = self
+            .send_request_returning_id::<lsp_types::request::ShowMessageRequest>(
+                params,
+                Self::on_show_message_response,
+            );
+        self.pending_editor_choices
+            .insert(editor_request_id, (server_id, server_request_id));
+    }
+
+    fn forward_choose_action(&mut self, server_id: usize, params: lsp_ext::ChooseActionParams) {
+        if params.entries.is_empty() {
+            debug!("ignoring intellij/chooseAction with no entries");
+            return;
+        }
+        let session_id = params.session_id;
+        let editor_request_id = self.send_request_returning_id::<lsp_ext::EmacsChooseAction>(
+            params,
+            Self::on_choose_action_response,
+        );
+        self.pending_choose_actions
+            .insert(editor_request_id, (server_id, session_id));
+    }
+
+    fn on_choose_action_response(&mut self, response: msg::Response) {
+        let Some((server_id, session_id)) = self.pending_choose_actions.remove(&response.id) else {
+            warn!("no pending chooseAction for response id={:?}", response.id);
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer chooseAction: {error:?}");
+            return;
+        }
+        let Some(index) = response.result.as_ref().and_then(|value| value.as_i64()) else {
+            debug!("chooseAction dismissed; session {session_id} left unanswered");
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping chooseAction reply");
+            return;
+        };
+        let params = lsp_types::ExecuteCommandParams {
+            command: lsp_ext::CHOOSE_MOD_COMMAND_ACTION.to_string(),
+            arguments: vec![session_id.into(), index.into()],
+            work_done_progress_params: Default::default(),
+        };
+        tokio::spawn(async move {
+            if let Err(err) = language_server
+                .request::<lsp_types::request::ExecuteCommand>(params)
+                .await
+            {
+                warn!("chooseModCommandAction failed: {err}");
+            }
+        });
+    }
+
+    fn on_show_message_response(&mut self, response: msg::Response) {
+        let Some((server_id, server_request_id)) = self.pending_editor_choices.remove(&response.id)
+        else {
+            warn!(
+                "no pending showMessageRequest for response id={:?}",
+                response.id
+            );
+            return;
+        };
+        let Some(language_server) = self.editor.language_server_by_id(server_id) else {
+            warn!("language server {server_id} is gone; dropping showMessageRequest reply");
+            return;
+        };
+        if let Some(error) = &response.error {
+            warn!("editor failed to answer showMessageRequest: {error:?}");
+        }
+        let result = response.result.unwrap_or(Value::Null);
+        tokio::spawn(language_server.reply(server_request_id, Ok(result)));
+    }
+
     /// Install a Java language server and report progress to the editor.
     fn handle_install_java_server(&mut self, req: msg::Request) {
         let params: lsp_ext::InstallJavaServerParams =
@@ -1185,11 +1284,9 @@ impl Application {
                         already_installed,
                     },
                 ),
-                Err(err) => Response::new_err(
-                    id,
-                    jsonrpc::ErrorCode::InternalError,
-                    format!("{err:#}"),
-                ),
+                Err(err) => {
+                    Response::new_err(id, jsonrpc::ErrorCode::InternalError, format!("{err:#}"))
+                }
             };
             let _ = sender.send(response.into());
         });
@@ -1227,11 +1324,9 @@ impl Application {
                         already_installed,
                     },
                 ),
-                Err(err) => Response::new_err(
-                    id,
-                    jsonrpc::ErrorCode::InternalError,
-                    format!("{err:#}"),
-                ),
+                Err(err) => {
+                    Response::new_err(id, jsonrpc::ErrorCode::InternalError, format!("{err:#}"))
+                }
             };
             let _ = sender.send(response.into());
         });
@@ -1311,7 +1406,10 @@ impl Application {
             return;
         };
 
-        match crate::java_project::set_project_runtime_override(&root_path, params.java_home.as_deref()) {
+        match crate::java_project::set_project_runtime_override(
+            &root_path,
+            params.java_home.as_deref(),
+        ) {
             Ok((java_home, java_version)) => self.respond(Response::new_ok(
                 req.id,
                 lsp_ext::SetJavaProjectRuntimeResult {
@@ -1624,6 +1722,20 @@ impl Application {
             .collect()
     }
 
+    fn java_project_root(doc: &Document) -> Option<PathBuf> {
+        let language_servers = doc.get_all_language_servers();
+        language_servers
+            .iter()
+            .find(|client| client.name() == "jdtls")
+            .or_else(|| {
+                language_servers
+                    .iter()
+                    .find(|client| client.name() == "intellij")
+            })
+            .or_else(|| language_servers.first())
+            .map(|client| client.root_path.clone())
+    }
+
     fn workspace_roots_for_doc(client: &Arc<Client>, doc_path: &Path) -> Vec<String> {
         let workspace_roots: Vec<PathBuf> = client
             .workspace_folders
@@ -1839,4 +1951,5 @@ mod dynamic_registration_tests {
             lsp_types::notification::DidChangeWatchedFiles::METHOD,
             lsp_types::request::CodeLensRequest::METHOD
         );
+    }
 }

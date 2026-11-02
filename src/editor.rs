@@ -221,11 +221,11 @@ impl Editor {
             .and_then(|language_config| {
                 // 只取第一个语言服务器配置
                 let first_ls_feature = language_config.language_servers.first()?;
-                
+
                 // 使用 iterator 的 next() 只获取第一个，避免启动多个 server
                 let mut iter = self.language_servers.get(language_config, doc_path.as_ref());
                 let (name, result) = iter.next()?;
-                
+
                 match result {
                     Ok(client) => Some((name, client)),
                     Err(err) => {
