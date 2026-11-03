@@ -972,6 +972,22 @@ impl Client {
         Some(self.call::<lsp_types::request::CodeActionRequest>(req_id, params))
     }
 
+    fn document_diagnostic_params(
+        text_document: lsp::TextDocumentIdentifier,
+        identifier: Option<String>,
+        previous_result_id: Option<String>,
+    ) -> Value {
+        // lsp-types 0.95 serializes these optional strings as null instead of omitting them.
+        let mut params = json!({ "textDocument": text_document });
+        if let Some(identifier) = identifier {
+            params["identifier"] = Value::String(identifier);
+        }
+        if let Some(previous_result_id) = previous_result_id {
+            params["previousResultId"] = Value::String(previous_result_id);
+        }
+        params
+    }
+
     pub fn text_document_diagnostic(
         &self,
         req_id: RequestId,
@@ -979,15 +995,17 @@ impl Client {
         previous_result_id: Option<String>,
         params: lsp::DocumentDiagnosticParams,
     ) -> Option<impl Future<Output = Result<Value>>> {
-        let pull_params = lsp::DocumentDiagnosticParams {
+        let pull_params = Self::document_diagnostic_params(
+            params.text_document,
             identifier,
             previous_result_id,
-            work_done_progress_params: lsp::WorkDoneProgressParams::default(),
-            partial_result_params: lsp::PartialResultParams::default(),
-            ..params
-        };
+        );
 
-        Some(self.call::<lsp::request::DocumentDiagnosticRequest>(req_id, pull_params))
+        Some(self.call_method(
+            req_id,
+            lsp::request::DocumentDiagnosticRequest::METHOD.to_string(),
+            pull_params,
+        ))
     }
 
     pub fn execute_command(
@@ -1034,5 +1052,60 @@ impl Client {
             },
             None => "none".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_document() -> lsp::TextDocumentIdentifier {
+        lsp::TextDocumentIdentifier {
+            uri: lsp::Url::parse("file:///workspace/index.ts").unwrap(),
+        }
+    }
+
+    #[test]
+    fn diagnostic_params_omit_absent_optional_strings() {
+        let params = Client::document_diagnostic_params(text_document(), None, None);
+
+        assert_eq!(
+            params,
+            json!({ "textDocument": { "uri": "file:///workspace/index.ts" } })
+        );
+    }
+
+    #[test]
+    fn diagnostic_params_preserve_identifier_and_previous_result_id() {
+        let params = Client::document_diagnostic_params(
+            text_document(),
+            Some("typescript".to_string()),
+            Some("result-1".to_string()),
+        );
+
+        assert_eq!(
+            params,
+            json!({
+                "textDocument": { "uri": "file:///workspace/index.ts" },
+                "identifier": "typescript",
+                "previousResultId": "result-1",
+            })
+        );
+    }
+
+    #[test]
+    fn diagnostic_params_handle_optional_strings_independently() {
+        let first = Client::document_diagnostic_params(
+            text_document(),
+            Some("typescript".to_string()),
+            None,
+        );
+        assert_eq!(first["identifier"], "typescript");
+        assert!(first.get("previousResultId").is_none());
+
+        let subsequent =
+            Client::document_diagnostic_params(text_document(), None, Some(String::new()));
+        assert!(subsequent.get("identifier").is_none());
+        assert_eq!(subsequent["previousResultId"], "");
     }
 }

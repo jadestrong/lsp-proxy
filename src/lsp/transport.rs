@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader, BufWriter},
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
     process::{ChildStderr, ChildStdin, ChildStdout},
     sync::{
         mpsc::{unbounded_channel, Sender, UnboundedReceiver, UnboundedSender},
@@ -149,7 +149,7 @@ impl Transport {
 
     async fn send(
         transport: Arc<Self>,
-        mut server_stdin: BufWriter<ChildStdin>,
+        mut server_stdin: impl AsyncWrite + Unpin,
         client_tx: UnboundedSender<(usize, jsonrpc::Call)>,
         mut client_rx: UnboundedReceiver<Payload>,
         initialize_notify: Arc<Notify>,
@@ -189,7 +189,7 @@ impl Transport {
                     let initialized = jsonrpc::Notification {
                         jsonrpc: Some(jsonrpc::Version::V2),
                         method: lsp_types::notification::Initialized::METHOD.to_string(),
-                        params: jsonrpc::Params::None,
+                        params: jsonrpc::Params::Map(Default::default()),
                     };
                     transport.send_payload_to_server(&mut server_stdin, Payload::Notification(initialized)).await.unwrap();
                     is_pending = false;
@@ -376,7 +376,7 @@ impl Transport {
 
     async fn send_payload_to_server(
         &self,
-        server_stdin: &mut BufWriter<ChildStdin>,
+        server_stdin: &mut (impl AsyncWrite + Unpin),
         payload: Payload,
     ) -> Result<()> {
         let json = match payload {
@@ -396,7 +396,7 @@ impl Transport {
 
     async fn send_string_to_server(
         &self,
-        server_stdin: &mut BufWriter<ChildStdin>,
+        server_stdin: &mut (impl AsyncWrite + Unpin),
         request: String,
         _language_server_name: &str,
     ) -> Result<()> {
@@ -418,5 +418,85 @@ impl Transport {
         server_stdin.flush().await?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use tokio::time::{timeout, Duration};
+
+    #[tokio::test]
+    async fn initialized_sends_empty_object_before_pending_notifications() {
+        let (writer, reader) = tokio::io::duplex(4096);
+        let mut reader = BufReader::new(reader);
+        let logger = LspLogger::new("test".to_string(), Some(0));
+        let transport = Arc::new(Transport {
+            id: 0,
+            name: "test".to_string(),
+            logger,
+            pending_requests: Mutex::new(HashMap::new()),
+        });
+        let (client_tx, _client_rx) = unbounded_channel();
+        let (tx, rx) = unbounded_channel();
+        let initialized = Arc::new(Notify::new());
+
+        let did_open = jsonrpc::Notification {
+            jsonrpc: Some(jsonrpc::Version::V2),
+            method: "textDocument/didOpen".to_string(),
+            params: jsonrpc::Params::Map(Default::default()),
+        };
+        tx.send(Payload::Notification(did_open.clone())).unwrap();
+        let (response_tx, _response_rx) = tokio::sync::mpsc::channel(1);
+        tx.send(Payload::Request {
+            chan: response_tx,
+            value: jsonrpc::MethodCall {
+                jsonrpc: Some(jsonrpc::Version::V2),
+                method: "initialize".to_string(),
+                params: jsonrpc::Params::Map(Default::default()),
+                id: RequestId::from("initialize".to_string()),
+            },
+        })
+        .unwrap();
+
+        let send_task = tokio::spawn(Transport::send(
+            transport.clone(),
+            writer,
+            client_tx,
+            rx,
+            initialized.clone(),
+        ));
+        let result = timeout(Duration::from_secs(2), async {
+            let mut buffer = String::new();
+            let initialize =
+                Transport::recv_server_message(&mut reader, &mut buffer, &transport.logger)
+                    .await
+                    .unwrap();
+            assert_eq!(serde_json::to_value(initialize).unwrap()["method"], "initialize");
+
+            initialized.notify_one();
+            let notification =
+                Transport::recv_server_message(&mut reader, &mut buffer, &transport.logger)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(notification).unwrap(),
+                json!({ "jsonrpc": "2.0", "method": "initialized", "params": {} })
+            );
+            let pending =
+                Transport::recv_server_message(&mut reader, &mut buffer, &transport.logger)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                serde_json::to_value(pending).unwrap(),
+                serde_json::to_value(did_open).unwrap()
+            );
+        })
+        .await;
+
+        send_task.abort();
+        let _ = send_task.await;
+        result.expect("transport did not send the initialization sequence");
     }
 }
