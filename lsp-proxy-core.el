@@ -84,6 +84,12 @@ priority list).  It is the same directory used for the user `languages.toml'."
   "Is there any server associated with this buffer
 that support `textDocument/documentHighlight' request.")
 
+(defvar-local lsp-proxy--support-call-hierarchy nil
+  "Non-nil if a server supports call hierarchy for this buffer.")
+
+(defvar-local lsp-proxy--support-type-hierarchy nil
+  "Non-nil if a server supports type hierarchy for this buffer.")
+
 (defvar-local lsp-proxy--support-document-symbols nil
   "Is there any server associated with this buffer
 that support `textDocument/documentSymbols' request.")
@@ -459,6 +465,8 @@ picked up on the next `lsp-proxy-restart'."
                        :supportInlineCompletion support-inline-completion
                        :supportHover support-hover
                        :supportCodeLens support-code-lens
+                       :supportCallHierarchy support-call-hierarchy
+                       :supportTypeHierarchy support-type-hierarchy
                        :textDocumentSyncKind text-document-sync-kind
                        :hasAnyServers has-any-servers
                        :workspaceRoots workspace-roots)
@@ -474,6 +482,8 @@ picked up on the next `lsp-proxy-restart'."
             (setq-local lsp-proxy--support-pull-diagnostic (not (eq support-pull-diagnostic :json-false)))
             (setq-local lsp-proxy--support-hover (not (eq support-hover :json-false)))
             (setq-local lsp-proxy--support-code-lens (not (eq support-code-lens :json-false)))
+            (setq-local lsp-proxy--support-call-hierarchy (eq support-call-hierarchy t))
+            (setq-local lsp-proxy--support-type-hierarchy (eq support-type-hierarchy t))
             (setq-local lsp-proxy--has-any-servers (not (eq has-any-servers :json-false)))
             ;; Normalised here, once, so every later comparison is against the same
             ;; shape as the keys `$/progress' is filed under.

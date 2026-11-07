@@ -140,6 +140,8 @@ pub enum LanguageServerFeature {
     GotoTypeDefinition,
     GotoReference,
     GotoImplementation,
+    CallHierarchy,
+    TypeHierarchy,
     // Goto, use bitflags, combining previous Goto members?
     SignatureHelp,
     Hover,
@@ -169,6 +171,8 @@ impl Display for LanguageServerFeature {
             GotoTypeDefinition => "goto-type-definition",
             GotoReference => "goto-reference",
             GotoImplementation => "goto-implementation",
+            CallHierarchy => "call-hierarchy",
+            TypeHierarchy => "type-hierarchy",
             SignatureHelp => "signature-help",
             Hover => "hover",
             DocumentHighlight => "document-highlight",

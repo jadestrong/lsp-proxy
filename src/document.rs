@@ -245,6 +245,8 @@ impl Document {
             support_inline_completion: false,
             support_hover: false,
             support_code_lens: false,
+            support_call_hierarchy: false,
+            support_type_hierarchy: false,
             text_document_sync_kind: "incremental".to_string(), // Default to incremental
             has_any_servers: false,
             workspace_roots: vec![],
@@ -285,6 +287,13 @@ impl Document {
             if ls.supports_feature(LanguageServerFeature::DocumentSymbols) {
                 server_capabilities.support_document_symbols = true;
             }
+            if ls.with_feature(LanguageServerFeature::CallHierarchy) {
+                server_capabilities.support_call_hierarchy = true;
+            }
+            if ls.with_feature(LanguageServerFeature::TypeHierarchy) {
+                server_capabilities.support_type_hierarchy = true;
+            }
+
             if ls.supports_feature(LanguageServerFeature::SignatureHelp) {
                 server_capabilities.support_signature_help = true;
             }
@@ -339,6 +348,8 @@ impl Document {
             support_inline_completion: false,
             support_hover: false,
             support_code_lens: false,
+            support_call_hierarchy: false,
+            support_type_hierarchy: false,
             text_document_sync_kind: "incremental".to_string(),
             has_any_servers: false,
             workspace_roots: vec![],
@@ -371,6 +382,13 @@ impl Document {
             {
                 let mut triggers = triggers.clone();
                 server_capabilities.trigger_characters.append(&mut triggers);
+            }
+
+            if ls.with_feature(LanguageServerFeature::CallHierarchy) {
+                server_capabilities.support_call_hierarchy = true;
+            }
+            if ls.with_feature(LanguageServerFeature::TypeHierarchy) {
+                server_capabilities.support_type_hierarchy = true;
             }
 
             if ls.supports_feature(LanguageServerFeature::SignatureHelp) {

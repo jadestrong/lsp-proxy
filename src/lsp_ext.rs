@@ -32,6 +32,10 @@ pub struct CustomServerCapabilitiesParams {
     pub text_document_sync_kind: String, // "full" or "incremental"
     pub support_hover: bool,
     pub support_code_lens: bool,
+    #[serde(default)]
+    pub support_call_hierarchy: bool,
+    #[serde(default)]
+    pub support_type_hierarchy: bool,
     pub has_any_servers: bool,
     /// Workspace root of every language server serving this document.
     ///
@@ -1362,6 +1366,8 @@ mod server_capabilities_tests {
             text_document_sync_kind: "incremental".to_string(),
             support_hover: false,
             support_code_lens: false,
+            support_call_hierarchy: false,
+            support_type_hierarchy: false,
             has_any_servers: true,
             workspace_roots: vec!["/w/initial".to_string(), "/w/complete".to_string()],
         }
@@ -1382,6 +1388,26 @@ mod server_capabilities_tests {
             json.as_object().unwrap().keys().collect::<Vec<_>>()
         );
         assert!(json.get("workspace_roots").is_none());
+    }
+
+    #[test]
+    fn test_hierarchy_capabilities_wire_names_and_older_peer_defaults() {
+        let mut params = params();
+        params.support_call_hierarchy = true;
+        params.support_type_hierarchy = true;
+        let mut value = serde_json::to_value(params).unwrap();
+        assert_eq!(value["supportCallHierarchy"], true);
+        assert_eq!(value["supportTypeHierarchy"], true);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("supportCallHierarchy");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("supportTypeHierarchy");
+        let older: CustomServerCapabilitiesParams = serde_json::from_value(value).unwrap();
+        assert!(!older.support_call_hierarchy && !older.support_type_hierarchy);
     }
 
     /// Order is preserved, so the editor tries the servers in activation order.

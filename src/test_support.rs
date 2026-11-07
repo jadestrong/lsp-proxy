@@ -9,6 +9,7 @@ name,uri=sys.argv[1:3]
 replies=[]
 pending={}
 definition_calls=0
+initialize_params=None
 def send(value):
     value['jsonrpc']='2.0'
     body=json.dumps(value).encode()
@@ -30,6 +31,36 @@ while True:
             request=pending.pop(mid)
             if 'error' in msg: send({'id':request,'error':msg['error']})
             else: answer(request,msg['result'])
+    elif method=='initialize':
+        initialize_params=p
+        provider={} if name=='hierarchy-options' else name!='hierarchy-unsupported'
+        answer(mid,{'capabilities':{'callHierarchyProvider':provider,'typeHierarchyProvider':provider}})
+    elif method=='test/initializeParams': answer(mid,initialize_params)
+    elif method in ('textDocument/prepareCallHierarchy','textDocument/prepareTypeHierarchy') or method.startswith(('callHierarchy/','typeHierarchy/')):
+        if name=='hierarchy-error':
+            send({'id':mid,'error':{'code':-32042,'message':'hierarchy RPC failure'}})
+            continue
+        if name=='hierarchy-invalid':
+            answer(mid,{'unexpected':True})
+            continue
+        if name=='hierarchy-null':
+            answer(mid,None)
+            continue
+        rng={'start':{'line':0,'character':1},'end':{'line':0,'character':4}}
+        item={'name':'Bean','kind':5,'uri':uri,'range':rng,'selectionRange':rng,'data':{'owner':name,'opaque':[1,{'x':'y'}]}}
+        if name in ('hierarchy-tags-empty','hierarchy-tags-deprecated'):
+            item['tags']=[] if name.endswith('empty') else [1]
+        if method.startswith('textDocument/'):
+            if name=='hierarchy-virtual': assert p['position']['line']==1
+            answer(mid,[item])
+        else:
+            assert p['item']['data']['owner']==name
+            assert p['item']['data']['opaque']==[1,{'x':'y'}]
+            if 'tags' in item: assert p['item']['tags']==item['tags']
+            if method.startswith('callHierarchy/'):
+                key='from' if method.endswith('incomingCalls') else 'to'
+                answer(mid,[{key:item,'fromRanges':[rng]}])
+            else: answer(mid,[item])
     elif method=='workspace/symbol':
         if name=='bad': send({'id':mid,'error':{'code':-32603,'message':'search failed'}})
         elif name=='null': answer(mid,None)

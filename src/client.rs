@@ -175,6 +175,10 @@ pub struct Client {
     server_tx: UnboundedSender<Payload>,
     request_counter: AtomicU64,
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
+    // lsp-types 0.95 has type hierarchy requests/client capabilities, but omits
+    // typeHierarchyProvider from ServerCapabilities. Preserve it at initialize.
+    pub(crate) type_hierarchy_provider:
+        OnceCell<Option<OneOf<bool, lsp::TypeHierarchyRegistrationOptions>>>,
     pub(crate) java_service_ready: std::sync::atomic::AtomicBool,
     pub(crate) registered_capabilities: Mutex<Vec<RegisteredCapability>>,
     definition_registration_seen: std::sync::atomic::AtomicBool,
@@ -383,6 +387,7 @@ impl Client {
             server_tx,
             request_counter: AtomicU64::new(0),
             capabilities: OnceCell::new(),
+            type_hierarchy_provider: OnceCell::new(),
             java_service_ready: std::sync::atomic::AtomicBool::new(false),
             registered_capabilities: Mutex::new(Vec::new()),
             definition_registration_seen: std::sync::atomic::AtomicBool::new(false),
@@ -634,6 +639,17 @@ impl Client {
             ),
             LanguageServerFeature::PullDiagnostics => capabilities.diagnostic_provider.is_some(),
             LanguageServerFeature::CodeLens => capabilities.code_lens_provider.is_some(),
+            LanguageServerFeature::CallHierarchy => matches!(
+                capabilities.call_hierarchy_provider,
+                Some(
+                    CallHierarchyServerCapability::Simple(true)
+                        | CallHierarchyServerCapability::Options(_)
+                )
+            ),
+            LanguageServerFeature::TypeHierarchy => matches!(
+                self.type_hierarchy_provider.get(),
+                Some(Some(OneOf::Left(true) | OneOf::Right(_)))
+            ),
         }
     }
 
@@ -668,6 +684,20 @@ impl Client {
         let json = self.call::<R>(self.next_request_id(), params).await?;
         let response = serde_json::from_value(json)?;
         Ok(response)
+    }
+
+    /// Hierarchy requests share Helix's capability guard.  Keep the caller's
+    /// request id for cancellation and the raw response for opaque server data.
+    pub(crate) fn hierarchy<R: crate::hierarchy::HierarchyRequest>(
+        &self,
+        req_id: RequestId,
+        params: R::Params,
+    ) -> Option<impl Future<Output = Result<Value>>>
+    where
+        R::Params: serde::Serialize,
+    {
+        self.with_feature(R::FEATURE)
+            .then(|| self.call::<R>(req_id, params))
     }
 
     pub fn call<R: lsp::request::Request>(
@@ -967,6 +997,12 @@ impl Client {
                         hierarchical_document_symbol_support: Some(true),
                         ..DocumentSymbolClientCapabilities::default()
                     }),
+                    call_hierarchy: Some(lsp::DynamicRegistrationClientCapabilities {
+                        dynamic_registration: Some(false),
+                    }),
+                    type_hierarchy: Some(lsp::DynamicRegistrationClientCapabilities {
+                        dynamic_registration: Some(false),
+                    }),
                     ..Default::default()
                 }),
                 window: Some(lsp::WindowClientCapabilities {
@@ -995,7 +1031,14 @@ impl Client {
             },
         };
 
-        self.request::<lsp::request::Initialize>(params).await
+        let value = self
+            .call::<lsp::request::Initialize>(self.next_request_id(), params)
+            .await?;
+        let type_hierarchy_provider =
+            serde_json::from_value(value["capabilities"]["typeHierarchyProvider"].clone())?;
+        let result = serde_json::from_value(value)?;
+        let _ = self.type_hierarchy_provider.set(type_hierarchy_provider);
+        Ok(result)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -1379,6 +1422,82 @@ mod definition_registration_tests {
 #[cfg(test)]
 mod tests {
     use super::publish_diagnostics_capabilities;
+
+    #[tokio::test]
+    async fn test_hierarchy_feature_filters_and_document_capabilities() {
+        use super::*;
+        use crate::document::{Document, VirtualDocServerEntry};
+        for (only, excluded, call, types) in [
+            (vec![], vec![], true, true),
+            (
+                vec![LanguageServerFeature::CallHierarchy],
+                vec![],
+                true,
+                false,
+            ),
+            (
+                vec![],
+                vec![LanguageServerFeature::CallHierarchy],
+                false,
+                true,
+            ),
+            (
+                vec![LanguageServerFeature::TypeHierarchy],
+                vec![LanguageServerFeature::TypeHierarchy],
+                false,
+                false,
+            ),
+        ] {
+            let (mut client, _) =
+                crate::test_support::client("hierarchy", 1, "file:///w/Bean.java", false).await;
+            // Set feature configuration before handing out any Arc clones.
+            Arc::get_mut(&mut client).unwrap().features = Some(LanguageServerFeatures {
+                only: only.into_iter().collect(),
+                excluded: excluded.into_iter().collect(),
+                ..Default::default()
+            });
+            let result = client.initialize(false).await.unwrap();
+            client.capabilities.set(result.capabilities).unwrap();
+            assert_eq!(
+                client.with_feature(LanguageServerFeature::CallHierarchy),
+                call
+            );
+            assert_eq!(
+                client.with_feature(LanguageServerFeature::TypeHierarchy),
+                types
+            );
+            let mut document =
+                Document::new(&lsp::Url::parse("file:///w/Bean.java").unwrap(), None, None);
+            document.language_config = Some(Arc::new(
+                serde_json::from_value::<crate::syntax::LanguageConfiguration>(json!({
+                    "name":"java", "file-types":["java"], "language-servers":["hierarchy"]
+                }))
+                .unwrap(),
+            ));
+            document
+                .language_servers
+                .insert("hierarchy".into(), client.clone());
+            let capabilities = document.get_server_capabilities();
+            assert_eq!(capabilities.support_call_hierarchy, call);
+            assert_eq!(capabilities.support_type_hierarchy, types);
+            document
+                .language_servers_of_virtual_doc
+                .insert("java".into(), VirtualDocServerEntry::new(client));
+            let capabilities = document.get_virtual_doc_server_capabilities();
+            assert_eq!(capabilities.support_call_hierarchy, call);
+            assert_eq!(capabilities.support_type_hierarchy, types);
+        }
+        for feature in [
+            LanguageServerFeature::CallHierarchy,
+            LanguageServerFeature::TypeHierarchy,
+        ] {
+            let name = feature.to_string();
+            assert_eq!(
+                serde_json::from_value::<LanguageServerFeature>(json!(name)).unwrap(),
+                feature
+            );
+        }
+    }
 
     /// The switch the whole "stuck on Loading" fix hangs from.
     ///

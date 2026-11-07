@@ -1148,6 +1148,24 @@ impl Application {
         };
 
         dispatcher
+            .on::<lsp_types::request::CallHierarchyPrepare, _, _>(
+                crate::hierarchy::prepare::<lsp_types::request::CallHierarchyPrepare>,
+            )
+            .on::<lsp_types::request::CallHierarchyIncomingCalls, _, _>(
+                crate::hierarchy::expand::<lsp_types::request::CallHierarchyIncomingCalls>,
+            )
+            .on::<lsp_types::request::CallHierarchyOutgoingCalls, _, _>(
+                crate::hierarchy::expand::<lsp_types::request::CallHierarchyOutgoingCalls>,
+            )
+            .on::<crate::hierarchy::TypeHierarchyPrepare, _, _>(
+                crate::hierarchy::prepare::<crate::hierarchy::TypeHierarchyPrepare>,
+            )
+            .on::<crate::hierarchy::TypeHierarchySupertypes, _, _>(
+                crate::hierarchy::expand::<crate::hierarchy::TypeHierarchySupertypes>,
+            )
+            .on::<crate::hierarchy::TypeHierarchySubtypes, _, _>(
+                crate::hierarchy::expand::<crate::hierarchy::TypeHierarchySubtypes>,
+            )
             .on::<lsp_types::request::WorkspaceSymbolRequest, _, _>(
                 crate::workspace_symbols::search,
             )
@@ -2236,5 +2254,55 @@ mod dynamic_registration_tests {
             lsp_types::notification::DidChangeWatchedFiles::METHOD,
             lsp_types::request::CodeLensRequest::METHOD
         );
+    }
+
+    #[tokio::test]
+    async fn test_hierarchy_dispatches_all_six_methods() {
+        use crate::application::Application;
+        use crate::msg::{CommonContext, Context};
+        use serde_json::{json, Value};
+        let (client, _) =
+            crate::test_support::client("hierarchy-tags-empty", 1, "file:///w/Bean.java", false)
+                .await;
+        let result = client.initialize(false).await.unwrap();
+        client.capabilities.set(result.capabilities).unwrap();
+        let mut root = Value::Null;
+        for method in [
+            "textDocument/prepareCallHierarchy",
+            "callHierarchy/incomingCalls",
+            "callHierarchy/outgoingCalls",
+            "textDocument/prepareTypeHierarchy",
+            "typeHierarchy/supertypes",
+            "typeHierarchy/subtypes",
+        ] {
+            let preparing = method.starts_with("textDocument/");
+            let context = (!preparing).then_some(Context::Common(CommonContext {
+                language_server_id: 1,
+            }));
+            let mut request = crate::test_support::request(method, context);
+            request.params.params = if preparing {
+                json!({"textDocument":{"uri":"file:///w/Bean.java"},"position":{"line":0,"character":1}})
+            } else {
+                json!({"item":root})
+            };
+            let (sender, receiver) = crossbeam_channel::unbounded();
+            Application::on_request(request, sender, vec![client.clone()], Some("java".into()));
+            let response = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if let Ok(crate::msg::Message::Response(response)) = receiver.try_recv() {
+                        break response;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            assert!(response.error.is_none(), "{method}: {response:?}");
+            let items = response.result.unwrap();
+            assert_eq!(items[0]["language_server_id"], 1);
+            if preparing {
+                root = items[0]["lsp_item"].clone();
+            }
+        }
     }
 }

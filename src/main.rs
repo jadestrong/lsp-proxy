@@ -14,6 +14,7 @@ mod editor;
 mod error;
 mod fuzzy;
 mod handlers;
+mod hierarchy;
 mod java_install;
 mod java_project;
 mod java_spring;
