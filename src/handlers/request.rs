@@ -161,9 +161,10 @@ pub(crate) async fn handle_goto_definition<R>(
     req: msg::Request,
     params: R::Params,
     language_servers: Vec<Arc<Client>>,
+    language_id: Option<String>,
 ) -> Result<Response>
 where
-    R: lsp_types::request::Request + 'static,
+    R: lsp_types::request::Request<Params = lsp_types::GotoDefinitionParams> + 'static,
     R::Params: DeserializeOwned + Send + fmt::Debug + panic::UnwindSafe,
 {
     let feature = match R::METHOD {
@@ -172,32 +173,44 @@ where
         lsp_types::request::GotoTypeDefinition::METHOD => LanguageServerFeature::GotoTypeDefinition,
         _ => LanguageServerFeature::GotoDefinition,
     };
-    // Some language servers (e.g., Dart) did not declare `definitionProvider` but still support it.
-    let language_server = if language_servers.len() == 1 {
-        language_servers.first()
-    } else {
-        language_servers.iter().find(|ls| ls.with_feature(feature))
-    };
+    let language_server = language_servers
+        .iter()
+        .find(|ls| {
+            ls.with_feature_for_document(
+                feature,
+                &params.text_document_position_params.text_document.uri,
+                language_id.as_deref(),
+            )
+        })
+        .or_else(|| {
+            // Preserve the single-server workaround for unadvertised providers,
+            // but never bypass a document selector or a dynamic unregistration.
+            (language_servers.len() == 1)
+                .then(|| &language_servers[0])
+                .filter(|ls| ls.allows_unadvertised_navigation(feature))
+        });
     if let Some(ls) = language_server {
-        match ls.call::<R>(req.id.clone(), params).await {
-            Ok(json) => match serde_json::from_value::<lsp_types::GotoDefinitionResponse>(json) {
-                Ok(mut resp) => {
-                    if let lsp_types::GotoDefinitionResponse::Link(location_links) = resp {
-                        let locations: Vec<lsp_types::Location> = location_links
-                            .into_iter()
-                            .map(|link| lsp_types::Location {
-                                uri: link.target_uri,
-                                range: link.target_selection_range,
-                            })
-                            .collect();
-                        resp = lsp_types::GotoDefinitionResponse::Array(locations);
-                    }
-                    Ok(Response::new_ok(req.id, resp))
-                }
-                Err(e) => Err(e.into()),
-            },
-            Err(err) => Err(err.into()),
-        }
+        let json = ls.call::<R>(req.id.clone(), params).await?;
+        // All four navigation requests allow null when no target is available.
+        let response: Option<lsp_types::GotoDefinitionResponse> = serde_json::from_value(json)
+            .map_err(|err| {
+                anyhow::anyhow!("Invalid {} response for {}: {err}", ls.name(), R::METHOD)
+            })?;
+        let response = response.map(|response| match response {
+            lsp_types::GotoDefinitionResponse::Link(links) => {
+                lsp_types::GotoDefinitionResponse::Array(
+                    links
+                        .into_iter()
+                        .map(|link| lsp_types::Location {
+                            uri: link.target_uri,
+                            range: link.target_selection_range,
+                        })
+                        .collect(),
+                )
+            }
+            response => response,
+        });
+        Ok(Response::new_ok(req.id, response))
     } else {
         let ls_names = language_servers.iter().map(|ls| ls.name()).join("、");
         let error_msg = if ls_names.is_empty() {
@@ -209,6 +222,101 @@ where
             )
         };
         Err(anyhow::Error::msg(error_msg))
+    }
+}
+
+#[cfg(test)]
+mod navigation_response_tests {
+    use super::*;
+    use serde_json::{json, Value};
+
+    async fn navigate<R>(client: Arc<Client>) -> Result<Response>
+    where
+        R: lsp_types::request::Request<Params = lsp_types::GotoDefinitionParams> + 'static,
+    {
+        let params = serde_json::from_value(json!({
+            "textDocument":{"uri":"file:///source.java"},"position":{"line":0,"character":0}
+        }))
+        .unwrap();
+        handle_goto_definition::<R>(
+            crate::test_support::request(R::METHOD, None),
+            params,
+            vec![client],
+            Some("java".into()),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn null_is_a_successful_response_for_all_four_navigation_methods() {
+        let (client, _) =
+            crate::test_support::client("goto-null", 1, "file:///target.java", true).await;
+        for response in [
+            navigate::<lsp_types::request::GotoDefinition>(client.clone()).await,
+            navigate::<lsp_types::request::GotoDeclaration>(client.clone()).await,
+            navigate::<lsp_types::request::GotoTypeDefinition>(client.clone()).await,
+            navigate::<lsp_types::request::GotoImplementation>(client).await,
+        ] {
+            let response = response.unwrap();
+            assert!(response.error.is_none());
+            assert_eq!(response.result, Some(Value::Null));
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_locations_and_all_nonempty_wire_shapes_are_preserved() {
+        let location = json!({"uri":"file:///target.java","range":{"start":{"line":2,"character":1},"end":{"line":2,"character":4}}});
+        for (server, expected) in [
+            ("goto-empty", json!([])),
+            ("goto-scalar", location.clone()),
+            ("goto-array", json!([location.clone()])),
+            ("goto-links", json!([location])),
+        ] {
+            let (client, _) =
+                crate::test_support::client(server, 1, "file:///target.java", true).await;
+            let response = navigate::<lsp_types::request::GotoDefinition>(client)
+                .await
+                .unwrap();
+            assert_eq!(response.result, Some(expected), "{server}");
+            assert!(response.error.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn null_followed_by_a_target_on_retry_does_not_produce_a_parse_error() {
+        let (client, _) =
+            crate::test_support::client("goto-transient", 1, "file:///target.java", true).await;
+        let first = navigate::<lsp_types::request::GotoDefinition>(client.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.result, Some(Value::Null));
+        let second = navigate::<lsp_types::request::GotoDefinition>(client)
+            .await
+            .unwrap();
+        assert_eq!(second.result.unwrap()[0]["uri"], "file:///target.java");
+    }
+
+    #[tokio::test]
+    async fn malformed_results_remain_errors_and_identify_server_and_method() {
+        let (client, _) =
+            crate::test_support::client("goto-invalid", 1, "file:///target.java", true).await;
+        let err = navigate::<lsp_types::request::GotoDefinition>(client)
+            .await
+            .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Invalid goto-invalid response for textDocument/definition:"));
+        assert!(err.to_string().contains("GotoDefinitionResponse"));
+    }
+
+    #[tokio::test]
+    async fn server_rpc_errors_remain_errors() {
+        let (client, _) =
+            crate::test_support::client("goto-error", 1, "file:///target.java", true).await;
+        let err = navigate::<lsp_types::request::GotoDefinition>(client)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("goto RPC failure"));
     }
 }
 

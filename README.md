@@ -12,6 +12,7 @@ The features it supports are:
 - rename (triggered by `lsp-proxy-rename`)
 - format buffer (triggered by `lsp-proxy-format-buffer`)
 - workspace command, such as `typescript.restartTsServer(vtsls)` 、 `reloadWorkspace(rust-analyzer)` (triggered by `lsp-proxy-execute-command`)
+- 工作区符号搜索支持可选的 [Ivy 动态界面](docs/ivy.md)，包括 Spring 符号和运行 endpoint。
 - inlay hints (triggered by `lsp-proxy-inlay-hints-mode`)
 - documentHighlight/signature (baesd on `eldoc`)
 - documentSymbols (triggered by `imenu`)

@@ -183,6 +183,24 @@ impl Application {
                 method, params, id, ..
             }) => {
                 let reply = match MethodCall::parse(&method, params) {
+                    Ok(MethodCall::AddClasspathListener(params)) => {
+                        let spring = language_server!();
+                        let clients = self.editor.language_servers.get_project_clients(&spring);
+                        self.spring_bridge
+                            .classpath_request(spring, clients, id, params, false);
+                        return;
+                    }
+                    Ok(MethodCall::RemoveClasspathListener(params)) => {
+                        let spring = language_server!();
+                        let clients = self.editor.language_servers.get_project_clients(&spring);
+                        self.spring_bridge
+                            .classpath_request(spring, clients, id, params, true);
+                        return;
+                    }
+                    Ok(MethodCall::ExecuteClientCommand(params)) => {
+                        self.spring_bridge.callback(language_server!(), id, params);
+                        return;
+                    }
                     Err(lsp::Error::Unhandled) => {
                         error!("Language Server: Method {method} not found in request {id}");
                         Err(jsonrpc::Error {
@@ -282,6 +300,7 @@ impl Application {
                         // Set when a registration changes something
                         // `get_server_capabilities` reports, so the editor can be told.
                         let mut announced_capabilities_changed = false;
+                        let mut registration_error = None;
                         if let Some(client) = self
                             .editor
                             .language_servers
@@ -290,6 +309,21 @@ impl Application {
                         {
                             for reg in params.registrations {
                                 match reg.method.as_str() {
+                                    lsp_types::request::GotoDefinition::METHOD => {
+                                        let id = reg.id.clone();
+                                        match client.register_definition(reg) {
+                                            Ok(()) => debug!(
+                                                "Registered definition {id} for server {server_id}"
+                                            ),
+                                            Err(err) => {
+                                                registration_error = Some(jsonrpc::Error {
+                                                    code: jsonrpc::ErrorCode::InvalidParams,
+                                                    message: err.to_string(),
+                                                    data: None,
+                                                });
+                                            }
+                                        }
+                                    }
                                     lsp_types::notification::DidChangeWatchedFiles::METHOD => {
                                         let Some(options) = reg.register_options else {
                                             continue;
@@ -361,7 +395,7 @@ impl Application {
                                         // case but that rejects the registration promise in the server which causes an
                                         // exit. So we work around this by ignoring the request and sending back an OK
                                         // response.
-                                        log::warn!("Ignoring a client/registerCapability request because dynamic capability registration is not enabled. Please report this upstream to the language server");
+                                        log::warn!("Ignoring unsupported dynamic capability registration for {}", reg.method);
                                     }
                                 }
                             }
@@ -384,11 +418,21 @@ impl Application {
                                 });
                         }
 
-                        Ok(serde_json::Value::Null)
+                        match registration_error {
+                            Some(err) => Err(err),
+                            None => Ok(serde_json::Value::Null),
+                        }
                     }
                     Ok(MethodCall::UnregisterCapability(params)) => {
                         for unreg in params.unregisterations {
                             match unreg.method.as_str() {
+                                lsp_types::request::GotoDefinition::METHOD => {
+                                    language_server!().unregister_definition(&unreg.id);
+                                    debug!(
+                                        "Unregistered definition {} for server {server_id}",
+                                        unreg.id
+                                    );
+                                }
                                 lsp_types::notification::DidChangeWatchedFiles::METHOD => {
                                     self.editor
                                         .language_servers
@@ -428,6 +472,10 @@ impl Application {
 
                 match notification {
                     NotificationFromServer::Initialized => {
+                        let client = language_server!();
+                        let project_clients =
+                            self.editor.language_servers.get_project_clients(&client);
+                        self.spring_bridge.initialized(client, project_clients);
                         let language_server = language_server!();
                         // NOTE Trigger a workspace/didChangeConfiguration notification after initialization.
                         // This might not be required by the spec but Neovim does this as well, so it's
@@ -467,6 +515,7 @@ impl Application {
                             });
                     }
                     NotificationFromServer::InitializationFailed(message) => {
+                        self.spring_bridge.remove_client(server_id);
                         let failed_server_id = server_id;
                         let failed_server_name = self
                             .editor
@@ -537,6 +586,7 @@ impl Application {
                         );
                     }
                     NotificationFromServer::Exit => {
+                        self.spring_bridge.remove_client(server_id);
                         let language_server = language_server!();
                         for doc in self.editor.documents_mut() {
                             doc.clear_all_diagnostics(server_id);
@@ -700,6 +750,11 @@ impl Application {
                         self.send_notification::<lsp_ext::RunEditorCommand>(params)
                     }
                     NotificationFromServer::LanguageStatus(params) => {
+                        if params.typ == "ServiceReady" {
+                            language_server!()
+                                .java_service_ready
+                                .store(true, std::sync::atomic::Ordering::Release);
+                        }
                         let language_server = language_server!();
                         let mut params = lsp_ext::language_status_to_import_log(&params);
                         params.root_path =
@@ -984,6 +1039,9 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallJavaDebug::METHOD => {
                 self.handle_install_java_debug(req);
             }
+            Message::Request(req) if req.method == lsp_ext::InstallSpring::METHOD => {
+                self.handle_install_spring(req);
+            }
             Message::Request(req) if req.method == lsp_ext::GetJavaProjectRuntime::METHOD => {
                 self.handle_get_java_project_runtime(req);
             }
@@ -1026,7 +1084,24 @@ impl Application {
                                         }
                                     }
 
-                                    Self::on_request(req, self.sender.clone(), vec![ls]);
+                                    let language_id = self
+                                        .editor
+                                        .syn_loader
+                                        .language_config_for_language_id(&language)
+                                        .map(|config| {
+                                            config
+                                                .language_server_language_id
+                                                .as_deref()
+                                                .unwrap_or(&config.language_id)
+                                                .to_owned()
+                                        })
+                                        .unwrap_or(language);
+                                    Self::on_request(
+                                        req,
+                                        self.sender.clone(),
+                                        vec![ls],
+                                        Some(language_id),
+                                    );
                                 } else {
                                     self.respond(create_error_response(
                                         &req.id,
@@ -1048,7 +1123,8 @@ impl Application {
                             debug!("No available language server for {:?}.", req.method);
                             return Ok(());
                         }
-                        Self::on_request(req, self.sender.clone(), language_servers);
+                        let language_id = doc.language_id().map(str::to_owned);
+                        Self::on_request(req, self.sender.clone(), language_servers, language_id);
                     }
                     Err(response) => self.respond(response),
                 }
@@ -1063,6 +1139,7 @@ impl Application {
         req: msg::Request,
         response_sender: Sender<Message>,
         language_servers: Vec<Arc<Client>>,
+        language_id: Option<String>,
     ) {
         let mut dispatcher = RequestDispatcher {
             req: Some(req),
@@ -1071,18 +1148,35 @@ impl Application {
         };
 
         dispatcher
-            .on::<lsp_types::request::GotoDefinition, _, _>(
-                handlers::request::handle_goto_definition::<lsp_types::request::GotoDefinition>,
+            .on::<lsp_types::request::WorkspaceSymbolRequest, _, _>(
+                crate::workspace_symbols::search,
             )
-            .on::<lsp_types::request::GotoImplementation, _, _>(
-                handlers::request::handle_goto_definition::<lsp_types::request::GotoImplementation>,
+            .on::<lsp_types::request::WorkspaceSymbolResolve, _, _>(
+                crate::workspace_symbols::resolve,
             )
-            .on::<lsp_types::request::GotoDeclaration, _, _>(
-                handlers::request::handle_goto_definition::<lsp_types::request::GotoDeclaration>,
-            )
-            .on::<lsp_types::request::GotoTypeDefinition, _, _>(
-                handlers::request::handle_goto_definition::<lsp_types::request::GotoTypeDefinition>,
-            )
+            .on::<lsp_types::request::GotoDefinition, _, _>(move |req, params, servers| {
+                handlers::request::handle_goto_definition::<lsp_types::request::GotoDefinition>(
+                    req,
+                    params,
+                    servers,
+                    language_id.clone(),
+                )
+            })
+            .on::<lsp_types::request::GotoImplementation, _, _>(|req, params, servers| {
+                handlers::request::handle_goto_definition::<lsp_types::request::GotoImplementation>(
+                    req, params, servers, None,
+                )
+            })
+            .on::<lsp_types::request::GotoDeclaration, _, _>(|req, params, servers| {
+                handlers::request::handle_goto_definition::<lsp_types::request::GotoDeclaration>(
+                    req, params, servers, None,
+                )
+            })
+            .on::<lsp_types::request::GotoTypeDefinition, _, _>(|req, params, servers| {
+                handlers::request::handle_goto_definition::<lsp_types::request::GotoTypeDefinition>(
+                    req, params, servers, None,
+                )
+            })
             .on::<lsp_types::request::References, _, _>(handlers::request::handle_goto_references)
             .on::<lsp_types::request::Completion, _, _>(handlers::request::handle_completion)
             .on::<lsp_types::request::ResolveCompletionItem, _, _>(
@@ -1373,6 +1467,47 @@ impl Application {
         });
     }
 
+    fn handle_install_spring(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallSpringParams = match serde_json::from_value(req.params.params) {
+            Ok(params) => params,
+            Err(err) => {
+                self.respond(Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InvalidParams,
+                    err.to_string(),
+                ));
+                return;
+            }
+        };
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let progress = Self::install_progress_reporter(sender.clone(), "Spring Boot");
+            let result = crate::java_install::install_spring(
+                std::path::Path::new(&params.install_dir),
+                params.version.as_deref(),
+                params.force,
+                progress,
+            )
+            .await;
+            let response = match result {
+                Ok((launcher, info, already_installed)) => Response::new_ok(
+                    req.id,
+                    lsp_ext::InstallSpringResult {
+                        launcher_path: launcher.to_string_lossy().into(),
+                        version: info.version,
+                        already_installed,
+                    },
+                ),
+                Err(err) => Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InternalError,
+                    format!("{err:#}"),
+                ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
     fn handle_set_java_project_runtime(&mut self, req: msg::Request) {
         let params: lsp_ext::SetJavaProjectRuntimeParams = if req.params.params.is_null() {
             lsp_ext::SetJavaProjectRuntimeParams { java_home: None }
@@ -1609,6 +1744,7 @@ impl Application {
                 ));
             } else {
                 shutdown_servers.push(Self::workspace_language_server_info(&client, false, 0));
+                self.spring_bridge.remove_client(client_id);
                 self.editor.language_servers.remove_by_id(client_id);
                 tokio::spawn(async move {
                     let _ = client.shutdown_and_exit().await;
@@ -1837,6 +1973,9 @@ impl Application {
                         }
                     })
                     .collect();
+                for id in &old_client_ids {
+                    self.spring_bridge.remove_client(*id);
+                }
                 match self
                     .editor
                     .language_servers
@@ -1911,6 +2050,152 @@ mod org_diagnostic_tests {
 #[cfg(test)]
 mod dynamic_registration_tests {
     use lsp_types::request::Request as _;
+
+    #[tokio::test]
+    async fn unadvertised_single_server_definition_remains_usable() {
+        let (client, _) =
+            crate::test_support::client("legacy", 1, "file:///legacy-result", true).await;
+        let params = serde_json::from_value(serde_json::json!({
+            "textDocument":{"uri":"file:///one/App.java"}, "position":{"line":0,"character":0}
+        }))
+        .unwrap();
+        let response =
+            crate::handlers::request::handle_goto_definition::<lsp_types::request::GotoDefinition>(
+                crate::test_support::request("textDocument/definition", None),
+                params,
+                vec![client],
+                Some("java".into()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.result.unwrap()[0]["uri"], "file:///legacy-result");
+    }
+
+    #[tokio::test]
+    async fn definition_registration_and_unregistration_use_real_transport_and_routing() {
+        use crate::{
+            application::Application,
+            handlers::request::handle_goto_definition,
+            lsp::jsonrpc::Call,
+            syntax::{Configuration, LanguageServerFeature},
+            test_support,
+        };
+        use serde_json::{json, Value};
+        use std::time::Duration;
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let mut app = Application::new(
+            sender,
+            Configuration {
+                language: vec![],
+                language_server: Default::default(),
+            },
+        );
+        let (jdt, _) = test_support::client("jdtls", 1, "file:///jdt-result", true).await;
+        let (spring, _) = test_support::client("spring", 2, "file:///spring-result", false).await;
+        spring
+            .capabilities
+            .set(lsp_types::ServerCapabilities {
+                definition_provider: Some(lsp_types::OneOf::Left(true)),
+                ..Default::default()
+            })
+            .unwrap();
+        app.editor.language_servers.insert_test_client(jdt.clone());
+        let (debounce, _) = tokio::sync::mpsc::unbounded_channel();
+        let registration: Call = serde_json::from_value(json!({
+            "jsonrpc":"2.0", "id":"registration", "method":"client/registerCapability",
+            "params":{"registrations":[{"id":"definition-id", "method":"textDocument/definition"}]}
+        }))
+        .unwrap();
+        app.handle_language_server_message(registration, 1, debounce.clone())
+            .await;
+        assert!(jdt.with_feature(LanguageServerFeature::GotoDefinition));
+        let params: lsp_types::GotoDefinitionParams = serde_json::from_value(json!({
+            "textDocument":{"uri":"file:///one/App.java"}, "position":{"line":0,"character":0}
+        }))
+        .unwrap();
+        // Exercise the dispatcher that supplies the document's language context.
+        let mut request = test_support::request("textDocument/definition", None);
+        request.params.params = serde_json::to_value(&params).unwrap();
+        Application::on_request(
+            request,
+            app.sender.clone(),
+            vec![jdt.clone(), spring],
+            Some("java".into()),
+        );
+        let response = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let Ok(crate::msg::Message::Response(response)) = receiver.try_recv() {
+                    break response;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(response.error.is_none(), "{response:?}");
+        assert_eq!(response.result.unwrap()[0]["uri"], "file:///jdt-result");
+
+        let unregister: Call = serde_json::from_value(json!({
+            "jsonrpc":"2.0", "id":"unregistration", "method":"client/unregisterCapability",
+            "params":{"unregisterations":[{"id":"definition-id", "method":"textDocument/definition"}]}
+        })).unwrap();
+        app.handle_language_server_message(unregister, 1, debounce.clone())
+            .await;
+        assert!(!jdt.with_feature(LanguageServerFeature::GotoDefinition));
+        // A single-server compatibility fallback must not undo unregistration.
+        assert!(
+            handle_goto_definition::<lsp_types::request::GotoDefinition>(
+                test_support::request("textDocument/definition", None),
+                params,
+                vec![jdt.clone()],
+                Some("java".into())
+            )
+            .await
+            .is_err()
+        );
+
+        let malformed: Call = serde_json::from_value(json!({
+            "jsonrpc":"2.0", "id":"malformed", "method":"client/registerCapability",
+            "params":{"registrations":[{"id":"bad", "method":"textDocument/definition", "registerOptions":{"documentSelector":false}}]}
+        })).unwrap();
+        app.handle_language_server_message(malformed, 1, debounce)
+            .await;
+        let replies = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let replies = jdt
+                    .call_method(
+                        "replies".to_string().into(),
+                        "test/replies".into(),
+                        Value::Null,
+                    )
+                    .await
+                    .unwrap();
+                if replies.as_array().unwrap().len() == 3 {
+                    break replies;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        for id in ["registration", "unregistration"] {
+            let reply = replies
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["id"] == id)
+                .unwrap();
+            assert_eq!(reply.get("result"), Some(&Value::Null));
+            assert!(reply.get("error").is_none());
+        }
+        let failure = replies
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == "malformed")
+            .unwrap();
+        assert_eq!(failure["error"]["code"], -32602);
+    }
 
     /// The exact `registerOptions` jdtls sends for code lens.
     ///

@@ -634,6 +634,14 @@ overrideMethodsPromptSupport = true
 resolveAdditionalTextEditsSupport = true
 
 
+# Optional STS4 companion for JDT LS; enable it in Java's language-servers list.
+[language-server.spring-boot]
+command = "spring-boot-ls"
+timeout = 120
+
+[language-server.spring-boot.config.boot-java.live-information]
+all-local-java-processes = true
+
 # JetBrains IntelliJ Language Server. Usage and field details: docs/java.md.
 [language-server.intellij]
 command = "intellij-server"

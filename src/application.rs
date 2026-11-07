@@ -44,6 +44,7 @@ pub(crate) struct Application {
     pub(crate) pending_choose_actions:
         std::collections::HashMap<crate::msg::RequestId, (usize, i64)>,
     pub editor: Editor,
+    pub(crate) spring_bridge: crate::java_spring::Bridge,
     pub jobs: Jobs,
     pub shutdown_requested: bool,
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
@@ -66,6 +67,7 @@ impl Application {
             pending_editor_choices: std::collections::HashMap::new(),
             pending_choose_actions: std::collections::HashMap::new(),
             editor,
+            spring_bridge: crate::java_spring::Bridge::default(),
             jobs: Jobs::new(),
             shutdown_requested: false,
             large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),

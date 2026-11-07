@@ -1087,6 +1087,340 @@ pub async fn install_java_debug(
     Ok((jar, version, false))
 }
 
+/// Stable release whose VSIX layout and stdio launcher have been verified.
+pub const SPRING_VERSION: &str = "1.62.0";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpringInstall {
+    pub version: String,
+    pub server_jar: String,
+    pub bundles: Vec<String>,
+    pub download_url: String,
+    pub sha256: String,
+}
+
+fn spring_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c))
+        && Path::new(path)
+            .components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+fn spring_payload(
+    manifest: &str,
+    listing: &str,
+    version: &str,
+    url: &str,
+    sha256: &str,
+) -> Result<SpringInstall> {
+    let manifest: serde_json::Value = serde_json::from_str(manifest)?;
+    if manifest["name"] != "vscode-spring-boot" || manifest["version"] != version {
+        bail!("The VSIX is not the requested Spring Boot extension version");
+    }
+    let entries: std::collections::HashSet<_> = listing.lines().collect();
+    let server_jar = listing
+        .lines()
+        .find(|entry| {
+            spring_relative_path(entry)
+                && entry.ends_with(".jar")
+                && (entry.starts_with("extension/language-server/spring-boot-language-server-")
+                    || entry.starts_with("extension/jars/spring-boot-language-server-"))
+        })
+        .context("Spring VSIX has no executable language server jar")?
+        .to_string();
+    let extensions = manifest["contributes"]["javaExtensions"]
+        .as_array()
+        .context("Spring VSIX has no contributes.javaExtensions")?;
+    let mut bundles = Vec::new();
+    for extension in extensions {
+        let relative = extension
+            .as_str()
+            .context("Invalid Spring Java extension path")?
+            .strip_prefix("./")
+            .context("Spring Java extension must be relative to extension/")?;
+        let path = format!("extension/{relative}");
+        if !spring_relative_path(&path)
+            || !path.starts_with("extension/jars/")
+            || !entries.contains(path.as_str())
+        {
+            bail!("Invalid or missing Spring JDT bundle: {path}");
+        }
+        if !bundles.contains(&path) {
+            bundles.push(path);
+        }
+    }
+    if !bundles
+        .iter()
+        .any(|path| path.ends_with("/jdt-ls-extension.jar"))
+    {
+        bail!("Spring VSIX does not contain the required JDT LS extension");
+    }
+    Ok(SpringInstall {
+        version: version.into(),
+        server_jar,
+        bundles,
+        download_url: url.into(),
+        sha256: sha256.into(),
+    })
+}
+
+fn spring_launcher(server_jar: &str) -> String {
+    if cfg!(windows) {
+        format!("@echo off\r\nset \"JAVA_CMD=java\"\r\nif defined JAVA_HOME set \"JAVA_CMD=%JAVA_HOME%\\bin\\java.exe\"\r\nif defined LSP_PROXY_SPRING_JAVA set \"JAVA_CMD=%LSP_PROXY_SPRING_JAVA%\"\r\n\"%JAVA_CMD%\" -Dsts.lsp.client=vscode -Dspring.main.banner-mode=off -jar \"%~dp0..\\{}\" %*\r\n", server_jar.replace('/', "\\"))
+    } else {
+        format!("#!/bin/sh\nroot=\"$(CDPATH= cd \"$(dirname \"$0\")/..\" && pwd)\"\nif [ -n \"${{LSP_PROXY_SPRING_JAVA:-}}\" ]; then java_cmd=\"$LSP_PROXY_SPRING_JAVA\"; elif [ -n \"${{JAVA_HOME:-}}\" ]; then java_cmd=\"$JAVA_HOME/bin/java\"; else java_cmd=java; fi\nexec \"$java_cmd\" -Dsts.lsp.client=vscode -Dspring.main.banner-mode=off -jar \"$root/{server_jar}\" \"$@\"\n")
+    }
+}
+
+pub async fn install_spring(
+    install_dir: &Path,
+    version: Option<&str>,
+    force: bool,
+    progress: ProgressFn,
+) -> Result<(PathBuf, SpringInstall, bool)> {
+    let version = version.unwrap_or(SPRING_VERSION);
+    validate_jdtls_version(version)?;
+    let dest = version_dir(install_dir, version);
+    let launcher_name = if cfg!(windows) {
+        "spring-boot-ls.bat"
+    } else {
+        "spring-boot-ls"
+    };
+    let launcher = dest.join("bin").join(launcher_name);
+    if !force {
+        if let Ok(text) = tokio::fs::read_to_string(dest.join("spring-install.json")).await {
+            if let Ok(info) = serde_json::from_str::<SpringInstall>(&text) {
+                if info.version == version
+                    && launcher.is_file()
+                    && spring_relative_path(&info.server_jar)
+                    && dest.join(&info.server_jar).is_file()
+                    && !info.bundles.is_empty()
+                    && info
+                        .bundles
+                        .iter()
+                        .all(|path| spring_relative_path(path) && dest.join(path).is_file())
+                {
+                    return Ok((launcher, info, true));
+                }
+            }
+        }
+    }
+    require_tool("Spring Boot LS", "curl")?;
+    require_tool("Spring Boot LS", "unzip")?;
+    progress(None, format!("Looking up Spring Boot Tools {version}"));
+    let base = format!("https://open-vsx.org/api/VMware/vscode-spring-boot/{version}");
+    let metadata = run(
+        &["curl".into(), "-fsSL".into(), base.clone()],
+        "Spring extension lookup",
+    )
+    .await?;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata)?;
+    let url = metadata["files"]["download"]
+        .as_str()
+        .context("Spring metadata has no download URL")?;
+    let digest_url = metadata["files"]["sha256"]
+        .as_str()
+        .context("Spring metadata has no SHA-256 URL")?;
+    if !url.starts_with(&format!("{base}/file/"))
+        || !digest_url.starts_with(&format!("{base}/file/"))
+    {
+        bail!("Spring extension URLs are outside the selected Open VSX release");
+    }
+    let digest = run(
+        &["curl".into(), "-fsSL".into(), digest_url.into()],
+        "Spring checksum lookup",
+    )
+    .await?;
+    let sha256 = parse_jdtls_sha256(&digest)?;
+    tokio::fs::create_dir_all(install_dir).await?;
+    let temp = tempfile::tempdir_in(install_dir)?;
+    let vsix = temp.path().join("spring.vsix");
+    download_with_progress("Spring Boot LS", url, &vsix, &progress).await?;
+    verify_checksum(&vsix, &sha256).await?;
+    let path = vsix.to_string_lossy().to_string();
+    let listing = run(
+        &["unzip".into(), "-Z1".into(), path.clone()],
+        "Spring VSIX listing",
+    )
+    .await?;
+    // Check paths before extraction, including files that unzip's globs match.
+    if listing
+        .lines()
+        .filter(|s| s.starts_with("extension/language-server/") || s.starts_with("extension/jars/"))
+        .any(|s| !spring_relative_path(s.trim_end_matches('/')))
+    {
+        bail!("Spring VSIX contains an unsafe payload path");
+    }
+    let manifest = run(
+        &[
+            "unzip".into(),
+            "-p".into(),
+            path.clone(),
+            "extension/package.json".into(),
+        ],
+        "Spring extension manifest",
+    )
+    .await?;
+    let info = spring_payload(&manifest, &listing, version, url, &sha256)?;
+    let payload = temp.path().join("payload");
+    tokio::fs::create_dir_all(payload.join("bin")).await?;
+    progress(
+        Some(PCT_UNPACK),
+        "Extracting Spring language server and JDT bundles".into(),
+    );
+    let mut extract = vec!["unzip".into(), "-q".into(), path, "extension/jars/*".into()];
+    if listing
+        .lines()
+        .any(|s| s.starts_with("extension/language-server/"))
+    {
+        extract.push("extension/language-server/*".into());
+    }
+    extract.extend(["-d".into(), payload.to_string_lossy().to_string()]);
+    run(&extract, "Spring VSIX extraction").await?;
+    let staged_launcher = payload.join("bin").join(launcher_name);
+    tokio::fs::write(&staged_launcher, spring_launcher(&info.server_jar)).await?;
+    set_executable(&staged_launcher).await?;
+    tokio::fs::write(
+        payload.join("spring-install.json"),
+        serde_json::to_vec_pretty(&info)?,
+    )
+    .await?;
+    // Keep a forced reinstall recoverable until the new payload is published.
+    let backup = temp.path().join("previous");
+    let had_previous = dest.exists();
+    if had_previous {
+        tokio::fs::rename(&dest, &backup).await?;
+    }
+    if let Err(err) = tokio::fs::rename(&payload, &dest).await {
+        if had_previous {
+            let _ = tokio::fs::rename(&backup, &dest).await;
+        }
+        return Err(err.into());
+    }
+    progress(Some(100), format!("Spring Boot Tools {version} installed"));
+    Ok((launcher, info, false))
+}
+
+#[cfg(test)]
+mod spring_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "downloads the fixed STS4 release; optional LSP_PROXY_SPRING_TEST_DIR keeps it for smoke tests"]
+    async fn test_spring_release_installs() {
+        let temporary = tempfile::tempdir().unwrap();
+        let dir = std::env::var_os("LSP_PROXY_SPRING_TEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| temporary.path().to_path_buf());
+        let (launcher, info, _) = install_spring(
+            &dir,
+            None,
+            false,
+            Box::new(|_, message| eprintln!("{message}")),
+        )
+        .await
+        .unwrap();
+        assert!(launcher.is_file());
+        assert_eq!(info.bundles.len(), 5);
+        assert!(info
+            .bundles
+            .iter()
+            .all(|path| dir.join(SPRING_VERSION).join(path).is_file()));
+        eprintln!("Spring test launcher: {}", launcher.display());
+    }
+
+    #[test]
+    fn test_spring_manifest_selects_only_jdt_bundles_and_executable() {
+        let manifest = r#"{"name":"vscode-spring-boot","version":"1.62.0",
+            "contributes":{"javaExtensions":["./jars/jdt-ls-extension.jar","./jars/reactor.jar"]}}"#;
+        let listing = "extension/language-server/spring-boot-language-server-1.62.0-exec.jar\nextension/language-server/lib/runtime.jar\nextension/jars/jdt-ls-extension.jar\nextension/jars/reactor.jar\n";
+        let info = spring_payload(manifest, listing, "1.62.0", "url", "hash").unwrap();
+        assert_eq!(
+            info.bundles,
+            vec![
+                "extension/jars/jdt-ls-extension.jar",
+                "extension/jars/reactor.jar"
+            ]
+        );
+        assert!(!info
+            .bundles
+            .contains(&"extension/language-server/lib/runtime.jar".into()));
+        assert!(spring_payload(manifest, listing, "2.0.0", "url", "hash").is_err());
+        assert!(spring_payload(
+            manifest,
+            &listing.replace("extension/jars/reactor.jar\n", ""),
+            "1.62.0",
+            "url",
+            "hash"
+        )
+        .is_err());
+        assert!(spring_payload(
+            &manifest.replace("./jars/reactor.jar", "./jars/../outside.jar"),
+            listing,
+            "1.62.0",
+            "url",
+            "hash"
+        )
+        .is_err());
+        for path in [
+            "../a.jar",
+            "/a.jar",
+            "extension/../../a.jar",
+            "extension/a;$x.jar",
+            "",
+        ] {
+            assert!(!spring_relative_path(path));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spring_install_reuses_only_a_complete_selected_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join(SPRING_VERSION);
+        let jar = "extension/language-server/spring-boot-language-server-exec.jar";
+        tokio::fs::create_dir_all(dest.join("bin")).await.unwrap();
+        tokio::fs::create_dir_all(dest.join("extension/language-server"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(dest.join("extension/jars"))
+            .await
+            .unwrap();
+        tokio::fs::write(dest.join(jar), b"jar").await.unwrap();
+        tokio::fs::write(dest.join("extension/jars/jdt-ls-extension.jar"), b"bundle")
+            .await
+            .unwrap();
+        let name = if cfg!(windows) {
+            "spring-boot-ls.bat"
+        } else {
+            "spring-boot-ls"
+        };
+        tokio::fs::write(dest.join("bin").join(name), spring_launcher(jar))
+            .await
+            .unwrap();
+        let info = SpringInstall {
+            version: SPRING_VERSION.into(),
+            server_jar: jar.into(),
+            bundles: vec!["extension/jars/jdt-ls-extension.jar".into()],
+            download_url: "verified-release".into(),
+            sha256: "digest".into(),
+        };
+        tokio::fs::write(
+            dest.join("spring-install.json"),
+            serde_json::to_vec(&info).unwrap(),
+        )
+        .await
+        .unwrap();
+        let (_, _, reused) = install_spring(dir.path(), None, false, Box::new(|_, _| {}))
+            .await
+            .unwrap();
+        assert!(reused);
+    }
+}
+
 /// Render the launch argument that loads JAR as a java agent.
 ///
 /// TEMPLATE comes from `languages.toml` rather than being built here, so nothing

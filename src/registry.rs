@@ -24,6 +24,13 @@ const INITIALIZATION_FAILED_METHOD: &str = "emacs/serverInitializationFailed";
 
 struct NewClient(Arc<Client>, UnboundedReceiver<(usize, Call)>);
 
+fn ordered_server_features(config: &LanguageConfiguration) -> Vec<&LanguageServerFeatures> {
+    let mut features: Vec<_> = config.language_servers.iter().collect();
+    // The optional STS companion must find its JDT peer before initializing.
+    features.sort_by_key(|features| features.name == "spring-boot");
+    features
+}
+
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 pub enum Error {
@@ -172,6 +179,14 @@ pub struct Registry {
 }
 
 impl Registry {
+    #[cfg(test)]
+    pub(crate) fn insert_test_client(&mut self, client: Arc<Client>) {
+        self.inner
+            .entry(client.name().to_owned())
+            .or_default()
+            .push(client);
+    }
+
     pub fn new(syn_loader: Arc<syntax::Loader>) -> Self {
         Self {
             inner: HashMap::new(),
@@ -206,7 +221,7 @@ impl Registry {
         language_config: &'a LanguageConfiguration,
         doc_path: Option<&'a std::path::PathBuf>,
     ) -> impl Iterator<Item = (LanguageServerName, Result<Arc<Client>>)> + 'a {
-        language_config.language_servers.iter().map(
+        ordered_server_features(language_config).into_iter().map(
             move |feature| {
                 let LanguageServerFeatures {
                       name,
@@ -352,8 +367,34 @@ impl Registry {
         let id = self.counter;
         self.counter += 1;
 
-        let NewClient(client, incoming) =
-            start_client(id, name, ls_config, config, doc_path, features)?;
+        // STS gives classpath registration only ten seconds. JDT's initialize
+        // response precedes Maven/Gradle import, which can take much longer.
+        // Delay STS initialize until JDT reports ServiceReady for this root.
+        let wait_for_java = if name == "spring-boot" {
+            let root = find_lsp_workspace(
+                doc_path.map(|p| p.as_path()),
+                &ls_config.roots,
+                features
+                    .map(|f| &f.support_workspace)
+                    .unwrap_or(&syntax::SupportWorkspace::Bool(false)),
+            );
+            self.iter_clients()
+                .filter(|client| client.name() == "jdtls" && client.root_path == root)
+                .max_by_key(|client| client.id())
+                .cloned()
+        } else {
+            None
+        };
+
+        let NewClient(client, incoming) = start_client(
+            id,
+            name,
+            ls_config,
+            config,
+            doc_path,
+            features,
+            wait_for_java,
+        )?;
         self.incoming.push(UnboundedReceiverStream::new(incoming));
         Ok(client)
     }
@@ -368,9 +409,8 @@ impl Registry {
         old_client_ids: Vec<usize>,
         doc_path: Option<PathBuf>,
     ) -> Result<Vec<Arc<Client>>> {
-        let new_clients = language_config
-            .language_servers
-            .iter()
+        let new_clients = ordered_server_features(language_config)
+            .into_iter()
             .filter_map(|features @ LanguageServerFeatures { name, .. }| {
                 if self.inner.contains_key(name) {
                     let client = match self.start_client(
@@ -433,6 +473,7 @@ fn start_client(
     ls_config: &LanguageServerConfiguration,
     doc_path: Option<&std::path::PathBuf>,
     ls_features: Option<&LanguageServerFeatures>,
+    wait_for_java: Option<Arc<Client>>,
 ) -> Result<NewClient> {
     // jdtls cannot see Lombok-generated members without the agent, and reports every
     // one of them as an undefined method. The server declares how it takes an agent
@@ -468,6 +509,24 @@ fn start_client(
     let _client = client.clone();
     tokio::spawn(async move {
         use futures_util::TryFutureExt;
+        if let Some(jdt) = wait_for_java {
+            let ready = tokio::time::timeout(std::time::Duration::from_secs(120), async {
+                while !jdt
+                    .java_service_ready
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            })
+            .await;
+            if ready.is_err() {
+                let _ = client_tx.send((id, jsonrpc::Notification {
+                    jsonrpc: None, method: INITIALIZATION_FAILED_METHOD.into(),
+                    params: jsonrpc::Params::Array(vec![serde_json::json!("STS initialization timed out waiting for JDT ServiceReady; inspect Java project import")]),
+                }.into()));
+                return;
+            }
+        }
         let value = _client
             .capabilities
             .get_or_try_init(|| {
@@ -571,5 +630,28 @@ mod tests {
 
         let untouched = with_java_debug_bundles(None, "intellij", &["/debug.jar".into()]);
         assert!(untouched.is_none());
+    }
+
+    #[test]
+    fn test_spring_bundles_preserve_user_debug_and_settings() {
+        let config = with_java_debug_bundles(
+            Some(json!({
+                "bundles": ["/user.jar", "/debug.jar"],
+                "settings": {"java": {"home": "/jdk8"}}
+            })),
+            "jdtls",
+            &["/debug.jar".into(), "/sts.jar".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            config["bundles"],
+            json!(["/user.jar", "/debug.jar", "/sts.jar"])
+        );
+        assert_eq!(config["settings"]["java"]["home"], "/jdk8");
+        let original = json!({"bundles": ["/user.jar"]});
+        assert_eq!(
+            with_java_debug_bundles(Some(original.clone()), "spring-boot", &["/sts.jar".into()]),
+            Some(original)
+        );
     }
 }

@@ -35,12 +35,18 @@ pub enum MethodCall {
     /// `workspace/codeLens/refresh`. Carries no parameters: it means "everything you
     /// were told about code lenses may now be stale", not "this file changed".
     CodeLensRefresh,
+    AddClasspathListener(crate::java_spring::ClasspathListenerParams),
+    RemoveClasspathListener(crate::java_spring::ClasspathListenerParams),
+    ExecuteClientCommand(lsp_types::ExecuteCommandParams),
 }
 
 impl MethodCall {
     pub fn parse(method: &str, params: jsonrpc::Params) -> Result<MethodCall> {
         use lsp_types::request::Request;
         let request = match method {
+            "sts/addClasspathListener" => Self::AddClasspathListener(params.parse()?),
+            "sts/removeClasspathListener" => Self::RemoveClasspathListener(params.parse()?),
+            "workspace/executeClientCommand" => Self::ExecuteClientCommand(params.parse()?),
             lsp_types::request::WorkspaceConfiguration::METHOD => {
                 let params: lsp_types::ConfigurationParams = params.parse()?;
                 Self::WorkspaceConfiguration(params)

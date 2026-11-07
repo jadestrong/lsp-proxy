@@ -55,6 +55,37 @@ pub struct RegisteredCapability {
     pub register_options: Option<lsp_types::TextDocumentRegistrationOptions>,
 }
 
+fn definition_selector_matches(
+    capability: &RegisteredCapability,
+    uri: &lsp::Url,
+    language_id: Option<&str>,
+) -> bool {
+    let selector = capability
+        .register_options
+        .as_ref()
+        .and_then(|options| options.document_selector.as_ref());
+    let Some(selector) = selector else {
+        return true;
+    };
+    let path = uri
+        .to_file_path()
+        .unwrap_or_else(|_| std::path::PathBuf::from(uri.path()));
+    selector.iter().any(|filter| {
+        filter.language.as_deref().map_or(true, |language| {
+            language == "*" || Some(language) == language_id
+        }) && filter
+            .scheme
+            .as_deref()
+            .map_or(true, |scheme| scheme == "*" || scheme == uri.scheme())
+            && filter.pattern.as_deref().map_or(true, |pattern| {
+                globset::GlobBuilder::new(pattern)
+                    .literal_separator(true)
+                    .build()
+                    .is_ok_and(|glob| glob.compile_matcher().is_match(&path))
+            })
+    })
+}
+
 /// The `textDocument/publishDiagnostics` capabilities we advertise.
 ///
 /// `versionSupport` states whether we *interpret* the `version` field of a
@@ -84,6 +115,9 @@ fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
         apply_edit: Some(true),
         symbol: Some(lsp::WorkspaceSymbolClientCapabilities {
             dynamic_registration: Some(false),
+            resolve_support: Some(lsp::WorkspaceSymbolResolveSupportCapability {
+                properties: vec!["location.range".into()],
+            }),
             ..Default::default()
         }),
         execute_command: Some(lsp::DynamicRegistrationClientCapabilities {
@@ -141,7 +175,9 @@ pub struct Client {
     server_tx: UnboundedSender<Payload>,
     request_counter: AtomicU64,
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
+    pub(crate) java_service_ready: std::sync::atomic::AtomicBool,
     pub(crate) registered_capabilities: Mutex<Vec<RegisteredCapability>>,
+    definition_registration_seen: std::sync::atomic::AtomicBool,
     config: Option<Value>,
     experimental: Option<Value>,
     pub(crate) root_path: std::path::PathBuf,
@@ -347,7 +383,9 @@ impl Client {
             server_tx,
             request_counter: AtomicU64::new(0),
             capabilities: OnceCell::new(),
+            java_service_ready: std::sync::atomic::AtomicBool::new(false),
             registered_capabilities: Mutex::new(Vec::new()),
+            definition_registration_seen: std::sync::atomic::AtomicBool::new(false),
             config,
             experimental,
             root_path,
@@ -431,13 +469,80 @@ impl Client {
     pub fn with_feature(&self, feature: LanguageServerFeature) -> bool {
         self.is_initialized()
             && (self.supports_feature(feature) || self.supports_registered_feature(feature))
-            && (self.features.is_none()
-                || self
-                    .features
-                    .as_ref()
-                    .map(|features| features.has_features(feature))
-                    .unwrap_or(true))
-        // .is_some_and(|features| features.has_features(feature)))
+            && self.allows_feature(feature)
+    }
+
+    fn allows_feature(&self, feature: LanguageServerFeature) -> bool {
+        self.features
+            .as_ref()
+            .map(|features| features.has_features(feature))
+            .unwrap_or(true)
+    }
+
+    pub(crate) fn register_definition(&self, registration: lsp::Registration) -> Result<()> {
+        let options: lsp::TextDocumentRegistrationOptions = match registration.register_options {
+            None | Some(Value::Null) => lsp::TextDocumentRegistrationOptions::default(),
+            Some(options) => serde_json::from_value(options)?,
+        };
+        if let Some(selector) = &options.document_selector {
+            for filter in selector {
+                if let Some(pattern) = &filter.pattern {
+                    globset::GlobBuilder::new(pattern)
+                        .literal_separator(true)
+                        .build()
+                        .map_err(|err| {
+                            Error::Other(anyhow::anyhow!(
+                                "Invalid definition documentSelector pattern: {err}"
+                            ))
+                        })?;
+                }
+            }
+        }
+        let mut registrations = self.registered_capabilities.lock();
+        registrations.retain(|cap| cap.id != registration.id || cap.method != registration.method);
+        registrations.push(RegisteredCapability {
+            id: registration.id,
+            method: registration.method,
+            register_options: Some(options),
+        });
+        self.definition_registration_seen
+            .store(true, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub(crate) fn unregister_definition(&self, id: &str) {
+        self.registered_capabilities
+            .lock()
+            .retain(|cap| cap.method != lsp::request::GotoDefinition::METHOD || cap.id != id);
+        // Even after the last registration is removed, do not fall back to
+        // calling this server as if it had never advertised dynamic support.
+        self.definition_registration_seen
+            .store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn with_feature_for_document(
+        &self,
+        feature: LanguageServerFeature,
+        uri: &lsp::Url,
+        language_id: Option<&str>,
+    ) -> bool {
+        if feature != LanguageServerFeature::GotoDefinition {
+            return self.with_feature(feature);
+        }
+        self.is_initialized()
+            && self.allows_feature(feature)
+            && (self.supports_feature(feature)
+                || self.registered_capabilities.lock().iter().any(|cap| {
+                    cap.method == lsp::request::GotoDefinition::METHOD
+                        && definition_selector_matches(cap, uri, language_id)
+                }))
+    }
+
+    pub(crate) fn allows_unadvertised_navigation(&self, feature: LanguageServerFeature) -> bool {
+        self.is_initialized()
+            && self.allows_feature(feature)
+            && (feature != LanguageServerFeature::GotoDefinition
+                || !self.definition_registration_seen.load(Ordering::Relaxed))
     }
 
     #[inline]
@@ -535,13 +640,20 @@ impl Client {
     pub fn supports_registered_feature(&self, feature: LanguageServerFeature) -> bool {
         let registered_capabilities = self.registered_capabilities.lock();
         let method = match feature {
+            LanguageServerFeature::GotoDefinition => lsp_types::request::GotoDefinition::METHOD,
             LanguageServerFeature::Format => lsp_types::request::Formatting::METHOD,
             LanguageServerFeature::CodeLens => lsp_types::request::CodeLensRequest::METHOD,
             _ => return false,
         };
-        registered_capabilities
-            .iter()
-            .any(|cap| cap.method == method)
+        registered_capabilities.iter().any(|cap| {
+            cap.method == method
+                && (feature != LanguageServerFeature::GotoDefinition
+                    || cap
+                        .register_options
+                        .as_ref()
+                        .and_then(|options| options.document_selector.as_ref())
+                        .is_none_or(|selector| !selector.is_empty()))
+        })
     }
 
     pub(crate) async fn request<R: lsp::request::Request>(
@@ -630,7 +742,7 @@ impl Client {
             match result {
                 Ok(Some(res)) => {
                     cancel_on_drop.abort();
-                    Ok(res.map_err(|e| Error::Other(e.into()))?)
+                    res
                 }
                 Ok(None) => Err(Error::StreamClosed),
                 Err(_) => Err(Error::Timeout(format!("{}({})", "call_method", req_id))),
@@ -683,7 +795,7 @@ impl Client {
             match result {
                 Ok(Some(res)) => {
                     cancel_on_drop.abort();
-                    Ok(res.map_err(|e| Error::Other(e.into()))?)
+                    res
                 }
                 Ok(None) => Err(Error::StreamClosed),
                 Err(_) => Err(Error::Timeout(format!("{}({})", R::METHOD, req_id))),
@@ -1115,6 +1227,152 @@ impl Client {
             },
             None => "none".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod definition_registration_tests {
+    use super::*;
+
+    fn registration(id: &str, options: Option<Value>) -> lsp::Registration {
+        lsp::Registration {
+            id: id.into(),
+            method: lsp::request::GotoDefinition::METHOD.into(),
+            register_options: options,
+        }
+    }
+
+    fn matches(client: &Client, uri: &str, language: Option<&str>) -> bool {
+        client.with_feature_for_document(
+            LanguageServerFeature::GotoDefinition,
+            &uri.parse().unwrap(),
+            language,
+        )
+    }
+
+    #[tokio::test]
+    async fn absent_null_and_empty_options_apply_to_server_documents() {
+        for options in [
+            None,
+            Some(Value::Null),
+            Some(json!({"documentSelector":null})),
+            Some(json!({})),
+        ] {
+            let (client, _) = crate::test_support::client("jdtls", 1, "file:///one", false).await;
+            client
+                .register_definition(registration("definition", options))
+                .unwrap();
+            assert!(!matches(&client, "file:///one/App.java", Some("java")));
+            crate::test_support::initialize(&client);
+            assert!(matches(&client, "file:///one/App.java", Some("java")));
+            assert!(client.with_feature(LanguageServerFeature::GotoDefinition));
+            client.unregister_definition("definition");
+            assert!(!matches(&client, "file:///one/App.java", Some("java")));
+            assert!(!client.allows_unadvertised_navigation(LanguageServerFeature::GotoDefinition));
+        }
+    }
+
+    #[tokio::test]
+    async fn selector_filters_language_scheme_pattern_and_empty_list() {
+        let (client, _) = crate::test_support::client("jdtls", 1, "file:///one", true).await;
+        client
+            .register_definition(registration(
+                "definition",
+                Some(json!({"documentSelector":[
+                    {"language":"java", "scheme":"file", "pattern":"**/src/*.{java,jav}"},
+                    {"language":"*", "scheme":"untitled"}
+                ]})),
+            ))
+            .unwrap();
+        assert!(matches(
+            &client,
+            "file:///one/src/My%20App.java",
+            Some("java")
+        ));
+        assert!(!matches(
+            &client,
+            "file:///one/src/App.java",
+            Some("kotlin")
+        ));
+        assert!(!matches(&client, "file:///one/src/App.java", None));
+        assert!(!matches(&client, "file:///one/test/App.java", Some("java")));
+        assert!(!matches(
+            &client,
+            "file:///one/src/deep/App.java",
+            Some("java")
+        ));
+        assert!(!matches(&client, "jdt:///one/src/App.java", Some("java")));
+        assert!(matches(&client, "untitled:App", Some("kotlin")));
+        client
+            .register_definition(registration(
+                "definition",
+                Some(json!({"documentSelector":[]})),
+            ))
+            .unwrap();
+        assert!(!matches(&client, "file:///one/src/App.java", Some("java")));
+        assert!(!client.with_feature(LanguageServerFeature::GotoDefinition));
+        assert!(!client.allows_unadvertised_navigation(LanguageServerFeature::GotoDefinition));
+        assert_eq!(client.registered_capabilities.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn registrations_are_scoped_by_id_client_and_user_feature_configuration() {
+        let (mut client, _) = crate::test_support::client("jdtls", 1, "file:///one", true).await;
+        let (other, _) = crate::test_support::client("jdtls", 2, "file:///two", true).await;
+        for target in [&client, &other] {
+            target
+                .register_definition(registration("same-id", None))
+                .unwrap();
+        }
+        client
+            .register_definition(registration("second-id", None))
+            .unwrap();
+        client.unregister_definition("same-id");
+        assert!(matches(&client, "file:///one/App.java", Some("java")));
+        client.unregister_definition("unknown-id");
+        client.unregister_definition("second-id");
+        assert!(!matches(&client, "file:///one/App.java", Some("java")));
+        assert!(matches(&other, "file:///two/App.java", Some("java")));
+        client
+            .register_definition(registration("same-id", None))
+            .unwrap();
+        Arc::get_mut(&mut client).unwrap().features = Some(LanguageServerFeatures {
+            only: [LanguageServerFeature::WorkspaceSymbols]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        assert!(!matches(&client, "file:///one/App.java", Some("java")));
+        assert!(!client.allows_unadvertised_navigation(LanguageServerFeature::GotoDefinition));
+    }
+
+    #[tokio::test]
+    async fn malformed_registration_keeps_existing_registration_and_static_support_survives_unregistration(
+    ) {
+        let (client, _) = crate::test_support::client("jdtls", 1, "file:///one", false).await;
+        client
+            .capabilities
+            .set(lsp::ServerCapabilities {
+                definition_provider: Some(lsp::OneOf::Left(true)),
+                ..Default::default()
+            })
+            .unwrap();
+        client
+            .register_definition(registration("definition", None))
+            .unwrap();
+        for options in [
+            json!({"documentSelector":false}),
+            json!({"documentSelector":[{"pattern":"["}]}),
+        ] {
+            assert!(client
+                .register_definition(registration("definition", Some(options)))
+                .is_err());
+            assert_eq!(client.registered_capabilities.lock().len(), 1);
+            assert!(matches(&client, "file:///one/App.java", Some("java")));
+        }
+        client.unregister_definition("definition");
+        assert!(client.registered_capabilities.lock().is_empty());
+        assert!(matches(&client, "file:///one/App.java", Some("java")));
     }
 }
 

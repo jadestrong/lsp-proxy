@@ -16,6 +16,7 @@ mod fuzzy;
 mod handlers;
 mod java_install;
 mod java_project;
+mod java_spring;
 mod job;
 mod large_file_manager;
 mod logging;
@@ -27,8 +28,11 @@ mod registry;
 mod remote;
 mod req_queue;
 mod syntax;
+#[cfg(test)]
+mod test_support;
 mod thread;
 mod utils;
+mod workspace_symbols;
 
 use anyhow::{Context, Result};
 use args::Args;

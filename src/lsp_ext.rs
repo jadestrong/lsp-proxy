@@ -209,6 +209,33 @@ impl Request for InstallJavaDebug {
     const METHOD: &'static str = "emacs/installJavaDebug";
 }
 
+// emacs/installSpring
+#[derive(Debug)]
+pub enum InstallSpring {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallSpringParams {
+    pub install_dir: String,
+    pub version: Option<String>,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallSpringResult {
+    pub launcher_path: String,
+    pub version: String,
+    pub already_installed: bool,
+}
+
+impl Request for InstallSpring {
+    type Params = InstallSpringParams;
+    type Result = InstallSpringResult;
+    const METHOD: &'static str = "emacs/installSpring";
+}
+
 // emacs/setJavaProjectRuntime
 //
 // Records a per-workspace project JDK override. This is deliberately separate

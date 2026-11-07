@@ -336,8 +336,11 @@ Kotlin on another, so each installed backend contributes its own `bin/'.
 
 PATH is fixed when the process starts, so a server installed afterwards is only
 picked up on the next `lsp-proxy-restart'."
-  (let ((dirs (when (fboundp 'lsp-proxy-java-managed-bin-directories)
-                (lsp-proxy-java-managed-bin-directories))))
+  (let ((dirs (append (when (fboundp 'lsp-proxy-java-managed-bin-directories)
+                        (lsp-proxy-java-managed-bin-directories))
+                      (when (fboundp 'lsp-proxy-java-spring-bin-directory)
+                        (when-let* ((dir (lsp-proxy-java-spring-bin-directory)))
+                          (list dir))))))
     (if (null dirs)
         process-environment
       (cons (concat "PATH="
@@ -372,6 +375,12 @@ picked up on the next `lsp-proxy-restart'."
                                                              (lsp-proxy-java-debug-bundles))))
                                      (list (format "LSP_PROXY_JAVA_DEBUG_BUNDLES=%s"
                                                    (mapconcat #'identity bundles path-separator))))
+                                   (when-let* ((bundles (and (fboundp 'lsp-proxy-java-spring-bundles)
+                                                             (lsp-proxy-java-spring-bundles))))
+                                     (list (format "LSP_PROXY_SPRING_BUNDLES=%s"
+                                                   (mapconcat #'identity bundles path-separator))))
+                                   (when (fboundp 'lsp-proxy-java-spring-environment)
+                                     (lsp-proxy-java-spring-environment))
                                    (lsp-proxy--managed-server-path-environment))))
                               (make-process :name "lsp proxy agent"
                                          :coding 'utf-8-emacs-unix
