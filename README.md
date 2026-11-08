@@ -563,6 +563,7 @@ language-servers = [
 - Open `*lsp-proxy-events*` buffer
 ### Lsp server message
 - Open `*lsp-proxy-log*`
+- To also display Error-level `window/logMessage` notifications in the echo area and `*Messages*`, set `(setq lsp-proxy-show-error-log-messages t)`. This takes effect immediately and does not require a server restart.
 
 ## Commands
 
@@ -607,6 +608,7 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 | `lsp-proxy-log-max` | `0` | Max size (lines/events) of internal events buffer; `0` disables; `nil` infinite. Enable only while debugging. |
 | `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
 | `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
+| `lsp-proxy-show-error-log-messages` | `nil` | Also displays Error-level `window/logMessage` notifications using `message`. Other levels stay in the log buffer. Works even when log buffer recording is disabled. |
 
 ### Change / Idle Handling
 | Variable | Default | Description |

@@ -44,6 +44,14 @@ Enabling event logging may slightly affect performance."
   :group 'lsp-proxy
   :type 'integer)
 
+(defcustom lsp-proxy-show-error-log-messages nil
+  "Whether to display Error-level `window/logMessage' notifications.
+When non-nil, display them in the echo area using `message', in addition
+to the normal log buffer.  Other log levels remain in the log buffer.
+This option works even when `lsp-proxy-log-buffer-max' disables logging."
+  :group 'lsp-proxy
+  :type 'boolean)
+
 (defcustom lsp-proxy--send-changes-idle-time 0
   "Don't tell server of changes before Emacs's been idle for this many seconds."
   :group 'lsp-proxy
@@ -429,7 +437,9 @@ picked up on the next `lsp-proxy-restart'."
     (lsp-proxy-diagnostics--handle-publish-diagnostics msg))
   (when  (eql method 'window/logMessage)
     (lsp-proxy--dbind (:type type :message message) msg
-      (lsp-proxy-log "%s" (lsp-proxy--propertize message type))))
+      (lsp-proxy-log "%s" (lsp-proxy--propertize message type))
+      (when (and lsp-proxy-show-error-log-messages (eql type 1))
+        (lsp-proxy--error "%s" message))))
   (when  (eql method 'window/showMessage)
     (lsp-proxy--dbind (:type type :message message) msg
       (lsp-proxy--info "%s" (lsp-proxy--propertize message type))))
