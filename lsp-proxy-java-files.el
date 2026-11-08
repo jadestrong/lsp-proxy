@@ -74,6 +74,23 @@ With CANCEL-PENDING, also ignore outstanding queries and completion timers."
     (dolist (candidate expired) (remhash candidate lsp-proxy-java-files--cache))
     (cdr (gethash key lsp-proxy-java-files--cache))))
 
+(defun lsp-proxy-java-files--visit (choice root origin origin-position)
+  "Visit CHOICE under ROOT and save ORIGIN-POSITION in ORIGIN for xref."
+  (unless (buffer-live-p origin)
+    (user-error "The source buffer was closed; start a new production file search"))
+  (let ((target (expand-file-name choice root)))
+    (if (not (file-exists-p target))
+        (progn
+          (lsp-proxy-java-clear-file-cache)
+          (lsp-proxy--info "File no longer exists; run the search again to refresh candidates"))
+      (with-current-buffer origin
+        (save-excursion
+          (save-restriction
+            (widen)
+            (when (marker-position origin-position) (goto-char origin-position))
+            (xref-push-marker-stack))))
+      (find-file target))))
+
 (defun lsp-proxy-java-files--choose (result root origin-position)
   "Select a production file from RESULT under ROOT, saving ORIGIN-POSITION."
   (when (seq-some #'identity (append (plist-get result :fallbackModules) nil))
@@ -81,31 +98,23 @@ With CANCEL-PENDING, also ignore outstanding queries and completion timers."
   (dolist (warning (append (plist-get result :warnings) nil))
     (lsp-proxy--warn "%s" warning))
   (let* ((default-directory root)
+         (origin (current-buffer))
          (files (seq-filter #'stringp (append (plist-get result :files) nil)))
          (candidates (mapcar (lambda (file) (file-relative-name file root)) files))
          ;; Let file-aware completion styles and the user's completion frontend work.
          (table (lambda (string predicate action)
                   (if (eq action 'metadata)
                       '(metadata (category . file))
-                    (complete-with-action action candidates string predicate))))
-         (choice (and candidates
-                      (condition-case nil
-                          (lsp-proxy--completing-read "Find production file: " table)
-                        (quit nil)))))
-    (cond
-     ((null candidates) (lsp-proxy--info "No production files found"))
-     (choice
-      (let ((target (expand-file-name choice root)))
-        (if (not (file-exists-p target))
-            (progn
-              (lsp-proxy-java-clear-file-cache)
-              (lsp-proxy--info "File no longer exists; run the search again to refresh candidates"))
-          (save-excursion
-            (save-restriction
-              (widen)
-              (when (marker-position origin-position) (goto-char origin-position))
-              (xref-push-marker-stack)))
-          (find-file target)))))))
+                    (complete-with-action action candidates string predicate)))))
+    (if (null candidates)
+        (lsp-proxy--info "No production files found")
+      (condition-case nil
+          (lsp-proxy--completing-read-action
+           "Find production file: " table
+           (lambda (choice)
+             (lsp-proxy-java-files--visit choice root origin origin-position))
+           'lsp-proxy-java-find-production-file)
+        (quit nil)))))
 
 ;;;###autoload
 (defun lsp-proxy-java-find-production-file (&optional refresh)

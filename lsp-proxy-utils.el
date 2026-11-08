@@ -265,6 +265,19 @@ raised by lsp-proxy, not by the last thing the user ran."
   (let ((this-command 'lsp-proxy--completing-read))
     (completing-read prompt choices nil t)))
 
+(defvar lsp-proxy--completion-read-functions nil
+  "Optional completion readers accepting PROMPT, CHOICES, ACTION and CALLER.
+Each reader calls ACTION with the selected candidate and returns non-nil if
+it handled the session.  Nil delegates to the next reader or standard Emacs
+completion.  Adapters can retain ACTION for their session-resume feature.")
+
+(defun lsp-proxy--completing-read-action (prompt choices action caller)
+  "Read from CHOICES with PROMPT, calling ACTION on the selected candidate.
+CALLER identifies the command for optional completion adapters."
+  (unless (run-hook-with-args-until-success
+           'lsp-proxy--completion-read-functions prompt choices action caller)
+    (funcall action (lsp-proxy--completing-read prompt choices))))
+
 ;;; Path utilities
 
 (defun lsp-proxy--fix-path-casing (path)

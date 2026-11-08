@@ -7,6 +7,12 @@ with `lsp-proxy-mode` enabled. Choose a file using your normal Emacs completion
 frontend, and use `M-x xref-go-back` to return. No Projectile or Consult dependency
 is required. Your existing project-wide file command remains useful for all files.
 
+When using Ivy, load the optional `lsp-proxy-ivy` module to enable `ivy-resume` for
+this command. Its adapter retains the file-opening action, candidate list and
+original project/source position. Resuming reuses that list; start a new query
+with `C-u` when you need fresh candidates. Other completion frontends continue
+to use standard Emacs completion.
+
 The project boundary comes from `project-current` / `project-root`, falling back
 to the current server workspace when no project backend is available. The proxy
 queries all relevant running JDTLS instances, lists imported Java projects with

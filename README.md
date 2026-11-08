@@ -89,6 +89,9 @@ The query and directory scan run asynchronously. Unimported modules fall back to
 conventional source directories with a message. See [Java support](docs/java.md)
 for generated-source, resource and cache settings.
 
+With Ivy and the optional `lsp-proxy-ivy` module loaded, `ivy-resume` restores
+the production file selection and its file-opening action.
+
 ## Java Test Navigation
 
 `M-x lsp-proxy-java-go-to-test` finds test classes for the current Java class.

@@ -16,6 +16,18 @@
 (require 'ivy)
 (require 'lsp-proxy-workspace-symbol)
 
+(defun lsp-proxy-ivy--completing-read-action (prompt choices action caller)
+  "Read CHOICES with PROMPT and retain ACTION for CALLER's Ivy session.
+Return nil when Ivy is not the current completion frontend."
+  (when (memq completing-read-function
+              '(ivy-completing-read ivy-completing-read-with-empty-string-def))
+    (ivy-read prompt choices :require-match t :sort nil
+              :action action :caller caller)
+    t))
+
+(add-hook 'lsp-proxy--completion-read-functions
+          #'lsp-proxy-ivy--completing-read-action)
+
 (defgroup lsp-proxy-ivy nil
   "Ivy workspace symbol navigation through lsp-proxy."
   :group 'lsp-proxy)
