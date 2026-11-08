@@ -560,14 +560,15 @@ installing the server is not enough on its own."
 
 (defun lsp-proxy--handle-request (_ method msg)
   "Handle MSG of type METHOD."
-  (when (eql method 'workspace/applyEdit)
+  (cond
+   ((eql method 'workspace/applyEdit)
     (lsp-proxy--dbind (:edit edit) msg
       (lsp-proxy--apply-workspace-edit edit last-command)))
-  (when (eql method 'eslint/openDoc)
+   ((eql method 'eslint/openDoc)
     (lsp-proxy--dbind (:url url) msg
       (browse-url url)))
-  (when (eql method 'window/showMessageRequest)
-    (lsp-proxy--handle-show-message-request msg)))
+   ((eql method 'window/showMessageRequest)
+    (lsp-proxy--handle-show-message-request msg))))
 
 (defun lsp-proxy--handle-show-message-request (msg)
   "Let the user pick one of MSG's actions, per `window/showMessageRequest'.

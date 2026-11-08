@@ -401,6 +401,9 @@ Skip reopening notifications for buffers not currently visible."
   ;; inlay hints
   (remove-overlays nil nil 'lsp-proxy--inlay-hint t)
 
+  (lsp-proxy-codelens-mode -1)
+  (setq-local lsp-proxy--support-code-lens nil)
+
   ;; Send the close event for the active buffer
   (lsp-proxy--on-doc-close)
   (setq-local lsp-proxy--pending-project-activation nil)

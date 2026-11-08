@@ -393,7 +393,12 @@ fn dedupe_valid_homes(homes: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 fn valid_java_home(path: &Path) -> bool {
-    path.is_dir() && path.join("bin/java").is_file() && path.join("bin/javac").is_file()
+    let javac = if cfg!(windows) {
+        "bin/javac.exe"
+    } else {
+        "bin/javac"
+    };
+    path.is_dir() && java_executable(path).is_file() && path.join(javac).is_file()
 }
 
 fn java_home_major(path: &Path) -> Option<String> {
@@ -421,13 +426,35 @@ mod tests {
     fn fake_jdk(root: &Path, version: &str) -> PathBuf {
         let jdk = root.join(format!("jdk-{version}"));
         fs::create_dir_all(jdk.join("bin")).unwrap();
-        write(&jdk.join("bin/java"), "");
-        write(&jdk.join("bin/javac"), "");
+        write(&java_executable(&jdk), "");
+        write(
+            &jdk.join(if cfg!(windows) {
+                "bin/javac.exe"
+            } else {
+                "bin/javac"
+            }),
+            "",
+        );
         write(
             &jdk.join("release"),
             &format!("JAVA_VERSION=\"{version}.0.1\"\n"),
         );
         jdk
+    }
+
+    #[test]
+    fn jdk_validation_uses_native_tools_and_requires_a_compiler() {
+        let tmp = TempDir::new().unwrap();
+        let jdk = fake_jdk(tmp.path(), "21");
+        assert!(valid_java_home(&jdk));
+        let compiler = jdk.join(if cfg!(windows) {
+            "bin/javac.exe"
+        } else {
+            "bin/javac"
+        });
+        fs::remove_file(compiler).unwrap();
+        assert!(!valid_java_home(&jdk));
+        assert!(java_executable(&jdk).is_file());
     }
 
     #[test]

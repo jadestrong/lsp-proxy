@@ -398,20 +398,9 @@ pub fn log_diagnostics_mismatch(
     new: &[Diagnostic],
     max_count: usize,
 ) {
-    use std::collections::HashSet;
-
-    let old_keys: HashSet<String> = old.iter().map(|d| diagnostic_identity_key(d)).collect();
-    let new_keys: HashSet<String> = new.iter().map(|d| diagnostic_identity_key(d)).collect();
-
-    let added: Vec<&Diagnostic> = new
-        .iter()
-        .filter(|d| !old_keys.contains(&diagnostic_identity_key(d)))
-        .collect();
-    let removed: Vec<&Diagnostic> = old
-        .iter()
-        .copied()
-        .filter(|d| !new_keys.contains(&diagnostic_identity_key(d)))
-        .collect();
+    let new_refs: Vec<_> = new.iter().collect();
+    let added = unmatched_diagnostics(&new_refs, old);
+    let removed = unmatched_diagnostics(old, &new_refs);
 
     error!(
         "Diagnostics mismatch for {uri} while over push limit (max {max_count}): old={} new={} (+{} -{}){}{}",
@@ -430,6 +419,33 @@ pub fn log_diagnostics_mismatch(
             format!("; removed: {}", format_diagnostic_samples(&removed, 5))
         },
     );
+}
+
+/// Retain occurrences in LEFT that cannot be matched one-for-one in RIGHT.
+fn unmatched_diagnostics<'a>(
+    left: &[&'a Diagnostic],
+    right: &[&Diagnostic],
+) -> Vec<&'a Diagnostic> {
+    let mut remaining = std::collections::HashMap::<String, usize>::new();
+    for diagnostic in right {
+        *remaining
+            .entry(diagnostic_identity_key(diagnostic))
+            .or_default() += 1;
+    }
+    left.iter()
+        .copied()
+        .filter(|diagnostic| {
+            let count = remaining
+                .entry(diagnostic_identity_key(diagnostic))
+                .or_default();
+            if *count == 0 {
+                true
+            } else {
+                *count -= 1;
+                false
+            }
+        })
+        .collect()
 }
 
 pub fn truncate_completion_item(mut item: lsp_types::CompletionItem) -> lsp_types::CompletionItem {
@@ -1059,6 +1075,38 @@ mod test {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].get("name").unwrap().as_str(), Some("a"));
         assert_eq!(items[0].get("value").unwrap().as_integer(), Some(99));
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_mismatch_tests {
+    use super::*;
+    use lsp_types::{Position, Range};
+
+    fn diagnostic(message: &str) -> Diagnostic {
+        Diagnostic::new_simple(
+            Range::new(Position::new(1, 0), Position::new(1, 1)),
+            message.into(),
+        )
+    }
+
+    #[test]
+    fn mismatch_samples_preserve_duplicate_additions_and_removals() {
+        let a = diagnostic("A");
+        let b = diagnostic("B");
+        let old = [&a, &a, &b];
+        let new = [&a, &b, &b];
+        assert_eq!(unmatched_diagnostics(&new, &old), vec![&b]);
+        assert_eq!(unmatched_diagnostics(&old, &new), vec![&a]);
+    }
+
+    #[test]
+    fn mismatch_samples_ignore_order_and_keep_all_unmatched_occurrences() {
+        let a = diagnostic("A");
+        let b = diagnostic("B");
+        assert!(unmatched_diagnostics(&[&a, &b, &a], &[&b, &a, &a]).is_empty());
+        assert_eq!(unmatched_diagnostics(&[&a, &a, &b], &[&b]), vec![&a, &a]);
+        assert_eq!(unmatched_diagnostics(&[&a, &b], &[]), vec![&a, &b]);
     }
 }
 

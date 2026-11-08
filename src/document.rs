@@ -687,6 +687,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolves_plain_file_uris() {
         assert_eq!(
@@ -695,11 +696,25 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn resolves_percent_encoded_file_uris() {
         assert_eq!(
             path_of("file:///tmp/a%20b/Main.java"),
             Some(PathBuf::from("/tmp/a b/Main.java"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_windows_file_uris_and_percent_encoded_paths() {
+        assert_eq!(
+            path_of("file:///C:/proj/src/Main.java"),
+            Some(PathBuf::from(r"C:\proj\src\Main.java"))
+        );
+        assert_eq!(
+            path_of("file:///C:/a%20b/Main.java"),
+            Some(PathBuf::from(r"C:\a b\Main.java"))
         );
     }
 
@@ -726,6 +741,7 @@ mod tests {
         // walking it upwards reaches real directories, which is how a decompiled
         // JDK source ended up resolving to whatever repository happens to contain
         // the JDK.
+        #[cfg(unix)]
         assert_eq!(
             Url::parse(uri).unwrap().to_file_path().ok(),
             Some(PathBuf::from(
@@ -746,6 +762,7 @@ mod tests {
 
     /// Remote documents are still plain `file:` URIs (the TRAMP prefix lives
     /// inside the path), so they must keep resolving.
+    #[cfg(unix)]
     #[test]
     fn tramp_style_remote_file_uri_still_resolves() {
         assert_eq!(

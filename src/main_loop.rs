@@ -841,6 +841,17 @@ impl Application {
     async fn handle_msg(&mut self, msg: Message) -> Result<()> {
         match msg {
             Message::Request(req)
+                if self.shutdown_requested
+                    && req.method != lsp_types::request::Shutdown::METHOD =>
+            {
+                log::warn!("Rejecting request '{}' after shutdown", req.method);
+                self.respond(Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InvalidRequest,
+                    "Server is shutting down".to_string(),
+                ));
+            }
+            Message::Request(req)
                 if req.method == lsp_types::request::CodeActionRequest::METHOD =>
             {
                 match self.get_working_document(&req) {
@@ -1032,17 +1043,6 @@ impl Application {
                 self.handle_set_java_project_runtime(req);
             }
             Message::Request(req) => {
-                // After shutdown, reject any requests.
-                if self.shutdown_requested {
-                    log::warn!("Rejecting request '{}' after shutdown", req.method);
-                    self.respond(Response::new_err(
-                        req.id,
-                        jsonrpc::ErrorCode::InvalidRequest,
-                        "Server is shutting down".to_string(),
-                    ));
-                    return Ok(());
-                }
-
                 match self.get_working_document(&req) {
                     Ok(doc) => {
                         if doc.is_org_file() {
@@ -1313,7 +1313,20 @@ impl Application {
         let version = params.version.clone();
         let force = params.force;
 
+        let install_guard = match crate::java_install::ServerInstallGuard::acquire(&install_dir) {
+            Ok(guard) => guard,
+            Err(err) => {
+                self.respond(Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InvalidRequest,
+                    err.to_string(),
+                ));
+                return;
+            }
+        };
+
         tokio::spawn(async move {
+            let _install_guard = install_guard;
             let progress = Self::install_progress_reporter(sender.clone(), backend.tag());
             let outcome = crate::java_install::install(
                 backend,
@@ -1994,6 +2007,80 @@ mod org_diagnostic_tests {
     #[test]
     fn keeps_diagnostics_from_server_registered_for_both_document_types() {
         assert!(!should_discard_org_virtual_diagnostics(2, [1, 2], [2, 3]));
+    }
+}
+
+#[cfg(test)]
+mod install_lifecycle_tests {
+    use super::*;
+
+    fn application() -> (Application, crossbeam_channel::Receiver<Message>) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let app = Application::new(
+            sender,
+            syntax::Configuration {
+                language: vec![],
+                language_server: Default::default(),
+            },
+        );
+        (app, receiver)
+    }
+
+    #[tokio::test]
+    async fn shutdown_rejects_install_and_other_special_requests_before_dispatch() {
+        let (mut app, receiver) = application();
+        app.shutdown_requested = true;
+        for method in [
+            lsp_ext::InstallJavaServer::METHOD,
+            lsp_ext::InstallLombok::METHOD,
+            lsp_ext::InstallJavaDebug::METHOD,
+            lsp_ext::InstallSpring::METHOD,
+            lsp_ext::ListWorkspaces::METHOD,
+            lsp_types::request::CodeActionRequest::METHOD,
+        ] {
+            let request = crate::test_support::request(method, None);
+            let id = request.id.clone();
+            app.handle_msg(Message::Request(request)).await.unwrap();
+            let Message::Response(response) = receiver.try_recv().unwrap() else {
+                panic!("expected rejection")
+            };
+            assert_eq!(response.id, id);
+            let error = response.error.unwrap();
+            assert_eq!(error.code, jsonrpc::ErrorCode::InvalidRequest);
+            assert_eq!(error.message, "Server is shutting down");
+        }
+        app.handle_msg(Message::Request(crate::test_support::request(
+            lsp_types::request::Shutdown::METHOD,
+            None,
+        )))
+        .await
+        .unwrap();
+        let Message::Response(response) = receiver.try_recv().unwrap() else {
+            panic!("expected shutdown reply")
+        };
+        assert!(response.error.is_none());
+        assert_eq!(response.result, Some(Value::Null));
+    }
+
+    #[tokio::test]
+    async fn duplicate_install_is_rejected_without_progress_or_network_work() {
+        let (mut app, receiver) = application();
+        let directory = tempfile::tempdir().unwrap();
+        let guard = crate::java_install::ServerInstallGuard::acquire(directory.path()).unwrap();
+        let mut request = crate::test_support::request(lsp_ext::InstallJavaServer::METHOD, None);
+        request.params.params = json!({
+            "backend": "jdtls", "installDir": directory.path(), "version": "1.61.0", "force": false,
+        });
+        app.handle_msg(Message::Request(request)).await.unwrap();
+        let Message::Response(response) = receiver.try_recv().unwrap() else {
+            panic!("expected rejection")
+        };
+        let error = response.error.unwrap();
+        assert_eq!(error.code, jsonrpc::ErrorCode::InvalidRequest);
+        assert!(error.message.contains("already in progress"));
+        assert!(receiver.try_recv().is_err());
+        drop(guard);
+        assert!(crate::java_install::ServerInstallGuard::acquire(directory.path()).is_ok());
     }
 }
 

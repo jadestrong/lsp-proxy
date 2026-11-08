@@ -856,7 +856,7 @@ pub(crate) async fn handle_execute_command(
             ls.capabilities()
                 .execute_command_provider
                 .as_ref()
-                .is_some_and(|options| options.commands.iter().any(|c| *c == params.command))
+                .is_some_and(|options| options.commands.contains(&params.command))
         });
         match target {
             Some(ls) => call_single_language_server::<lsp_types::request::ExecuteCommand>(

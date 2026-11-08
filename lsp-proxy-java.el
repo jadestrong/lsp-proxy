@@ -247,9 +247,8 @@ already work because these names are ordinary absolute paths."
     ;; every identification (as an earlier revision did) feeds nonsense to
     ;; callers that ask for 'host or 'method.
     ;;
-    ;; This is safe here only because `default-directory' in these buffers is a
-    ;; real local directory, so nothing tries to launch a process "on the remote
-    ;; host"; the process-related operations below are handled explicitly anyway.
+    ;; Process-related operations below map the virtual directory to a real
+    ;; local directory, so nothing launches a process "on the remote host".
     ('file-remote-p
      (when-let* ((split (lsp-proxy--decompiled-name-split (car args))))
        (pcase (cadr args)
@@ -538,19 +537,7 @@ The proxy owns the detection rules so run/debug launch code stays aligned
 with the JDK sent during Java backend initialization.  URI, when non-nil,
 selects the document context explicitly instead of relying on the current
 buffer."
-  (when (bound-and-true-p lsp-proxy-mode)
-    (condition-case nil
-        (let* ((params (lsp-proxy--build-params nil))
-               (params (if uri
-                           (plist-put params :textDocument (list :uri uri))
-                         params))
-               (_ (lsp-proxy--ensure-connection))
-               (result (jsonrpc-request
-                        lsp-proxy--connection 'emacs/getJavaProjectRuntime
-                        params)))
-          (plist-get result :javaExec))
-      (jsonrpc-error nil)
-      (user-error nil))))
+  (plist-get (lsp-proxy-java--project-runtime uri) :javaExec))
 
 ;;; Build, run and test
 
@@ -873,7 +860,7 @@ With prefix argument FORCE, reinstall an unchanged release."
     (condition-case nil
         (let* ((params (lsp-proxy--build-params nil))
                (params (if uri
-                           (plist-put params :textDocument (list :uri uri))
+                           (plist-put params :uri uri)
                          params))
                (_ (lsp-proxy--ensure-connection)))
           (jsonrpc-request lsp-proxy--connection 'emacs/getJavaProjectRuntime params))

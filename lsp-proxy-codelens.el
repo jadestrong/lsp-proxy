@@ -39,6 +39,7 @@
 ;;; External variables from lsp-proxy-core.el
 (defvar lsp-proxy--support-code-lens)
 (defvar lsp-proxy-mode)
+(defvar vertico-sort-function)
 
 ;;; External functions
 (declare-function lsp-proxy--execute-command "lsp-proxy")
@@ -66,12 +67,12 @@ Example: `(`java-mode' `java-ts-mode')'"
   :type 'float
   :group 'lsp-proxy)
 
-(defcustom lsp-proxy-codelens-place-position 'avove-of-line
+(defcustom lsp-proxy-codelens-place-position 'above-line
   "The position to place a CodeLens relative to its LSP range.
 `end-of-line' appends the lens to the end of its code line (via an
-`after-string'), the style VS Code/eglot use by default.  `above-line'
-instead puts the lens on its own line directly above the code, aligned
-to that code's indentation (via a `before-string'), the style jdtls/VS
+`after-string').  The default, `above-line', puts the lens on its own
+line directly above the code, aligned to that code's indentation
+\(via a `before-string'), the style jdtls/VS
 Code's reference CodeLens UI traditionally used."
   :type '(choice (const above-line)
                  (const end-of-line))
@@ -126,6 +127,9 @@ re-rendered, even when every remaining lens is already resolved.")
 
 (defvar-local lsp-proxy-codelens--refresh-timer nil
   "Debounce timer for `lsp-proxy-codelens-refresh'.")
+
+(defvar-local lsp-proxy-codelens--refresh-modified nil
+  "Non-nil when the pending refresh must re-fetch the CodeLens list.")
 
 (defvar-local lsp-proxy-codelens--backend-cache nil
   "Cache of the raw CodeLens items from the last `textDocument/codeLens'.
@@ -198,7 +202,7 @@ Default method returns CODELENS unchanged."
   "Resolve ITEMS still missing a `:command' that are inside the window.
 CALLBACK is invoked with ITEMS and DOCVER once every item in ITEMS is
 either resolved or out of the window again."
-  (let ((buf (current-buffer)))
+  (let ((source-buffer (current-buffer)))
     (dolist (item (seq-filter #'lsp-proxy-codelens--not-loaded-p items))
       (plist-put item :_pending t)
       (lsp-proxy--async-request
@@ -207,26 +211,28 @@ either resolved or out of the window again."
         (lsp-proxy-codelens--item-lsp item)
         `(:context (:language-server-id ,(lsp-proxy-codelens--item-ls-id item))))
        :success-fn (lambda (resolved)
-                     (when (buffer-live-p buf)
-                       (with-current-buffer buf
+                     (when (buffer-live-p source-buffer)
+                       (with-current-buffer source-buffer
                          (plist-put item :_pending nil)
-                         (plist-put (lsp-proxy-codelens--item-lsp item) :command
-                                    (lsp-proxy-codelens--item-command resolved))
-                         (when (seq-every-p #'lsp-proxy-codelens--present-p items)
-                           (funcall callback items docver)))))
+                         (when (and lsp-proxy-codelens-mode
+                                    (eq docver (lsp-proxy--doc-version)))
+                           (plist-put (lsp-proxy-codelens--item-lsp item) :command
+                                      (lsp-proxy-codelens--item-command resolved))
+                           (when (seq-every-p #'lsp-proxy-codelens--present-p items)
+                             (funcall callback items docver))))))
        ;; Degrade quietly. The default handlers report to the user, which is wrong
        ;; twice over here: a resolve routinely fails while a server is still
        ;; starting up, and one lens failing is not something to interrupt anyone
        ;; about. An unresolved lens already renders as nothing, so failing is
        ;; simply the lens not appearing.
        :error-fn (lambda (err)
-                   (when (buffer-live-p buf)
-                     (with-current-buffer buf (plist-put item :_pending nil)))
+                   (when (buffer-live-p source-buffer)
+                     (with-current-buffer source-buffer (plist-put item :_pending nil)))
                    (lsp-proxy-log "codeLens/resolve failed: %s"
                                   (or (plist-get err :message) err)))
        :timeout-fn (lambda (method)
-                     (when (buffer-live-p buf)
-                       (with-current-buffer buf (plist-put item :_pending nil)))
+                     (when (buffer-live-p source-buffer)
+                       (with-current-buffer source-buffer (plist-put item :_pending nil)))
                      (lsp-proxy-log "%s timed out" method))))))
 
 (defun lsp-proxy-codelens--backend (modified-p callback)
@@ -237,15 +243,15 @@ which case the CodeLens list itself is re-fetched; otherwise the existing
 unresolved items (e.g. after scrolling)."
   (if modified-p
       (let ((docver (lsp-proxy--doc-version))
-            (buf (current-buffer)))
+            (source-buffer (current-buffer)))
         (setq lsp-proxy-codelens--backend-cache nil)
         (lsp-proxy--async-request
          'textDocument/codeLens
          (lsp-proxy--build-params (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
          :success-fn
          (lambda (codelens-list)
-           (when (buffer-live-p buf)
-             (with-current-buffer buf
+           (when (buffer-live-p source-buffer)
+             (with-current-buffer source-buffer
                (when (and lsp-proxy-codelens-mode
                           (eq docver (lsp-proxy--doc-version)))
                  (let ((uri (plist-get (lsp-proxy--TextDocumentIdentifier) :uri)))
@@ -396,17 +402,21 @@ idle tick) is what triggered this refresh."
 
 (defun lsp-proxy-codelens--schedule-refresh (&optional modified-p)
   "Debounce a call to `lsp-proxy-codelens-refresh' with MODIFIED-P."
+  (when modified-p
+    (setq lsp-proxy-codelens--refresh-modified t))
   (when lsp-proxy-codelens--refresh-timer
     (cancel-timer lsp-proxy-codelens--refresh-timer))
   (setq lsp-proxy-codelens--refresh-timer
         (run-with-timer
          lsp-proxy-codelens-debounce-interval nil
-         (lambda (buf modified-p)
+         (lambda (buf)
            (when (buffer-live-p buf)
              (with-current-buffer buf
-               (setq lsp-proxy-codelens--refresh-timer nil)
-               (lsp-proxy-codelens-refresh modified-p))))
-         (current-buffer) modified-p)))
+               (let ((modified lsp-proxy-codelens--refresh-modified))
+                 (setq lsp-proxy-codelens--refresh-timer nil
+                       lsp-proxy-codelens--refresh-modified nil)
+                 (lsp-proxy-codelens-refresh modified)))))
+         (current-buffer))))
 
 (defun lsp-proxy-codelens--on-document-change (&rest _args)
   "Handle document modification by scheduling a debounced CodeLens refresh."
@@ -467,8 +477,14 @@ If ITEM is not yet resolved, trigger the resolve process instead."
      ;; resolveProvider flag, so this just attempts the resolve request and
      ;; lets it fail loudly if the server doesn't actually support it.
      (lsp-proxy-codelens-mode
-      (lsp-proxy-codelens--fetch-missing (list item) #'lsp-proxy-codelens--display
-                                         (lsp-proxy--doc-version))
+      (let ((buf (current-buffer)))
+        (lsp-proxy-codelens--fetch-missing
+         (list item)
+         (lambda (_items docver)
+           (when (buffer-live-p buf)
+             (with-current-buffer buf
+               (lsp-proxy-codelens--display lsp-proxy-codelens--backend-cache docver))))
+         (lsp-proxy--doc-version)))
       (message "Resolving CodeLens command..."))
      (t
       (message "CodeLens command not available")))))
@@ -559,6 +575,7 @@ If no CodeLens is found, show a message."
   (lsp-proxy-codelens--hide)
 
   (setq lsp-proxy-codelens--backend-cache nil
+        lsp-proxy-codelens--refresh-modified nil
         lsp-proxy-codelens--last-count nil)
 
   (remove-hook 'after-change-functions #'lsp-proxy-codelens--on-document-change t)

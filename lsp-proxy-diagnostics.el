@@ -501,9 +501,9 @@ If OTHER-WINDOW is non nil, show diagnosis in a new window."
 
 (defun lsp-proxy--diagnostics-setup ()
   "Setup diagnostics."
-  ;; Skip enabling a renderer at all rather than enabling one and filtering
-  ;; later: flycheck validates `default-directory' with `file-exists-p' when a
-  ;; check starts, and these buffers have a virtual one.
+  ;; Suppress the renderer unless library-source diagnostics were opted into.
+  ;; The virtual file handler reports registered ancestor directories as
+  ;; existing, so Flycheck can validate `default-directory' when opted in.
   (unless (lsp-proxy-diagnostics--suppressed-p)
     (cond
      ((or (and (eq lsp-proxy-diagnostics-provider :auto)

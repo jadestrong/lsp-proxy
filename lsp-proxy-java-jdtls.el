@@ -889,7 +889,7 @@ project by the document it is given."
   (interactive)
   (unless buffer-file-name
     (user-error "Not visiting a file"))
-  (unless (string-match-p "\\`\\(?:pom\\.xml\\|build\\.gradle\\(?:\\.kts\\)?\\|settings\\.gradle\\(?:\\.kts\\)?\\|\\.classpath\\|\\.project\\)\'"
+  (unless (string-match-p "\\`\\(?:pom\\.xml\\|build\\.gradle\\(?:\\.kts\\)?\\|settings\\.gradle\\(?:\\.kts\\)?\\|\\.classpath\\|\\.project\\)\\'"
                           (file-name-nondirectory buffer-file-name))
     (user-error "Run this from a build file (pom.xml or a Gradle build script), not %s"
                 (file-name-nondirectory buffer-file-name)))

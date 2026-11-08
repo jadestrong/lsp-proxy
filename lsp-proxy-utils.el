@@ -357,11 +357,12 @@ images, `jdt:' from an Eclipse-style opaque content identifier.")
 
 (defun lsp-proxy--decompiled-escape (uri)
   "Escape URI just enough to be usable as the tail of a virtual file name.
-Only `%', slash runs and `.'/`..' segments are touched; every other character —
-including the URI's own colons and any non-ASCII — is kept verbatim, which is
-what keeps the resulting name readable."
+Only `%', `:', slash runs and `.'/`..' segments are touched.
+Escaping colons prevents Windows drive-letter segments inside the payload from
+changing its interpretation as a file name.  Non-ASCII characters stay readable."
   (let* (;; Escape `%' first so the escapes we add below are unambiguous.
          (s (replace-regexp-in-string "%" "%25" uri t t))
+         (s (replace-regexp-in-string ":" "%3A" s t t))
          ;; Collapse runs of slashes: keep one real separator, escape the rest.
          (s (replace-regexp-in-string
              "//+"
@@ -386,8 +387,9 @@ what keeps the resulting name readable."
 Single left-to-right pass, so an escape we introduced is never confused with
 one that was already present in the original URI."
   (replace-regexp-in-string
-   "%25\\|%2F\\|%2E"
-   (lambda (m) (pcase m ("%25" "%") ("%2F" "/") ("%2E" ".")))
+   "%25\\|%3A\\|%2F\\|%2E"
+   (lambda (m) (pcase m ("%25" "%") ("%3A" ":")
+                      ("%2F" "/") ("%2E" ".")))
    tail t t))
 
 (defvar lsp-proxy--decompiled-known-names (make-hash-table :test 'equal)

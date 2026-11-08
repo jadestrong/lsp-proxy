@@ -36,6 +36,52 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+static ACTIVE_SERVER_INSTALLS: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> =
+    std::sync::Mutex::new(None);
+
+/// Hold an installation destination until its async task completes or is dropped.
+pub(crate) struct ServerInstallGuard(PathBuf);
+
+impl ServerInstallGuard {
+    pub(crate) fn acquire(install_dir: &Path) -> Result<Self> {
+        let directory = if install_dir.is_absolute() {
+            install_dir.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(install_dir)
+        };
+        // Canonicalize the existing prefix even before the destination exists.
+        // Otherwise creating a directory below a symlink could change its lock key.
+        let directory = directory
+            .ancestors()
+            .find_map(|ancestor| {
+                ancestor
+                    .canonicalize()
+                    .ok()
+                    .map(|resolved| resolved.join(directory.strip_prefix(ancestor).unwrap()))
+            })
+            .context("could not resolve the Java server installation directory")?;
+        let mut active = ACTIVE_SERVER_INSTALLS.lock().unwrap();
+        if !active
+            .get_or_insert_with(Default::default)
+            .insert(directory.clone())
+        {
+            bail!(
+                "a Java server installation is already in progress for {}",
+                directory.display()
+            );
+        }
+        Ok(Self(directory))
+    }
+}
+
+impl Drop for ServerInstallGuard {
+    fn drop(&mut self) {
+        if let Some(active) = ACTIVE_SERVER_INSTALLS.lock().unwrap().as_mut() {
+            active.remove(&self.0);
+        }
+    }
+}
+
 /// Which Java language server to install.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -218,7 +264,7 @@ fn require_tool(what: &str, name: &str) -> Result<()> {
 /// Content-Length of URL, or 0 when the server does not report one.
 async fn remote_size(url: &str) -> u64 {
     let out = Command::new("curl")
-        .args(["-sIL", url])
+        .args(["-sIL", "--max-time", "20", url])
         .stdin(Stdio::null())
         .output()
         .await;
@@ -315,16 +361,9 @@ async fn download_with_progress(
 /// Verify ARCHIVE against EXPECTED, shelling out because the archives are far too
 /// large to digest in memory.
 async fn verify_checksum(archive: &Path, expected: &str) -> Result<()> {
-    let path = archive.to_string_lossy().to_string();
-    let argv = if which::which("sha256sum").is_ok() {
-        vec!["sha256sum".to_string(), path]
-    } else if which::which("shasum").is_ok() {
-        vec!["shasum".to_string(), "-a".into(), "256".into(), path]
-    } else {
-        bail!("neither `sha256sum` nor `shasum` was found on PATH; cannot verify the download");
-    };
+    let argv = checksum_argv(archive, cfg!(windows), |name| which::which(name).is_ok())?;
     let out = run(&argv, "checksum").await?;
-    let actual = parse_digest(&out)
+    let actual = parse_checksum_output(&out)
         .with_context(|| format!("could not parse a digest from: {}", out.trim()))?;
     if actual != expected.to_ascii_lowercase() {
         bail!(
@@ -334,6 +373,40 @@ async fn verify_checksum(archive: &Path, expected: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn checksum_argv(
+    archive: &Path,
+    windows: bool,
+    available: impl Fn(&str) -> bool,
+) -> Result<Vec<String>> {
+    let path = archive.to_string_lossy().to_string();
+    if available("sha256sum") {
+        Ok(vec!["sha256sum".into(), path])
+    } else if available("shasum") {
+        Ok(vec!["shasum".into(), "-a".into(), "256".into(), path])
+    } else if windows && available("certutil") {
+        Ok(vec![
+            "certutil".into(),
+            "-hashfile".into(),
+            path,
+            "SHA256".into(),
+        ])
+    } else {
+        bail!("no SHA-256 tool was found on PATH (sha256sum, shasum or Windows certutil); cannot verify the download")
+    }
+}
+
+fn require_checksum_tool() -> Result<()> {
+    checksum_argv(Path::new(""), cfg!(windows), |name| {
+        which::which(name).is_ok()
+    })
+    .map(|_| ())
+}
+
+fn parse_checksum_output(stdout: &str) -> Option<String> {
+    // certutil prints a localized heading before its bare digest line.
+    stdout.lines().find_map(parse_digest)
 }
 
 /// Download, verify, unpack and publish the server. Returns the launcher path.
@@ -347,7 +420,6 @@ pub async fn install(
     for tool in backend.required_tools() {
         require_tool(backend.display_name(), tool)?;
     }
-
     let (url, version, expected_sha) = match backend {
         Backend::Jdtls => resolve_jdtls(version, &progress).await?,
     };
@@ -358,25 +430,24 @@ pub async fn install(
             return Ok((existing, version, true));
         }
     }
+    require_checksum_tool()?;
 
     // Stage beside the destination so publishing is a rename on the same
     // filesystem, never a copy over a directory that may be in use.
     tokio::fs::create_dir_all(install_dir)
         .await
         .with_context(|| format!("could not create {}", install_dir.display()))?;
-    let staging = install_dir.join(format!(".staging-{version}-{}", std::process::id()));
-    let _ = tokio::fs::remove_dir_all(&staging).await;
-    tokio::fs::create_dir_all(&staging)
-        .await
-        .with_context(|| format!("could not create {}", staging.display()))?;
+    let staging_dir = tempfile::Builder::new()
+        .prefix(&format!(".staging-{version}-"))
+        .tempdir_in(install_dir)?;
+    let staging = staging_dir.path();
 
     let result =
-        install_into_staging(backend, &url, expected_sha.as_deref(), &staging, &progress).await;
+        install_into_staging(backend, &url, expected_sha.as_deref(), staging, &progress).await;
 
     let launcher_in_staging = match result {
         Ok(path) => path,
         Err(err) => {
-            let _ = tokio::fs::remove_dir_all(&staging).await;
             return Err(err);
         }
     };
@@ -394,7 +465,10 @@ pub async fn install(
         .context("launcher is not inside a bin/ directory")?
         .to_path_buf();
     if dest.exists() {
-        let quarantine = install_dir.join(format!(".old-{version}-{}", std::process::id()));
+        let quarantine = install_dir.join(format!(
+            ".old-{}",
+            staging.file_name().unwrap().to_string_lossy()
+        ));
         tokio::fs::rename(&dest, &quarantine)
             .await
             .with_context(|| format!("could not move aside {}", dest.display()))?;
@@ -403,7 +477,6 @@ pub async fn install(
     tokio::fs::rename(&server_root, &dest)
         .await
         .with_context(|| format!("could not publish {}", dest.display()))?;
-    let _ = tokio::fs::remove_dir_all(&staging).await;
 
     let launcher = dest.join("bin").join(backend.launcher_name());
     set_executable(&launcher).await?;
@@ -628,6 +701,7 @@ pub async fn install_lombok(
     if !force && jar.is_file() {
         return Ok((jar, LOMBOK_VERSION.to_string(), true));
     }
+    require_checksum_tool()?;
 
     tokio::fs::create_dir_all(install_dir)
         .await
@@ -925,6 +999,7 @@ pub async fn install_spring(
     }
     require_tool("Spring Boot LS", "curl")?;
     require_tool("Spring Boot LS", "unzip")?;
+    require_checksum_tool()?;
     progress(None, format!("Looking up Spring Boot Tools {version}"));
     let base = format!("https://open-vsx.org/api/VMware/vscode-spring-boot/{version}");
     let metadata = run(
@@ -1293,6 +1368,62 @@ mod tests {
         assert_eq!(parse_digest(&hex.to_uppercase()).unwrap(), hex);
         assert!(parse_digest("").is_none());
         assert!(parse_digest("short  file").is_none());
+    }
+
+    #[test]
+    fn checksum_supports_windows_certutil_without_unix_tools() {
+        let archive = Path::new("archive with spaces.zip");
+        assert_eq!(
+            checksum_argv(archive, true, |name| name == "certutil").unwrap(),
+            vec!["certutil", "-hashfile", "archive with spaces.zip", "SHA256"]
+        );
+        let digest = "a".repeat(64);
+        let output = format!(
+            "SHA256 hash of archive:\r\n{}\r\nCertUtil: command completed successfully.\r\n",
+            digest.to_uppercase()
+        );
+        assert_eq!(parse_checksum_output(&output), Some(digest));
+        assert!(parse_checksum_output("CertUtil: command failed.").is_none());
+        assert!(checksum_argv(archive, false, |name| name == "certutil").is_err());
+        assert!(checksum_argv(archive, true, |_| false).is_err());
+    }
+
+    #[test]
+    fn checksum_prefers_available_unix_tools() {
+        let archive = Path::new("archive.zip");
+        assert_eq!(
+            checksum_argv(archive, true, |_| true).unwrap()[0],
+            "sha256sum"
+        );
+        assert_eq!(
+            checksum_argv(archive, true, |name| name != "sha256sum").unwrap(),
+            vec!["shasum", "-a", "256", "archive.zip"]
+        );
+    }
+
+    #[test]
+    fn server_install_guard_rejects_duplicates_and_releases_on_drop() {
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let first = ServerInstallGuard::acquire(first_dir.path()).unwrap();
+        assert!(ServerInstallGuard::acquire(first_dir.path()).is_err());
+        assert!(ServerInstallGuard::acquire(&first_dir.path().join(".")).is_err());
+        let second = ServerInstallGuard::acquire(second_dir.path()).unwrap();
+        drop(first);
+        let next = ServerInstallGuard::acquire(first_dir.path()).unwrap();
+        drop((next, second));
+    }
+
+    #[test]
+    fn server_install_guard_keeps_the_same_key_when_the_destination_is_created() {
+        let root = tempfile::tempdir().unwrap();
+        let destination = root.path().join("new-install");
+        let guard = ServerInstallGuard::acquire(&destination).unwrap();
+        std::fs::create_dir_all(&destination).unwrap();
+        assert!(ServerInstallGuard::acquire(&destination).is_err());
+        assert!(ServerInstallGuard::acquire(&destination.canonicalize().unwrap()).is_err());
+        drop(guard);
+        assert!(ServerInstallGuard::acquire(&destination).is_ok());
     }
 
     #[test]
