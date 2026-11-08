@@ -11,38 +11,72 @@ The features it supports are:
 - code action (triggered by `lsp-proxy-execute-code-action`)
 - rename (triggered by `lsp-proxy-rename`)
 - format buffer (triggered by `lsp-proxy-format-buffer`)
-- workspace command, such as `typescript.restartTsServer(vtsls)` 、 `reloadWorkspace(rust-analyzer)` (triggered by `lsp-proxy-execute-command`)
-- 工作区符号搜索支持可选的 [Ivy 动态界面](docs/ivy.md)，包括 Spring 符号和运行 endpoint。
+- workspace command, such as `typescript.restartTsServer(vtsls)`, `reloadWorkspace(rust-analyzer)` (triggered by `lsp-proxy-execute-command`)
+- workspace symbol search with an optional [interactive Ivy interface](docs/ivy.md), including Spring symbols and endpoints from running applications.
 - inlay hints (triggered by `lsp-proxy-inlay-hints-mode`)
 - documentHighlight/signature (baesd on `eldoc`)
 - documentSymbols (triggered by `imenu`)
-- 调用层级与类型层级：`lsp-proxy-show-call-hierarchy`、`lsp-proxy-show-type-hierarchy`。
+- call and type hierarchies (`lsp-proxy-show-call-hierarchy`, `lsp-proxy-show-type-hierarchy`).
 - GitHub Copilot integration with authentication management and AI-powered code suggestions
 
 ![Demo](images/show.gif)
 
-## 调用层级与类型层级
+## Call and Type Hierarchies
 
-将光标放在函数、方法或类型名上，执行 `M-x lsp-proxy-show-call-hierarchy` 或
-`M-x lsp-proxy-show-type-hierarchy`。语言服务器需要声明相应能力。
-默认展示两个方向；使用 `C-u M-x` 可选择 incoming/outgoing calls 或 supertypes/subtypes。
-已打开的树中按 `d` 可重新选择方向，选择框默认选中当前方向，顶部显示当前方向。
-切换保留当前根节点与成功缓存，取消旧请求并重置展开状态；选择原方向或取消选择保持原树。
+Place point on a function, method, or type name and run
+`M-x lsp-proxy-show-call-hierarchy` or `M-x lsp-proxy-show-type-hierarchy`.
+The language server must advertise the corresponding capability.
+Both directions are shown by default. Use `C-u M-x` to choose incoming/outgoing
+calls or supertypes/subtypes. Press `d` in an open tree to change direction;
+the prompt defaults to the current direction, which is also shown in the header.
+Changing direction keeps the current roots and cached successful results,
+cancels pending requests, and resets expanded nodes. Choosing the current
+direction or dismissing the prompt leaves the tree unchanged.
 
-打开视图和展开节点均使用异步请求；先显示加载状态，两个方向并发查询，结果返回后更新节点。
-树节点按需展开。`e` 展开/折叠当前行节点，或点击展开按钮查看下一层；
-`u` 折叠当前节点的直接父节点并将光标移到父节点行，连续按可逐层向上收起。
-`TAB`/`S-TAB` 切换按钮，`RET` 或点击名称
-跳到首个调用点（类型或根节点跳到定义）；`RET` 在节点整行（包括缩进、图标和后缀）均可使用，
-上述为普通 Emacs 默认键位；Evil 状态绑定由用户自行配置。`c` 或鼠标右键以当前节点为中心，`g` 刷新，`q` 退出。
-与 Eglot 一样，outgoing 的调用点位于父节点文件中。来自不同服务器的同名节点分别保留，
-后续请求始终发回节点所属的服务器；服务器或代理重启后请重新打开层级视图。
-某个方向的请求失败时，树中会显示错误并保留其他节点，按 `g` 清空缓存后重试。
-刷新、居中、重新打开及退出视图会取消未完成的请求，过期响应不会修改当前树。
+Opening a view and expanding nodes use asynchronous requests. The tree shows a
+loading state, queries both directions concurrently, and updates nodes as results
+arrive. Nodes expand on demand: press `e` to expand or collapse the current node,
+or click its expansion button. Press `u` to collapse its immediate parent and
+move point to the parent's line; repeat to collapse successive ancestors.
+Use `TAB`/`S-TAB` to move between buttons. Press `RET` or click a node's name to
+jump to its first call site; type nodes and roots jump to their definitions.
+`RET` works anywhere on the node's line, including its indentation, icon, and
+suffix. These are the default Emacs bindings; configure Evil state bindings in
+your own configuration. Press `c` or right-click to center the tree on the current
+node, `g` to refresh, and `q` to quit.
 
-`languages.toml` 中可使用 `call-hierarchy` 和 `type-hierarchy` 控制
-`only-features` / `except-features`。这两个能力采用静态声明，初始化时
-`dynamicRegistration` 为 false。
+As in Eglot, outgoing call sites belong to the parent node's file. Same-name nodes
+from different servers remain separate, and subsequent requests always go to the
+node's original server. Reopen the hierarchy after restarting a server or the
+proxy. If a request fails in one direction, the tree shows the error and keeps
+the other nodes. Press `g` to clear the cache and retry. Refreshing, centering,
+reopening, or quitting a view cancels pending requests; stale responses cannot
+modify the current tree.
+
+Use `call-hierarchy` and `type-hierarchy` in the `only-features` / `except-features`
+filters in `languages.toml`. Both capabilities use static registration, with
+`dynamicRegistration` set to false during initialization.
+
+For Evil, add the following example to your own configuration and adjust the
+states and bindings as needed. The hierarchy module does not load or configure
+Evil. To center a node with `c`, place point on its name text.
+
+```elisp
+(with-eval-after-load 'evil
+  (with-eval-after-load 'lsp-proxy-hierarchy
+    (evil-define-key* '(normal motion) lsp-proxy-hierarchy-mode-map
+      (kbd "RET") #'lsp-proxy-hierarchy-visit
+      (kbd "<return>") #'lsp-proxy-hierarchy-visit
+      (kbd "e") #'lsp-proxy-hierarchy-toggle
+      (kbd "u") #'lsp-proxy-hierarchy-collapse-parent
+      (kbd "d") #'lsp-proxy-hierarchy-set-direction
+      (kbd "TAB") #'widget-forward
+      (kbd "<backtab>") #'widget-backward
+      (kbd "c") #'lsp-proxy-hierarchy-center-on-node
+      (kbd "g") #'lsp-proxy-hierarchy-refresh
+      (kbd "q") #'lsp-proxy-hierarchy-quit)))
+```
+
 ## Prerequisites
 ### Emacs30.1 or 29 + eglot@latest (Reused some capabilities of eglot to reduce code duplication.)
 
