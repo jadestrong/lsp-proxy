@@ -23,6 +23,8 @@
 (declare-function dape "dape" (config &optional skip-compile))
 (declare-function jsonrpc-request "jsonrpc")
 (declare-function jsonrpc-async-request "jsonrpc")
+(declare-function lsp-proxy-java-clear-file-cache "lsp-proxy-java-files")
+(defvar lsp-proxy-mode)
 
 (defcustom lsp-proxy-java-class-file-contents-server-name "jdtls"
   "Name of the language server that answers `java/classFileContents'.
@@ -923,6 +925,8 @@ Run this from a local Java project buffer.  Shared caches are refused."
     (user-error "Java workspace cache cleanup currently requires a local project buffer"))
   (unless (file-exists-p buffer-file-name)
     (user-error "Save this Java file before cleaning its workspace"))
+  (when (fboundp 'lsp-proxy-java-clear-file-cache)
+    (lsp-proxy-java-clear-file-cache t))
   (lsp-proxy--ensure-connection)
   (lsp-proxy--send-did-change)
   (unless lsp-proxy--buffer-opened
@@ -990,6 +994,8 @@ project by the document it is given."
   (lsp-proxy-java--forward "java/projectConfigurationUpdate"
                            (list :uri (lsp-proxy--path-to-uri buffer-file-name))
                            t)
+  (when (fboundp 'lsp-proxy-java-clear-file-cache)
+    (lsp-proxy-java-clear-file-cache))
   (lsp-proxy--info "Project configuration update requested."))
 
 ;;; Client-side code actions

@@ -20,6 +20,8 @@
 (require 'lsp-proxy-utils)
 (require 'lsp-proxy-remote)
 
+(declare-function lsp-proxy-java-clear-file-cache "lsp-proxy-java-files")
+
 (defcustom lsp-proxy-log-file-directory temporary-file-directory
   "The directory for `lsp-proxy' server to generate log file."
   :type 'string
@@ -467,6 +469,8 @@ picked up on the next `lsp-proxy-restart'."
     (when (fboundp 'lsp-proxy-codelens-refresh-all)
       (lsp-proxy-codelens-refresh-all)))
   (when (eql method 'emacs/serverCapabilities)
+    (when (fboundp 'lsp-proxy-java-clear-file-cache)
+      (lsp-proxy-java-clear-file-cache))
     (lsp-proxy--dbind (:uri uri
                        :triggerCharacters trigger-characters
                        :supportInlayHints support-inlay-hints

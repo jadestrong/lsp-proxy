@@ -77,6 +77,18 @@ Evil. To center a node with `c`, place point on its name text.
       (kbd "q") #'lsp-proxy-hierarchy-quit)))
 ```
 
+## Java Production File Navigation
+
+`M-x lsp-proxy-java-find-production-file` searches production Java files using
+JDTLS source-root classification. It supports custom directories, imported modules
+and source roots outside the project directory, without depending on Projectile
+or Consult. The project boundary comes from Emacs `project.el`; selection uses
+standard completion. Use `C-u` to refresh candidates and `M-x xref-go-back` to return.
+
+The query and directory scan run asynchronously. Unimported modules fall back to
+conventional source directories with a message. See [Java support](docs/java.md)
+for generated-source, resource and cache settings.
+
 ## Java Test Navigation
 
 `M-x lsp-proxy-java-go-to-test` finds test classes for the current Java class.
@@ -609,6 +621,8 @@ language-servers = [
 - `lsp-proxy-restart`: Restart the server
 - `lsp-proxy-workspace-restart`: Restart the LSP server for the current project
 - `lsp-proxy-java-install-test`: Install Java Test Runner bundles for Go to Test
+- `lsp-proxy-java-find-production-file`: Find production Java files using source roots
+- `lsp-proxy-java-clear-file-cache`: Discard cached production file candidates
 
 ## Customization
 
@@ -626,6 +640,14 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 | `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
 | `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
 | `lsp-proxy-show-error-log-messages` | `nil` | Also displays Error-level `window/logMessage` notifications using `message`. Other levels stay in the log buffer. Works even when log buffer recording is disabled. |
+
+### Java Production File Navigation
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-java-file-extensions` | `'("java")` | Candidate file extensions without dots. `nil` includes all files under production source roots, including resources. |
+| `lsp-proxy-java-file-include-generated` | `t` | Include generated production sources identified by available attributes and common paths. |
+| `lsp-proxy-java-file-cache-duration` | `30` | Seconds to cache candidates. `0` disables caching; `C-u` refreshes the current query. |
 
 ### Java Test Navigation
 | Variable | Default | Description |

@@ -88,6 +88,40 @@ impl Request for WorkspaceRestart {
     const METHOD: &'static str = "emacs/workspaceRestart";
 }
 
+// emacs/javaProductionFiles
+#[derive(Debug)]
+pub enum JavaProductionFiles {}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaProductionFilesParams {
+    pub project_uri: String,
+    #[serde(default = "default_java_file_server")]
+    pub server_name: String,
+    /// None includes all files beneath production source entries, including resources.
+    pub extensions: Option<Vec<String>>,
+    pub include_generated: bool,
+}
+
+fn default_java_file_server() -> String {
+    "jdtls".into()
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaProductionFilesResult {
+    pub files: Vec<String>,
+    pub source_roots: Vec<String>,
+    pub fallback_modules: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
+impl Request for JavaProductionFiles {
+    type Params = JavaProductionFilesParams;
+    type Result = JavaProductionFilesResult;
+    const METHOD: &'static str = "emacs/javaProductionFiles";
+}
+
 // emacs/installJavaServer
 //
 // Downloads Eclipse JDT LS asynchronously for `lsp-proxy-java`.

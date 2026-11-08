@@ -1069,6 +1069,9 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallJavaTest::METHOD => {
                 self.handle_install_java_test(req);
             }
+            Message::Request(req) if req.method == lsp_ext::JavaProductionFiles::METHOD => {
+                self.handle_java_production_files(req);
+            }
             Message::Request(req) if req.method == lsp_ext::InstallSpring::METHOD => {
                 self.handle_install_spring(req);
             }
@@ -1510,6 +1513,36 @@ impl Application {
                     jsonrpc::ErrorCode::InternalError,
                     format!("{error:#}"),
                 ),
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn handle_java_production_files(&mut self, req: msg::Request) {
+        let params: lsp_ext::JavaProductionFilesParams =
+            match serde_json::from_value(req.params.params.clone()) {
+                Ok(params) => params,
+                Err(error) => {
+                    self.respond(Response::new_err(
+                        req.id,
+                        jsonrpc::ErrorCode::InvalidParams,
+                        error.to_string(),
+                    ));
+                    return;
+                }
+            };
+        let clients = self
+            .editor
+            .language_servers
+            .iter_clients()
+            .cloned()
+            .collect();
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let response = match crate::java_files::production_files(&req.id, params, clients).await
+            {
+                Ok(result) => Response::new_ok(req.id, result),
+                Err(error) => create_error_response(&req.id, format!("{error:#}")),
             };
             let _ = sender.send(response.into());
         });

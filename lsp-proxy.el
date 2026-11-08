@@ -55,6 +55,7 @@
 (require 'lsp-proxy-java)
 (require 'lsp-proxy-java-jdtls)
 (require 'lsp-proxy-java-test)
+(require 'lsp-proxy-java-files)
 (require 'lsp-proxy-java-spring)
 (require 'lsp-proxy-org)
 (require 'lsp-proxy-copilot)
@@ -348,6 +349,7 @@ Skip reopening notifications for buffers not currently visible."
                                          (add-hook 'window-configuration-change-hook #'lsp-proxy--init-if-visible)))))))))
 (defun lsp-proxy--cleanup ()
   "Clean up when restart."
+  (lsp-proxy-java-clear-file-cache t)
   ;; clear all opened buffer flags
   (dolist (buf (buffer-list))
     (when (buffer-live-p buf)
@@ -627,6 +629,7 @@ Unlike `lsp-proxy--request', this is not scoped to the current buffer."
 
 (defun lsp-proxy--cleanup-shutdown-workspace-state (workspace-root closed-documents)
   "Clean local state for WORKSPACE-ROOT and CLOSED-DOCUMENTS."
+  (lsp-proxy-java-clear-file-cache t)
   (let ((closed-documents (mapcar #'expand-file-name
                                   (lsp-proxy--json-array-to-list closed-documents))))
     (lsp-proxy--remove-diagnostics-in-workspace workspace-root)
