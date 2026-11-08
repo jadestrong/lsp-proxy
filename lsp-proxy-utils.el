@@ -323,7 +323,7 @@ If the system is not Windows, return the original path."
 ;; results as large as a project-wide `textDocument/references'.
 
 (defconst lsp-proxy--decompiled-prefix "/lspsrc:/"
-  "Prefix marking a virtual file name backed by the `decompile' command.
+  "Prefix marking a virtual file name backed by a JVM source-content provider.
 The trailing slash is required to keep TRAMP from claiming the name; see the
 commentary above.")
 

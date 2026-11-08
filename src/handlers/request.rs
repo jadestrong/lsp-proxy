@@ -838,9 +838,7 @@ pub(crate) async fn handle_execute_command(
                 .map(|_| Response::new_ok(req.id, ""));
             }
         }
-        // Forward the command result back to the client. Commands like the
-        // IntelliJ backend's `decompile` return data ({code, language}) that the
-        // client needs; a bare "" would drop it.
+        // Forward command results verbatim; the client may need returned data.
         call_single_language_server::<lsp_types::request::ExecuteCommand>(
             &req,
             params,
@@ -853,7 +851,7 @@ pub(crate) async fn handle_execute_command(
     } else {
         // No explicit server context: route to whichever server advertises the
         // command in its executeCommandProvider. Lets the client invoke a
-        // command (e.g. `decompile`) by name without tracking server ids.
+        // command by name without tracking server ids.
         let target = language_servers.iter().find(|ls| {
             ls.capabilities()
                 .execute_command_provider

@@ -90,15 +90,7 @@ impl Request for WorkspaceRestart {
 
 // emacs/installJavaServer
 //
-// Downloads a Java language server backend — the JetBrains IntelliJ server or
-// Eclipse's jdtls — for `lsp-proxy-java`. Lives here rather than in Emacs Lisp
-// because the proxy already has tokio (so a download of tens to hundreds of MB does
-// not block the editor) and an established progress pipeline; the Emacs side is only
-// a thin command.
-//
-// The method name is backend-neutral and predates the `backend` field, so that field
-// defaults rather than being required: a client built before it still asks for, and
-// still gets, the IntelliJ server.
+// Downloads Eclipse JDT LS asynchronously for `lsp-proxy-java`.
 //
 // The *proxy's own* installer stays in Emacs Lisp on purpose — that one cannot
 // run here, since the proxy does not exist yet when it runs.
@@ -111,10 +103,10 @@ pub struct InstallJavaServerParams {
     /// Where to place `<version>/bin/<launcher>`. Chosen by the client so the
     /// location stays next to everything else Emacs manages.
     pub install_dir: String,
-    /// Which server to install. Absent means IntelliJ, for the reason above.
+    /// Which server to install. Defaults to Eclipse JDT LS.
     #[serde(default)]
     pub backend: crate::java_install::Backend,
-    /// Pin a build (e.g. "263.2689.0" or jdtls's "1.61.0"); `None` resolves the
+    /// Pin a milestone (e.g. "1.61.0"); `None` resolves the
     /// latest for the selected backend.
     #[serde(default)]
     pub version: Option<String>,
@@ -313,9 +305,7 @@ pub enum InstallProgress {}
 pub struct InstallProgressParams {
     /// Short name of what is being installed, for the mode-line indicator.
     ///
-    /// Sent rather than assumed by the editor: this channel started out carrying
-    /// only the IntelliJ server, and the client hard-coded that name — which then
-    /// mislabelled every other install that came to share the channel.
+    /// Sent rather than assumed by the editor so each install is labelled correctly.
     pub label: String,
     pub message: String,
     /// Completion percentage when the phase has a measurable size.
@@ -346,11 +336,9 @@ impl Notification for CodeLensRefresh {
     const METHOD: &'static str = "emacs/codeLensRefresh";
 }
 
-// intellij/importLog
+// emacs/javaImportLog
 //
-// Build-tool import progress from the IntelliJ language server (Maven/Gradle/Bazel
-// resolving a project). Mirrors the `ImportLogParams` interface in the JetBrains
-// VS Code extension's `lspClient.ts`.
+// Editor-facing project import status, translated from JDT LS language/status.
 //
 // Kept separate from `window/logMessage`: an import is a discrete, long operation
 // whose outcome the user acts on (a failed import means no symbols resolve), so it
@@ -369,7 +357,7 @@ pub struct ImportLogParams {
     pub typ: Option<u8>,
     #[serde(default)]
     pub message: String,
-    /// Build-tool display name, e.g. "Maven" / "Gradle" / "Bazel". Set on the
+    /// Build-tool display name, e.g. "Maven" / "Gradle". Set on the
     /// `started` and `failed` events.
     #[serde(default)]
     pub tool: Option<String>,
@@ -389,87 +377,7 @@ pub struct ImportLogParams {
 
 impl Notification for ImportLog {
     type Params = ImportLogParams;
-    const METHOD: &'static str = "intellij/importLog";
-}
-
-// intellij/chooseAction  →  emacs/chooseAction  →  workspace/executeCommand
-//
-// The IntelliJ server asks the user to pick one of several ModCommand actions. It
-// arrives as a *notification*, and the answer goes back as a fresh
-// `workspace/executeCommand` request rather than as a reply — so the session id has
-// to be held across the editor round trip.
-//
-// Note this is not `window/showMessageRequest`: that one is a request the proxy
-// replies to. Here the server expects a command invocation, which is why the two
-// cannot share a code path.
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChooseActionEntry {
-    /// Index the server identifies this entry by; not necessarily its position.
-    pub index: i64,
-    pub name: String,
-}
-
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChooseActionParams {
-    pub session_id: i64,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub entries: Vec<ChooseActionEntry>,
-}
-
-#[derive(Debug)]
-pub enum ChooseAction {}
-
-impl Notification for ChooseAction {
-    type Params = ChooseActionParams;
-    const METHOD: &'static str = "intellij/chooseAction";
-}
-
-/// The editor-facing half. Result is the chosen `index`, or `None` when the user
-/// dismissed the prompt — in which case nothing is sent back to the server.
-#[derive(Debug)]
-pub enum EmacsChooseAction {}
-
-impl Request for EmacsChooseAction {
-    type Params = ChooseActionParams;
-    type Result = Option<i64>;
-    const METHOD: &'static str = "emacs/chooseAction";
-}
-
-/// Server-side command the picked entry is delivered through.
-pub const CHOOSE_MOD_COMMAND_ACTION: &str = "chooseModCommandAction";
-
-// intellij/runEditorCommand
-//
-// The IntelliJ server asks the editor to run one of *its own* commands, as if the
-// user had invoked it. Some ModCommands drive the editor UI rather than the
-// document — starting an inline rename is the motivating case — and LSP cannot
-// express that: a server may not send `workspace/executeCommand` to a client, and
-// it cannot start such a session itself.
-//
-// The command ids are VS Code's (`editor.action.rename`), so the mapping onto
-// Emacs commands is the editor's business; the proxy only relays. Unknown ids are
-// dropped on the Emacs side rather than here, so that adding a mapping needs no
-// new proxy build.
-#[derive(Debug, Eq, PartialEq, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RunEditorCommandParams {
-    pub command: String,
-    /// Positional arguments, verbatim. Left as raw JSON because their shape is
-    /// per-command and the proxy never inspects them.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub arguments: Option<Vec<serde_json::Value>>,
-}
-
-#[derive(Debug)]
-pub enum RunEditorCommand {}
-
-impl Notification for RunEditorCommand {
-    type Params = RunEditorCommandParams;
-    const METHOD: &'static str = "intellij/runEditorCommand";
+    const METHOD: &'static str = "emacs/javaImportLog";
 }
 
 // language/status
@@ -477,7 +385,7 @@ impl Notification for RunEditorCommand {
 // jdtls's own project-status channel. Cannot reuse `window/logMessage`: this is a
 // *status* stream about one discrete operation (the project import) whose outcome
 // the user has to act on — until it finishes nothing resolves, and the reason it
-// failed is only ever in these lines. That is the same contract `intellij/importLog`
+// failed is only ever in these lines. That is the same contract `emacs/javaImportLog`
 // already serves, which is why the proxy translates onto that channel rather than
 // teaching the editor a second one.
 //
@@ -546,16 +454,16 @@ impl Notification for LanguageProgressReport {
     const METHOD: &'static str = "language/progressReport";
 }
 
-/// Translate a jdtls `language/status` into the `intellij/importLog` payload.
+/// Translate a jdtls `language/status` into the `emacs/javaImportLog` payload.
 ///
 /// Pure: `root_path` is left `None` here and stamped by the caller from the
-/// language server's own root, exactly as the IntelliJ path does.
+/// language server's own root, for the correct project.
 ///
 /// Every field `ImportLogParams` has that `language/status` does not is decided
 /// here, deliberately and once (requirement FR4.3). The three booleans are the
 /// interesting ones, and all three are hard-wired `false`:
 ///
-///  * `started`/`succeeded`/`failed` are *terminal* markers in the IntelliJ
+///  * `started`/`succeeded`/`failed` are *terminal* markers in the editor
 ///    semantics — the editor renders `started` as a bare "<tool> import started"
 ///    line that discards the message, and `failed` both steals a window
 ///    (`lsp-proxy-java-import-log-auto-display`) and warns in the echo area.
@@ -1164,117 +1072,14 @@ impl Request for ForwardRequest {
 }
 
 #[cfg(test)]
-mod choose_action_tests {
-    use super::{
-        ChooseAction, ChooseActionParams, EmacsChooseAction, RunEditorCommand,
-        RunEditorCommandParams, CHOOSE_MOD_COMMAND_ACTION,
-    };
-    use lsp_types::notification::Notification;
-    use lsp_types::request::Request;
-
-    #[test]
-    fn method_names_match_the_protocol() {
-        assert_eq!(ChooseAction::METHOD, "intellij/chooseAction");
-        assert_eq!(EmacsChooseAction::METHOD, "emacs/chooseAction");
-        assert_eq!(CHOOSE_MOD_COMMAND_ACTION, "chooseModCommandAction");
-        assert_eq!(RunEditorCommand::METHOD, "intellij/runEditorCommand");
-    }
-
-    /// `arguments` is optional, and absent is not the same as empty: a command
-    /// invoked with no arguments at all must not grow a `[]` on the way through.
-    #[test]
-    fn parses_run_editor_command_with_and_without_arguments() {
-        let bare: RunEditorCommandParams =
-            serde_json::from_str(r#"{"command":"editor.action.rename"}"#).unwrap();
-        assert_eq!(bare.command, "editor.action.rename");
-        assert_eq!(bare.arguments, None);
-
-        let with_args: RunEditorCommandParams =
-            serde_json::from_str(r#"{"command":"some.command","arguments":[1,"x"]}"#).unwrap();
-        assert_eq!(
-            with_args.arguments,
-            Some(vec![serde_json::json!(1), serde_json::json!("x")])
-        );
-    }
-
-    /// The payload as the server sends it.
-    #[test]
-    fn parses_the_server_payload() {
-        let json = r#"{
-          "sessionId": 42,
-          "title": "Choose an action",
-          "entries": [{"index": 0, "name": "Introduce variable"},
-                      {"index": 1, "name": "Introduce constant"}]
-        }"#;
-        let p: ChooseActionParams = serde_json::from_str(json).unwrap();
-        assert_eq!(p.session_id, 42);
-        assert_eq!(p.title, "Choose an action");
-        assert_eq!(p.entries.len(), 2);
-        // Index 0 is a legitimate answer, not "absent".
-        assert_eq!(p.entries[0].index, 0);
-        assert_eq!(p.entries[1].name, "Introduce constant");
-    }
-
-    /// Forwarded to the editor with camelCase keys, since the Emacs handler
-    /// destructures `:entries` and each entry's `:index` / `:name`.
-    #[test]
-    fn forwards_as_camel_case() {
-        let p: ChooseActionParams =
-            serde_json::from_str(r#"{"sessionId":7,"entries":[{"index":3,"name":"x"}]}"#).unwrap();
-        let json = serde_json::to_value(&p).unwrap();
-        assert_eq!(json["sessionId"], 7);
-        assert!(json.get("session_id").is_none());
-        assert_eq!(json["entries"][0]["index"], 3);
-    }
-
-    /// Missing title/entries must not fail the parse and drop the notification.
-    #[test]
-    fn tolerates_a_minimal_payload() {
-        let p: ChooseActionParams = serde_json::from_str(r#"{"sessionId":1}"#).unwrap();
-        assert_eq!(p.title, "");
-        assert!(p.entries.is_empty());
-    }
-
-    #[test]
-    fn registry_routes_the_notification() {
-        let serde_json::Value::Object(map) = serde_json::json!({
-            "sessionId": 5,
-            "entries": [{"index": 0, "name": "a"}]
-        }) else {
-            unreachable!()
-        };
-        let params = crate::lsp::jsonrpc::Params::Map(map);
-        match crate::registry::NotificationFromServer::parse(ChooseAction::METHOD, params) {
-            Ok(crate::registry::NotificationFromServer::ChooseAction(p)) => {
-                assert_eq!(p.session_id, 5);
-            }
-            other => panic!("expected ChooseAction, got {other:?}"),
-        }
-    }
-
-    /// The editor answers with the index or null; null means dismissed and must
-    /// deserialize rather than error, because the proxy then sends nothing.
-    #[test]
-    fn editor_result_accepts_index_or_null() {
-        let picked: Option<i64> = serde_json::from_str("3").unwrap();
-        assert_eq!(picked, Some(3));
-        let zero: Option<i64> = serde_json::from_str("0").unwrap();
-        assert_eq!(zero, Some(0), "index 0 must survive as a real choice");
-        let dismissed: Option<i64> = serde_json::from_str("null").unwrap();
-        assert_eq!(dismissed, None);
-    }
-}
-
-#[cfg(test)]
 mod import_log_tests {
     use super::{ImportLog, ImportLogParams};
     use lsp_types::notification::Notification;
 
-    /// The method the JetBrains server actually sends. Getting this wrong means the
-    /// notification keeps being dropped as unhandled, which is the bug being fixed.
+    /// The editor-facing channel carrying translated JDT LS status.
     #[test]
     fn method_matches_the_server() {
-        assert_eq!(ImportLog::METHOD, "intellij/importLog");
+        assert_eq!(ImportLog::METHOD, "emacs/javaImportLog");
     }
 
     /// A `started` event as the server sends it: no `tool` guarantee, no message.
@@ -1329,23 +1134,6 @@ mod import_log_tests {
         // `type` is a reserved word in Rust; make sure the rename survives.
         assert_eq!(json["type"], 1);
         assert!(json.get("typ").is_none());
-    }
-
-    /// The dispatch that was returning `Unhandled` before.
-    #[test]
-    fn registry_routes_the_notification() {
-        let serde_json::Value::Object(map) =
-            serde_json::json!({"type": 3, "message": "Importing", "tool": "Maven"})
-        else {
-            unreachable!()
-        };
-        let params = crate::lsp::jsonrpc::Params::Map(map);
-        match crate::registry::NotificationFromServer::parse(ImportLog::METHOD, params) {
-            Ok(crate::registry::NotificationFromServer::ImportLog(p)) => {
-                assert_eq!(p.message, "Importing");
-            }
-            other => panic!("expected ImportLog, got {other:?}"),
-        }
     }
 }
 
@@ -1448,16 +1236,14 @@ mod install_java_server_tests {
         assert_eq!(params.version, None);
     }
 
-    /// The `backend` field was added after the method shipped, so an older client
-    /// that omits it must still get the IntelliJ server rather than an error or a
-    /// silently different backend.
+    /// Omitted backend selects JDT LS; unsupported backends remain errors.
     #[test]
-    fn backend_defaults_to_intellij_on_the_wire() {
+    fn backend_defaults_to_jdtls_on_the_wire() {
         use crate::java_install::Backend;
 
         let without = r#"{"installDir":"/tmp/i/","force":false}"#;
         let params: InstallJavaServerParams = serde_json::from_str(without).unwrap();
-        assert_eq!(params.backend, Backend::Intellij);
+        assert_eq!(params.backend, Backend::Jdtls);
 
         let with = r#"{"installDir":"/tmp/j/","backend":"jdtls","version":"1.61.0","force":false}"#;
         let params: InstallJavaServerParams = serde_json::from_str(with).unwrap();
@@ -1483,7 +1269,7 @@ mod install_java_server_tests {
           "method": "emacs/installJavaServer",
           "params": {
             "params": {
-              "installDir": "/Users/u/.emacs.d/.local/cache/lsp-proxy/servers/intellij/",
+              "installDir": "/Users/u/.emacs.d/.local/cache/lsp-proxy/servers/jdtls/",
               "force": false
             }
           }
@@ -1492,7 +1278,7 @@ mod install_java_server_tests {
         let params: InstallJavaServerParams = serde_json::from_value(req.params.params).unwrap();
         assert_eq!(params.version, None);
         assert!(!params.force);
-        assert!(params.install_dir.ends_with("/servers/intellij/"));
+        assert!(params.install_dir.ends_with("/servers/jdtls/"));
     }
 
     /// A payload flattened into the envelope (the bug) must be recognisable rather
@@ -2034,7 +1820,7 @@ mod code_lens_refresh_notification_tests {
     }
 
     /// Progress now says what is being installed. The editor used to hard-code
-    /// "IntelliJ" for this channel, which mislabelled every install that later came
+    /// a fixed name for this channel, which mislabelled other installs that came
     /// to share it (jdtls, Lombok).
     #[test]
     fn install_progress_carries_a_label() {

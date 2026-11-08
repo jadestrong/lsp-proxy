@@ -123,104 +123,14 @@ declaration、typeDefinition 和 implementation 接受 `null`，并保留已有�
 `lsp-proxy-ivy-spring-running-endpoints` 预填 `//`，详见 [Ivy 界面](ivy.md)。
 Spring hover、CodeLens、properties/yaml completion 需要后续单独接入。
 
-LSP-Proxy ships two Java backends:
-
-| Backend | Role |
-| --- | --- |
-| `intellij` | Default Java backend. Also serves Kotlin. |
-| `jdtls` | Eclipse JDT Language Server, available as an alternative Java backend. |
-
-## IntelliJ Backend
-
-### Install
-
-Use the managed installer:
-
-```elisp
-M-x lsp-proxy-java-install-server
-```
-
-Choose `intellij`, or press enter to use the default. The managed install puts
-the backend's `bin/` directory on the proxy process `PATH`, so
-`command = "intellij-server"` is enough.
-
-| Setting | Purpose |
-| --- | --- |
-| `lsp-proxy-java-server-version` | IntelliJ server build to install. `nil` installs the latest known build. |
-| Project requirement | A Maven, Gradle, or Bazel project root with the corresponding build tool on `PATH`. |
-
-### Configuration Fields
-
-| Field | Default/example | Purpose |
-| --- | --- | --- |
-| `command` | `"intellij-server"` | Starts the headless backend directly over stdio. |
-| `args` | `["--stdio", "--eula=34d850193ee04897"]` | Launcher flags. `--eula` is the accepted hash of the bundle's own `EULA.txt`. |
-| `environment.IJ_JAVA_OPTIONS` | `"-Xmx4g"` | JVM options for the backend. |
-| `environment.INTELLIJ_DATA_SHARING` | `"none"` | Optional data-sharing mode; equivalent to `--data-sharing`. |
-| `environment.INTELLIJ_REGION` | `"americas"` | Optional region; equivalent to `--region`. |
-| `config.intellijExtensions` | `true` | Enables IntelliJ-specific protocol extensions used by LSP-Proxy. |
-| `config.defaultSdk` | `""` | Optional fallback SDK for symbol resolution. Must be a modular JDK, Java 9+ with `lib/modules`. |
-| `config.buildTools` | `{}` | Lets the backend use default Maven, Gradle, and Bazel discovery. |
-| `config.projects` | `[]` | Optional explicit project list. Entries may use `type = "gradle"`, `"maven"`, `"bazel"`, `"json"`, or `"subproject"`. |
-| `config.disableRocksDBWriteAheadLog` | commented | Optional backend knob; omit to use the backend default. |
-| `config.runMainCodeLens` | `true` | Emits Run/Debug CodeLens above Java `main` methods. |
-
-Useful launcher flags:
-
-```toml
-args = [
-  "--stdio",
-  "--eula=34d850193ee04897",
-  "--region=americas",
-  "--data-sharing=none",
-  "--system-path=/path/to/cache",
-  "--log-level=INFO",
-]
-```
-
-| Launcher option | Values |
-| --- | --- |
-| `--region` | `africa`, `americas`, `apac`, `china`, `europe`, `middle_east`, `oceania`, `not_set` |
-| `--data-sharing` | `full`, `anonymous`, `test`, `none` |
-| `--system-path` | Cache/index directory |
-| `--ca-certificate` | Extra trusted CA file, PEM or DER |
-| `--log-level` | `TRACE`, `DEBUG`, `INFO`, `WARNING`, `ERROR`, `OFF`, `ALL` |
-
-### Supported Methods
-
-| Method/capability | What LSP-Proxy does |
-| --- | --- |
-| `decompile` | Fetches source for `jar:` and `jrt:` virtual locations and serves them through read-only buffers. |
-| `interpolateFileTemplate` | Fills newly created JVM source files from IntelliJ templates. |
-| `intellij/importLog` | Reports Maven, Gradle, or Bazel import output. |
-| `intellij/chooseAction` | Handles ModCommand code actions that require choosing one variant. |
-| `intellij/runEditorCommand` | Lets the backend ask Emacs to run local editor commands such as rename. |
-| `intellij.java.resolveLaunch` | Resolves Java run/debug launch data for Dape. |
-| `intellij.java.resolveClassDocument` | Resolves main-class metadata for run/debug. |
-| `intellij.jvm.runMain` | CodeLens command routed into LSP-Proxy's Dape integration. |
-
-Related Emacs options and commands:
-
-| Name | Purpose |
-| --- | --- |
-| `lsp-proxy-java-file-templates` | Configure file templates for JVM source files. |
-| `lsp-proxy-java-file-templates-on-create` | Enable or disable automatic template insertion for new files. |
-| `M-x lsp-proxy-java-insert-file-template` | Insert a template manually. |
-| `M-x lsp-proxy-java-open-import-log` | Open the current workspace import log. |
+LSP-Proxy 默认使用 Eclipse JDT Language Server（`jdtls`）提供 Java 支持。
 
 ## jdtls Backend
 
-### Switch Java to jdtls
+### 默认配置
 
-Copy the built-in `[[language]]` block for Java into
-`${user-emacs-directory}/lsp-proxy/languages.toml`, change its
-`language-servers` value to `["jdtls"]`, then run `M-x lsp-proxy-restart`.
-
-`language-servers` replaces the built-in list; it does not merge with it. In
-normal use, list either `["intellij"]` or `["jdtls"]`, not both.
-
-Kotlin has its own `[[language]]` block and stays on the IntelliJ backend.
-jdtls does not serve Kotlin files.
+内置 Java 配置使用 `language-servers = ["jdtls"]`。
+用户配置中的 `language-servers` 会替换内置列表；启用 Spring 时按上文同时配置 JDT LS 和 STS4。
 
 ### Install
 
