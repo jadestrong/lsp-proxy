@@ -392,6 +392,10 @@ picked up on the next `lsp-proxy-restart'."
                                                              (lsp-proxy-java-spring-bundles))))
                                      (list (format "LSP_PROXY_SPRING_BUNDLES=%s"
                                                    (mapconcat #'identity bundles path-separator))))
+                                   (when-let* ((bundles (and (fboundp 'lsp-proxy-java-test-bundles)
+                                                             (lsp-proxy-java-test-bundles))))
+                                     (list (format "LSP_PROXY_JAVA_TEST_BUNDLES=%s"
+                                                   (mapconcat #'identity bundles path-separator))))
                                    (when (fboundp 'lsp-proxy-java-spring-environment)
                                      (lsp-proxy-java-spring-environment))
                                    (lsp-proxy--managed-server-path-environment))))

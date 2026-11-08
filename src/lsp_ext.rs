@@ -205,6 +205,33 @@ impl Request for InstallJavaDebug {
     const METHOD: &'static str = "emacs/installJavaDebug";
 }
 
+// emacs/installJavaTest
+#[derive(Debug)]
+pub enum InstallJavaTest {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaTestParams {
+    pub install_dir: String,
+    pub version: Option<String>,
+    #[serde(default)]
+    pub force: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallJavaTestResult {
+    pub version: String,
+    pub bundles: Vec<String>,
+    pub already_installed: bool,
+}
+
+impl Request for InstallJavaTest {
+    type Params = InstallJavaTestParams;
+    type Result = InstallJavaTestResult;
+    const METHOD: &'static str = "emacs/installJavaTest";
+}
+
 // emacs/installSpring
 #[derive(Debug)]
 pub enum InstallSpring {}

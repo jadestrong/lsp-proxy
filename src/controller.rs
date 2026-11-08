@@ -26,6 +26,7 @@ const REQUEST_WHITELIST: &[&str] = &[
     "emacs/listWorkspaces",
     "emacs/shutdownWorkspace",
     "emacs/cleanJavaWorkspace",
+    "emacs/installJavaTest",
     "textDocument/diagnostic",
     "codeLens/resolve",
 ];

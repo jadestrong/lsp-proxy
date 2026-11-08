@@ -77,6 +77,22 @@ Evil. To center a node with `c`, place point on its name text.
       (kbd "q") #'lsp-proxy-hierarchy-quit)))
 ```
 
+## Java Test Navigation
+
+`M-x lsp-proxy-java-go-to-test` finds test classes for the current Java class.
+From a test, use `M-x lsp-proxy-java-go-to-test-subject`, or invoke
+`lsp-proxy-java-go-to-test` with `C-u`, to return to its production class.
+The search is asynchronous. A single match opens directly; multiple matches
+use completion, prioritizing the current project and then relevance.
+Use `M-x xref-go-back` to return to the starting location.
+
+This uses the same Java Test Runner server command as VS Code. Run
+`M-x lsp-proxy-java-install-test` once, then `M-x lsp-proxy-restart` to load
+the bundles into JDTLS. VS Code itself is not required. The command searches
+class names in the Java project's test or production source roots; it does
+not navigate to an individual test method or generate missing tests.
+See [Java support](docs/java.md) for configuration.
+
 ## Prerequisites
 ### Emacs30.1 or 29 + eglot@latest (Reused some capabilities of eglot to reduce code duplication.)
 
@@ -592,6 +608,7 @@ language-servers = [
 - `lsp-proxy-remote-open-config-file`: Open the `languages.toml` config on a remote host
 - `lsp-proxy-restart`: Restart the server
 - `lsp-proxy-workspace-restart`: Restart the LSP server for the current project
+- `lsp-proxy-java-install-test`: Install Java Test Runner bundles for Go to Test
 
 ## Customization
 
@@ -609,6 +626,12 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 | `lsp-proxy-log-level` | `0` | Verbosity: 0 none, 1 basic, 2 verbose. Increase for more diagnostic output (may impact performance). |
 | `lsp-proxy-log-buffer-max` | `message-log-max` | Controls Emacs-side *lsp-proxy-log* buffer retention. `nil` disables logging, integer truncates, `t` unlimited. |
 | `lsp-proxy-show-error-log-messages` | `nil` | Also displays Error-level `window/logMessage` notifications using `message`. Other levels stay in the log buffer. Works even when log buffer recording is disabled. |
+
+### Java Test Navigation
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `lsp-proxy-java-test-install-dir` | `${lsp-proxy-install-dir}/java-test/` | Directory holding managed Java Test Runner bundles. |
+| `lsp-proxy-java-test-version` | `"0.47.0"` | Release to install and load into JDTLS. Restart lsp-proxy after changing it. |
 
 ### Change / Idle Handling
 | Variable | Default | Description |

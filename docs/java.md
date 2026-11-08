@@ -1,5 +1,32 @@
 # Java Support
 
+## Go to Test and Go to Test Subject
+
+1. Build the updated proxy and restart it to enable the new installer request.
+2. Run `M-x lsp-proxy-java-install-test` to install Java Test Runner 0.47.0.
+3. Run `M-x lsp-proxy-restart` to load its bundles into JDTLS.
+4. In a Java source file, run `M-x lsp-proxy-java-go-to-test`. From a test file,
+   use `M-x lsp-proxy-java-go-to-test-subject`, or `C-u` with the first command.
+
+This calls VS Code Java Test Runner's `vscode.java.test.navigateToTestOrTarget`
+with the current file URI and the direction. The server uses the Java project
+model to distinguish production and test source roots, and matches class names.
+For example, `Widget.java` can find `WidgetTest.java` and `WidgetTests.java`.
+Matches in the current project appear first, followed by relevance and name.
+A single match opens directly; multiple matches use completion. Use
+`M-x xref-go-back` to return. Empty results produce a message.
+
+The query is asynchronous and does not save the source buffer. It provides
+class-level navigation, as the VS Code command does. It does not create tests
+or identify individual test methods.
+
+`lsp-proxy-java-test-install-dir` controls the installation directory and
+`lsp-proxy-java-test-version` selects the release (default `"0.47.0"`). The
+installer checks the published SHA-256, installs the full `javaExtensions`
+bundle list, and preserves an existing installation if publishing fails.
+The proxy merges these bundles with Java Debug, Spring and user-configured
+JDTLS bundles at startup. No VS Code installation is required.
+
 ## Clean the Java workspace cache
 
 Run `M-x lsp-proxy-java-clean-workspace` from a local Java project buffer to

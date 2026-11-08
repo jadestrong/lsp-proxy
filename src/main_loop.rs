@@ -1066,6 +1066,9 @@ impl Application {
             Message::Request(req) if req.method == lsp_ext::InstallJavaDebug::METHOD => {
                 self.handle_install_java_debug(req);
             }
+            Message::Request(req) if req.method == lsp_ext::InstallJavaTest::METHOD => {
+                self.handle_install_java_test(req);
+            }
             Message::Request(req) if req.method == lsp_ext::InstallSpring::METHOD => {
                 self.handle_install_spring(req);
             }
@@ -1463,6 +1466,50 @@ impl Application {
                 Err(err) => {
                     Response::new_err(id, jsonrpc::ErrorCode::InternalError, format!("{err:#}"))
                 }
+            };
+            let _ = sender.send(response.into());
+        });
+    }
+
+    fn handle_install_java_test(&mut self, req: msg::Request) {
+        let params: lsp_ext::InstallJavaTestParams = match serde_json::from_value(req.params.params)
+        {
+            Ok(params) => params,
+            Err(error) => {
+                self.respond(Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InvalidParams,
+                    error.to_string(),
+                ));
+                return;
+            }
+        };
+        let directory = PathBuf::from(params.install_dir);
+        let guard = match crate::java_install::ServerInstallGuard::acquire(&directory) {
+            Ok(guard) => guard,
+            Err(error) => {
+                self.respond(create_error_response(&req.id, error.to_string()));
+                return;
+            }
+        };
+        let sender = self.sender.clone();
+        tokio::spawn(async move {
+            let _guard = guard;
+            let progress = Self::install_progress_reporter(sender.clone(), "Java Test");
+            let response = match crate::java_test::install(
+                &directory,
+                params.version.as_deref(),
+                params.force,
+                progress,
+            )
+            .await
+            {
+                Ok(result) => Response::new_ok(req.id, result),
+                Err(error) => Response::new_err(
+                    req.id,
+                    jsonrpc::ErrorCode::InternalError,
+                    format!("{error:#}"),
+                ),
             };
             let _ = sender.send(response.into());
         });

@@ -54,6 +54,7 @@
 (require 'lsp-proxy-inline-completion)
 (require 'lsp-proxy-java)
 (require 'lsp-proxy-java-jdtls)
+(require 'lsp-proxy-java-test)
 (require 'lsp-proxy-java-spring)
 (require 'lsp-proxy-org)
 (require 'lsp-proxy-copilot)

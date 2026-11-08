@@ -73,7 +73,11 @@ pub fn lombok_jar_path() -> Option<&'static str> {
 /// environment variables.
 pub fn initialize_java_debug_bundles() {
     let mut bundles = Vec::new();
-    for key in ["LSP_PROXY_JAVA_DEBUG_BUNDLES", "LSP_PROXY_SPRING_BUNDLES"] {
+    for key in [
+        "LSP_PROXY_JAVA_DEBUG_BUNDLES",
+        "LSP_PROXY_SPRING_BUNDLES",
+        "LSP_PROXY_JAVA_TEST_BUNDLES",
+    ] {
         if let Ok(val) = std::env::var(key) {
             let paths = std::env::split_paths(&val)
                 .filter(|path| !path.as_os_str().is_empty())

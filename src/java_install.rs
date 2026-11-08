@@ -235,7 +235,7 @@ use tokio::process::Command;
 pub type ProgressFn = Box<dyn Fn(Option<u32>, String) + Send + Sync>;
 
 /// Run a command, returning stdout and failing with its stderr attached.
-async fn run(argv: &[String], what: &str) -> Result<String> {
+pub(crate) async fn run(argv: &[String], what: &str) -> Result<String> {
     let (program, args) = argv
         .split_first()
         .with_context(|| format!("{what}: empty command"))?;
@@ -255,7 +255,7 @@ async fn run(argv: &[String], what: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn require_tool(what: &str, name: &str) -> Result<()> {
+pub(crate) fn require_tool(what: &str, name: &str) -> Result<()> {
     which::which(name).map(|_| ()).with_context(|| {
         format!("`{name}` was not found on PATH; it is required to install {what}")
     })
@@ -300,7 +300,7 @@ fn download_pct(current: u64, total: u64) -> u32 {
 ///
 /// Mirrors `remote::deploy`: `select!` runs the transfer and a size poller
 /// concurrently and cancels the poller as soon as the transfer resolves.
-async fn download_with_progress(
+pub(crate) async fn download_with_progress(
     name: &str,
     url: &str,
     archive: &Path,
@@ -360,7 +360,7 @@ async fn download_with_progress(
 
 /// Verify ARCHIVE against EXPECTED, shelling out because the archives are far too
 /// large to digest in memory.
-async fn verify_checksum(archive: &Path, expected: &str) -> Result<()> {
+pub(crate) async fn verify_checksum(archive: &Path, expected: &str) -> Result<()> {
     let argv = checksum_argv(archive, cfg!(windows), |name| which::which(name).is_ok())?;
     let out = run(&argv, "checksum").await?;
     let actual = parse_checksum_output(&out)
@@ -397,7 +397,7 @@ fn checksum_argv(
     }
 }
 
-fn require_checksum_tool() -> Result<()> {
+pub(crate) fn require_checksum_tool() -> Result<()> {
     checksum_argv(Path::new(""), cfg!(windows), |name| {
         which::which(name).is_ok()
     })
