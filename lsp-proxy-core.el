@@ -335,9 +335,10 @@ Normalised on arrival to match the keys used when progress is stored.")
 Servers this package installs itself live in versioned directories no
 user would want to name in `languages.toml'.  Putting their `bin/' on the
 proxy's PATH instead means a config entry can just say
-`command = \"jdtls\"' and the proxy's own `which' lookup finds it.
+`command = \"intellij-server\"' and the proxy's own `which' lookup finds it.
 
-Each installed backend contributes its own `bin/' directory.
+More than one may be present: a project can have Java on one backend and
+Kotlin on another, so each installed backend contributes its own `bin/'.
 
 PATH is fixed when the process starts, so a server installed afterwards is only
 picked up on the next `lsp-proxy-restart'."
@@ -445,7 +446,8 @@ picked up on the next `lsp-proxy-restart'."
       ;; server deliberately leaves it out of the prose.
       ;;
       ;; LABEL comes from the proxy rather than being assumed here: this channel
-      ;; carries progress for jdtls, Lombok, Java Debug and Spring installs.
+      ;; once carried only the IntelliJ server and the name was written in, which
+      ;; then mislabelled jdtls and Lombok when they came to share it.
       (lsp-proxy--set-global-status (or label "Install") message percentage)))
   ;; A server says its code lenses went stale. Nothing else signals this, and the
   ;; stale answer is usually the one a server gave while it was still starting up.
@@ -510,9 +512,15 @@ picked up on the next `lsp-proxy-restart'."
           ("end" (lsp-proxy--rem-work-done-token (lsp-proxy--fix-path-casing (lsp-proxy--normalize-path root-path)) token))))))
   ;; Build-tool import output. `lsp-proxy-java' is an optional module, so this is
   ;; guarded the same way its server path lookup is.
-  (when (and (eql method 'emacs/javaImportLog)
+  (when (and (eql method 'intellij/importLog)
              (fboundp 'lsp-proxy-java--handle-import-log))
     (lsp-proxy-java--handle-import-log msg))
+  ;; The IntelliJ server asking the editor to run one of its own commands (an
+  ;; inline rename, say) — a ModCommand that drives the UI rather than the
+  ;; document.  Optional module, so guarded like the rest.
+  (when (and (eql method 'intellij/runEditorCommand)
+             (fboundp 'lsp-proxy-java--handle-run-editor-command))
+    (lsp-proxy-java--handle-run-editor-command msg))
   ;; A language server `languages.toml' configures for this file that would not
   ;; start. Worth interrupting for: nothing about the buffer will work, and the
   ;; proxy's own log line for it is invisible at the default log level.
@@ -567,7 +575,12 @@ installing the server is not enough on its own."
     (lsp-proxy--dbind (:url url) msg
       (browse-url url)))
   (when (eql method 'window/showMessageRequest)
-    (lsp-proxy--handle-show-message-request msg)))
+    (lsp-proxy--handle-show-message-request msg))
+  ;; IntelliJ ModCommand action picker. `lsp-proxy-java' is optional, so guard the
+  ;; same way the other java-specific hooks do.
+  (when (and (eql method 'emacs/chooseAction)
+             (fboundp 'lsp-proxy-java--handle-choose-action))
+    (lsp-proxy-java--handle-choose-action msg)))
 
 (defun lsp-proxy--handle-show-message-request (msg)
   "Let the user pick one of MSG's actions, per `window/showMessageRequest'.

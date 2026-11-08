@@ -431,9 +431,32 @@ roots = [
   "build.gradle.kts",
   "settings.gradle",
   "settings.gradle.kts",
+  "BUILD.bazel",
+  "MODULE.bazel",
 ]
-# Eclipse JDT LS is the default Java backend. See docs/java.md.
-language-servers = ["jdtls"]
+# Driven by the JetBrains IntelliJ backend. To use jdtls instead, see docs/java.md.
+language-servers = [
+  "intellij"
+  # { name = "intellij", support-workspace = [
+  #   "pom.xml",
+  #   "settings.gradle",
+  # ] },
+]
+
+[[language]]
+name = "kotlin"
+language-id = "kotlin"
+file-types = ["kt", "kts"]
+roots = [
+  "build.gradle.kts",
+  "settings.gradle.kts",
+  "build.gradle",
+  "settings.gradle",
+  "pom.xml",
+  "BUILD.bazel",
+  "MODULE.bazel",
+]
+language-servers = ["intellij"]
 
 [[language]]
 name = "dart"
@@ -618,3 +641,26 @@ timeout = 120
 
 [language-server.spring-boot.config.boot-java.live-information]
 all-local-java-processes = true
+
+# JetBrains IntelliJ Language Server. Usage and field details: docs/java.md.
+[language-server.intellij]
+command = "intellij-server"
+args = ["--stdio", "--eula=34d850193ee04897"]
+# Optional launcher flags:
+# args = ["--stdio", "--eula=34d850193ee04897", "--log-level=INFO"]
+
+[language-server.intellij.environment]
+IJ_JAVA_OPTIONS = "-Xmx4g"
+# Optional server environment:
+# INTELLIJ_DATA_SHARING = "none"
+# INTELLIJ_REGION = "americas"
+
+[language-server.intellij.config]
+intellijExtensions = true
+# Optional fallback SDK for symbol resolution:
+# defaultSdk = ""
+buildTools = {}
+projects = []
+# Optional:
+# disableRocksDBWriteAheadLog = false
+runMainCodeLens = true

@@ -340,8 +340,8 @@ pub fn from_json<T: DeserializeOwned>(
 
 /// Canonical string key for the fields that decide diagnostic identity, used
 /// by `is_diagnostic_vectors_equal` to compare two diagnostic sets as
-/// multisets rather than as an ordered sequence. Language servers
-/// don't guarantee stable ordering across
+/// multisets rather than as an ordered sequence. Language servers (the
+/// IntelliJ backend included) don't guarantee stable ordering across
 /// `textDocument/publishDiagnostics` publishes of an otherwise-unchanged
 /// diagnostic set — a positional/zipped comparison would call that a
 /// "change" on reordering alone, defeating the whole point of this check

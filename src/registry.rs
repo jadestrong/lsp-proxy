@@ -69,7 +69,10 @@ pub enum NotificationFromServer {
     LogMessage(lsp::LogMessageParams),
     ProgressMessage(lsp::ProgressParams),
     ForwardRequest(lsp_ext::TsserverRequestParams),
-    /// jdtls's own status stream; translated onto `emacs/javaImportLog` downstream.
+    ImportLog(lsp_ext::ImportLogParams),
+    ChooseAction(lsp_ext::ChooseActionParams),
+    RunEditorCommand(lsp_ext::RunEditorCommandParams),
+    /// jdtls's own status stream; translated onto `intellij/importLog` downstream.
     LanguageStatus(lsp_ext::LanguageStatusParams),
     /// jdtls's own progress stream; translated onto `$/progress` downstream.
     LanguageProgressReport(lsp_ext::LanguageProgressReportParams),
@@ -103,6 +106,18 @@ impl NotificationFromServer {
             lsp_ext::TsserverRequest::METHOD => {
                 let params: Vec<lsp_ext::TsserverRequestParams> = params.parse()?;
                 Self::ForwardRequest(params.into_iter().next().unwrap())
+            }
+            lsp_ext::ImportLog::METHOD => {
+                let params: lsp_ext::ImportLogParams = params.parse()?;
+                Self::ImportLog(params)
+            }
+            lsp_ext::ChooseAction::METHOD => {
+                let params: lsp_ext::ChooseActionParams = params.parse()?;
+                Self::ChooseAction(params)
+            }
+            lsp_ext::RunEditorCommand::METHOD => {
+                let params: lsp_ext::RunEditorCommandParams = params.parse()?;
+                Self::RunEditorCommand(params)
             }
             // jdtls speaks its own status/progress channels instead of
             // `window/logMessage` + `$/progress`. Both are translated onto the
@@ -613,7 +628,7 @@ mod tests {
         .unwrap();
         assert_eq!(config["bundles"], json!(["/debug.jar", "/other.jar"]));
 
-        let untouched = with_java_debug_bundles(None, "other-server", &["/debug.jar".into()]);
+        let untouched = with_java_debug_bundles(None, "intellij", &["/debug.jar".into()]);
         assert!(untouched.is_none());
     }
 

@@ -265,7 +265,7 @@ mod builtin_config_tests {
             .expect("built-in languages.toml must deserialize");
     }
 
-    /// JDT LS must be defined and launched through its official script.
+    /// Both Java backends must be defined, and defined the way they are launched.
     ///
     /// The `command` assertion is the load-bearing one: the official launcher derives
     /// its per-project `-data` workspace from the directory it starts in, while `args`
@@ -273,7 +273,7 @@ mod builtin_config_tests {
     /// hand-assembled `java -jar ...equinox.launcher...` would therefore pin every
     /// project to one shared workspace.
     #[test]
-    fn jdtls_is_configured_as_the_default_java_backend() {
+    fn both_java_backends_are_configured() {
         let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
         let servers = &config.language_server;
 
@@ -289,22 +289,13 @@ mod builtin_config_tests {
             "args must not hand-assemble the launcher: {:?}",
             jdtls.args
         );
-        let java = config
-            .language
-            .iter()
-            .find(|l| l.language_id == "java")
-            .unwrap();
-        assert_eq!(
-            java.language_servers
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["jdtls"]
+        assert!(
+            servers.contains_key("intellij"),
+            "the existing backend must stay defined"
         );
-        assert!(!servers.contains_key("intellij"));
     }
 
-    /// jdtls must declare how it takes a java agent.
+    /// jdtls must declare how it takes a java agent, and IntelliJ must not.
     ///
     /// This is the whole switch for Lombok support: the proxy appends the rendered
     /// argument only for a server that declares one. A typo in the key name (it is
@@ -338,6 +329,15 @@ mod builtin_config_tests {
         assert_eq!(
             crate::java_install::render_agent_arg(template, "/x/lombok-1.18.48.jar"),
             "--jvm-arg=-javaagent:/x/lombok-1.18.48.jar"
+        );
+
+        assert!(
+            servers
+                .get("intellij")
+                .expect("intellij must be defined")
+                .lombok_agent_arg
+                .is_none(),
+            "the IntelliJ backend understands Lombok natively and must not be given an agent"
         );
     }
 
@@ -387,6 +387,28 @@ mod builtin_config_tests {
             .collect::<Vec<_>>(),
             "a switch here without a client handler makes the server send commands \
              nothing can run"
+        );
+    }
+
+    /// Kotlin stays on the IntelliJ backend: jdtls does not serve Kotlin at all, so
+    /// switching it would leave Kotlin files with no server rather than a different
+    /// one.
+    #[test]
+    fn kotlin_is_not_switched_to_jdtls() {
+        let config: crate::syntax::Configuration = default_lang_config().try_into().unwrap();
+        let kotlin = config
+            .language
+            .iter()
+            .find(|l| l.language_id == "kotlin")
+            .expect("kotlin must stay configured");
+        let names: Vec<&str> = kotlin
+            .language_servers
+            .iter()
+            .map(|f| f.name.as_str())
+            .collect();
+        assert!(
+            !names.contains(&"jdtls"),
+            "kotlin must not be routed to jdtls, got {names:?}"
         );
     }
 }

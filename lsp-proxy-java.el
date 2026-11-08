@@ -11,7 +11,8 @@
 
 ;; Shared Java/JVM support for lsp-proxy: virtual decompiled-source buffers,
 ;; managed backend installation, project JDK selection and local build helpers.
-;; Backend-specific protocols live in `lsp-proxy-java-jdtls'.
+;; Backend-specific protocols live in `lsp-proxy-java-jdtls' and
+;; `lsp-proxy-java-intellij'.
 ;;
 ;; The design follows TRAMP rather than VSCode's
 ;; `registerTextDocumentContentProvider'.  Two properties of TRAMP are what make
@@ -50,6 +51,9 @@
 (require 'lsp-proxy-core)
 
 (declare-function jsonrpc-request "jsonrpc")
+;; Defined in `lsp-proxy.el', which requires this file rather than the other
+;; way round; only ever reached through `lsp-proxy-java-editor-command-alist'.
+(declare-function lsp-proxy-rename "lsp-proxy")
 (declare-function lsp-proxy-workspace-restart "lsp-proxy")
 (declare-function dape "dape" (config &optional skip-compile))
 (defvar lsp-proxy-mode)
@@ -71,7 +75,7 @@ repeating the RPC within a session; it is never the buffer's source of truth.")
 ;;; Fetching
 
 (defun lsp-proxy-java--routing-uri ()
-  "Return a project-file URI the proxy can route the source-content request to.
+  "Return a project-file URI the proxy can route the `decompile' command to.
 The proxy dispatches `workspace/executeCommand' by an opened document, so we
 need the URI of some real project buffer whose language servers include a
 content provider — never the virtual source target itself (not an opened document) and
@@ -92,7 +96,8 @@ server-known file of its own, so borrow one from another active buffer)."
 ;;; Content providers
 ;;
 ;; Backend modules register URI fetchers here.  The public decompiled-file path
-;; stays common; jdtls obtains the text through `java/classFileContents'.
+;; stays common; only the protocol used to obtain the text differs between
+;; jdtls (`java/classFileContents') and the IntelliJ backend (`decompile').
 
 (defvar lsp-proxy-java--content-providers nil
   "Registered JVM source content providers.
@@ -394,14 +399,15 @@ whose extension says nothing about the decompiled language anyway.  The server's
 ;;; Server installation
 ;;
 ;; Backend modules register their install metadata here.  The download itself
-;; lives in the proxy (`src/java_install.rs`): the archives are ~50 MB
-;; for jdtls, and Rust already has tokio (so the editor stays responsive)
-;; plus an established progress pipeline that puts a
+;; lives in the proxy (`src/java_install.rs`): the archives run from ~50 MB
+;; (jdtls) to ~370 MB (IntelliJ), and Rust already has tokio (so the editor
+;; stays responsive) plus an established progress pipeline that puts a
 ;; percentage in the mode line. Everything below is the thin client half.
 ;;
-;; Backend metadata lives in `lsp-proxy-java--backends'. Each install lands
-;; in `<install-dir>/<version>/bin/'. That `bin/' is what
-;; `lsp-proxy--managed-server-path-environment' puts on the proxy's
+;; The two differ only in where the download comes from, which is entirely the
+;; proxy's problem; on this side they differ only by the rows of
+;; `lsp-proxy-java--backends'. Both land in `<install-dir>/<version>/bin/', and that
+;; `bin/' is what `lsp-proxy--managed-server-path-environment' puts on the proxy's
 ;; PATH — which is why `languages.toml' never names a path.
 ;;
 ;; The proxy's *own* installer stays in Emacs Lisp (`lsp-proxy-install.el`) — that
@@ -1052,12 +1058,29 @@ Useful for pointing a `languages.toml' entry at the managed install."
 Prepended to the proxy's PATH at startup so `languages.toml' can name each
 server plainly:
 
+  [language-server.intellij]
+  command = \"intellij-server\"
+
   [language-server.jdtls]
   command = \"jdtls\"
 
-That keeps absolute, machine-specific paths out of the config entirely."
+That keeps absolute, machine-specific paths out of the config entirely.  Both
+may be present at once: a project with Java on one backend and Kotlin on the
+IntelliJ one needs both findable."
   (delq nil (mapcar (lambda (entry) (lsp-proxy-java-backend-bin-directory (car entry)))
                     lsp-proxy-java--backends)))
+
+(defun lsp-proxy-java-server-launcher ()
+  "Return the newest managed IntelliJ server launcher, or nil if none.
+Kept for configurations that referred to it before the installer grew a
+second backend; prefer `lsp-proxy-java-backend-launcher'."
+  (lsp-proxy-java-backend-launcher "intellij"))
+
+(defun lsp-proxy-java-server-bin-directory ()
+  "Return the `bin/' directory of the newest managed IntelliJ server, or nil.
+Kept for configurations that referred to it before the installer grew a
+second backend; prefer `lsp-proxy-java-backend-bin-directory'."
+  (lsp-proxy-java-backend-bin-directory "intellij"))
 
 (defun lsp-proxy-java--version-key (launcher)
   "Return a comparable list of integers for LAUNCHER's version directory.
@@ -1097,10 +1120,14 @@ each is a failure to start, surfacing far from its cause."
 (defun lsp-proxy-java-install-server (&optional force backend)
   "Download and install a Java language server BACKEND.
 
-BACKEND is a key of `lsp-proxy-java--backends', defaulting to \"jdtls\".
-With a prefix argument FORCE, reinstall even if that version is present.
-The version comes from `lsp-proxy-java-jdtls-version`, or the latest
-milestone when that option is nil.
+BACKEND is one of the keys of `lsp-proxy-java--backends' — \"intellij\" (which
+also serves Kotlin) or \"jdtls\".  Interactively it is read from the
+minibuffer, defaulting to \"intellij\"; with a prefix argument FORCE,
+reinstall even if that version is already present.
+
+The version installed is the backend's own option
+\(`lsp-proxy-java-server-version' or `lsp-proxy-java-jdtls-version'), or the
+latest build when that is nil.
 
 The work happens in the proxy; progress is shown in the mode line while it runs
 \(hover it for the current phase).  On success the launcher path is reported.
@@ -1111,9 +1138,9 @@ install needs `lsp-proxy-restart' before it is visible."
    (list current-prefix-arg
          (completing-read "Install Java backend: "
                           (mapcar #'car lsp-proxy-java--backends)
-                          nil t nil nil "jdtls")))
+                          nil t nil nil "intellij")))
   (lsp-proxy--ensure-connection)
-  (let* ((backend (or backend "jdtls"))
+  (let* ((backend (or backend "intellij"))
          (label (lsp-proxy-java--backend-get backend :label))
          (tag (lsp-proxy-java--backend-get backend :tag))
          (version (symbol-value (lsp-proxy-java--backend-get backend :version)))
@@ -1185,140 +1212,6 @@ install needs `lsp-proxy-restart' before it is visible."
      ;; The transfer is tens to hundreds of megabytes; the default request timeout
      ;; is far too short for it.
      :timeout 3600)))
-
-;;; Build-tool import log
-
-(defcustom lsp-proxy-java-import-log-max-lines 2000
-  "Maximum number of lines to keep in the import log buffer.
-Nil disables trimming."
-  :type '(choice (const :tag "Unlimited" nil) integer)
-  :group 'lsp-proxy)
-
-(defcustom lsp-proxy-java-import-log-auto-display 'on-failure
-  "When to show the import log buffer without being asked.
-
-VS Code reveals its Build panel both when an import starts and when it fails,
-which is unobtrusive there because the panel is a docked tab. In Emacs the
-equivalent steals a window, so starting an import — which happens on every
-project open — is a poor trigger. A failure is worth interrupting for, since
-otherwise nothing tells the user why no symbol resolves."
-  :type '(choice (const :tag "Never" nil)
-                 (const :tag "When an import fails" on-failure)
-                 (const :tag "When an import starts or fails" on-start))
-  :group 'lsp-proxy)
-
-(defconst lsp-proxy-java-import-log-buffer-name "*lsp-proxy-java-import*"
-  "Name of the buffer holding build-tool import output.")
-
-(defvar lsp-proxy-java--import-log-root nil
-  "Workspace root of the entry written to the import log most recently.
-Used to insert a heading when output starts coming from a different module.")
-
-(defvar-keymap lsp-proxy-java-import-log-mode-map
-  :doc "Keymap for `lsp-proxy-java-import-log-mode'."
-  ;; Deliberately not on `g': in `special-mode' that key means revert, and erasing
-  ;; the only record of why an import failed is a poor thing to do on a reflex.
-  "C-c C-k" #'lsp-proxy-java-import-log-clear)
-
-(define-derived-mode lsp-proxy-java-import-log-mode special-mode "Import Log"
-  "Major mode for the build-tool import log.
-
-\\{lsp-proxy-java-import-log-mode-map}"
-  (buffer-disable-undo)
-  (setq-local window-point-insertion-type t))
-
-(defun lsp-proxy-java--import-log-buffer ()
-  "Return the import log buffer, creating it if necessary."
-  (or (get-buffer lsp-proxy-java-import-log-buffer-name)
-      (with-current-buffer (get-buffer-create lsp-proxy-java-import-log-buffer-name)
-        (lsp-proxy-java-import-log-mode)
-        (current-buffer))))
-
-(defun lsp-proxy-java--import-log-insert (text root)
-  "Append TEXT to the import log, attributing it to workspace ROOT."
-  (with-current-buffer (lsp-proxy-java--import-log-buffer)
-    (let ((inhibit-read-only t)
-          ;; Only follow the output in windows whose point is already at the end,
-          ;; so a user reading back through a long import is not yanked away.
-          (at-end (mapcar (lambda (win) (cons win (= (window-point win) (point-max))))
-                          (get-buffer-window-list nil nil t))))
-      (save-excursion
-        (goto-char (point-max))
-        (unless (bolp) (insert "\n"))
-        ;; A heading whenever the module changes: in a monorepo several imports run
-        ;; and their lines would otherwise be indistinguishable.
-        (when (and root (not (equal root lsp-proxy-java--import-log-root)))
-          (insert (propertize (format "%s--- %s ---\n"
-                                      (if (bobp) "" "\n")
-                                      (abbreviate-file-name root))
-                              'face 'font-lock-comment-face)))
-        (insert text "\n")
-        (setq lsp-proxy-java--import-log-root (or root lsp-proxy-java--import-log-root))
-        (when (integerp lsp-proxy-java-import-log-max-lines)
-          (let ((excess (- (line-number-at-pos (point-max))
-                           lsp-proxy-java-import-log-max-lines)))
-            (when (> excess 0)
-              (goto-char (point-min))
-              (forward-line excess)
-              (delete-region (point-min) (point))))))
-      (dolist (entry at-end)
-        (when (cdr entry)
-          (set-window-point (car entry) (point-max)))))))
-
-(defun lsp-proxy-java--handle-import-log (msg)
-  "Render an `emacs/javaImportLog' notification MSG."
-  (lsp-proxy--dbind (:type type :message message :tool tool
-                     :failed failed :succeeded succeeded :started started
-                     :rootPath root)
-      msg
-    (let ((failed (and failed (not (eq failed :json-false))))
-          (succeeded (and succeeded (not (eq succeeded :json-false))))
-          (started (and started (not (eq started :json-false)))))
-      (cond
-       (started
-        ;; Carries no message worth showing; it only marks the beginning.
-        (lsp-proxy-java--import-log-insert
-         (propertize (format "%s import started" (or tool "Build"))
-                     'face 'font-lock-comment-face)
-         root)
-        (when (eq lsp-proxy-java-import-log-auto-display 'on-start)
-          (lsp-proxy-java-open-import-log)))
-       (t
-        (lsp-proxy-java--import-log-insert
-         (if type (lsp-proxy--propertize message type) message)
-         root)
-        (cond
-         (failed
-          (when (memq lsp-proxy-java-import-log-auto-display '(on-start on-failure))
-            (lsp-proxy-java-open-import-log))
-          ;; The entry point VS Code puts in its status bar; here the echo area is
-          ;; the only place guaranteed to be visible from any buffer.
-          (lsp-proxy--warn "%s import failed. See `%s' (M-x lsp-proxy-java-open-import-log)."
-                           (or tool "Build")
-                           lsp-proxy-java-import-log-buffer-name))
-         (succeeded
-          (lsp-proxy--info "%s import finished." (or tool "Build")))))))))
-
-;;;###autoload
-(defun lsp-proxy-java-open-import-log ()
-  "Display the build-tool import log."
-  (interactive)
-  (let ((buffer (lsp-proxy-java--import-log-buffer)))
-    (with-current-buffer buffer
-      (when (= (buffer-size) 0)
-        (let ((inhibit-read-only t))
-          (insert (propertize
-                   "No import output yet.\n\nJDT LS writes here while Maven or Gradle\nresolves the project.\n"
-                   'face 'font-lock-comment-face)))))
-    (display-buffer buffer)))
-
-(defun lsp-proxy-java-import-log-clear ()
-  "Erase the import log."
-  (interactive)
-  (with-current-buffer (lsp-proxy-java--import-log-buffer)
-    (let ((inhibit-read-only t))
-      (erase-buffer))
-    (setq lsp-proxy-java--import-log-root nil)))
 
 ;;; Missing backend
 

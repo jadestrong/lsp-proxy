@@ -55,6 +55,7 @@
 (require 'lsp-proxy-java)
 (require 'lsp-proxy-java-jdtls)
 (require 'lsp-proxy-java-spring)
+(require 'lsp-proxy-java-intellij)
 (require 'lsp-proxy-org)
 (require 'lsp-proxy-copilot)
 (require 'lsp-proxy-install)

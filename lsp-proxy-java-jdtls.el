@@ -543,7 +543,8 @@ PROJECT-NAME, when non-nil, selects the exact jdtls project."
 
 (defun lsp-proxy-java--debug-populate-launch-config (config)
   "Populate CONFIG using jdtls Java Debug.
-Resolves the adapter port and launch settings for Java Dape configs."
+This is a compatibility path for older Dape configs or CodeLens handlers that
+were originally built for the IntelliJ backend."
   (setq config (plist-put config :type "java"))
   (if (not (equal (plist-get config :request) "launch"))
       (plist-put config 'port (lsp-proxy-java--debug-adapter-port))
