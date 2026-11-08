@@ -1,6 +1,7 @@
 use thiserror::Error;
 pub mod file_event;
 pub mod jsonrpc;
+pub(crate) mod progress;
 pub mod transport;
 
 pub type Result<T> = core::result::Result<T, Error>;

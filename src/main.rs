@@ -18,6 +18,7 @@ mod hierarchy;
 mod java_install;
 mod java_project;
 mod java_spring;
+mod java_workspace;
 mod job;
 mod large_file_manager;
 mod logging;

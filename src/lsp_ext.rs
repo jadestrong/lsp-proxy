@@ -738,6 +738,32 @@ impl Request for ShutdownWorkspace {
     const METHOD: &'static str = "emacs/shutdownWorkspace";
 }
 
+// emacs/cleanJavaWorkspace
+#[derive(Debug)]
+pub enum CleanJavaWorkspace {}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanJavaWorkspaceParams {
+    pub server_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanJavaWorkspaceResult {
+    pub workspace_root: String,
+    pub cache_directory: String,
+    pub backup_directory: Option<String>,
+    pub closed_documents: Vec<String>,
+    pub error: Option<String>,
+}
+
+impl Request for CleanJavaWorkspace {
+    type Params = CleanJavaWorkspaceParams;
+    type Result = CleanJavaWorkspaceResult;
+    const METHOD: &'static str = "emacs/cleanJavaWorkspace";
+}
+
 // emacs/getLanguagesConfig
 #[derive(Debug)]
 pub enum GetLanguagesConfig {}

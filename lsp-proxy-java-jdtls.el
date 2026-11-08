@@ -879,6 +879,98 @@ incremental default is what you want after an ordinary edit."
      (t (lsp-proxy--info "%s" text)))
     result))
 
+(defvar lsp-proxy-java--workspace-cleanups (make-hash-table :test 'equal)
+  "Pending Java workspace cleanups, keyed by connection and workspace root.")
+
+(defvar lsp-proxy--workspace-roots)
+(defvar lsp-proxy--server-capabilities-received)
+(declare-function lsp-proxy--remove-progress-in-workspace "lsp-proxy" (root))
+
+(defun lsp-proxy-java--clean-workspace-buffers (root paths &optional reopen)
+  "Reset buffers affected by cleaning ROOT and PATHS.
+With REOPEN, send their current contents to the replacement server."
+  (dolist (buffer (buffer-list))
+    (with-current-buffer buffer
+      (when (and (bound-and-true-p lsp-proxy-mode)
+                 buffer-file-name
+                 (or (member buffer-file-name paths)
+                     (member (lsp-proxy--decompiled-file-name-to-uri buffer-file-name)
+                             paths)
+                     (and (string-match-p "\\.java\\'" buffer-file-name)
+                          (file-in-directory-p buffer-file-name root))))
+        (setq-local lsp-proxy--buffer-opened nil
+                    lsp-proxy--server-capabilities-received nil
+                    lsp-proxy--skip-auto-open nil)
+        ;; Never revert or save a buffer as part of cache cleanup.
+        (when (and reopen (file-exists-p buffer-file-name))
+          (lsp-proxy--on-doc-open)))))
+  (when (fboundp 'lsp-proxy--remove-progress-in-workspace)
+    (lsp-proxy--remove-progress-in-workspace root)))
+
+;;;###autoload
+(defun lsp-proxy-java-clean-workspace ()
+  "Back up the current JDTLS workspace cache and reimport the project.
+
+Stop JDTLS and its Spring companion before moving the cache.  The request
+is asynchronous; affected buffers are reopened using their current text,
+including unsaved edits.  The backup path is reported in `*Messages*'.
+Run this from a local Java project buffer.  Shared caches are refused."
+  (interactive)
+  (unless (and (bound-and-true-p lsp-proxy-mode) buffer-file-name
+               (not (lsp-proxy--decompiled-file-name-to-uri buffer-file-name)))
+    (user-error "Open a Java project buffer with lsp-proxy-mode enabled first"))
+  (when (file-remote-p buffer-file-name)
+    (user-error "Java workspace cache cleanup currently requires a local project buffer"))
+  (unless (file-exists-p buffer-file-name)
+    (user-error "Save this Java file before cleaning its workspace"))
+  (lsp-proxy--ensure-connection)
+  (lsp-proxy--send-did-change)
+  (unless lsp-proxy--buffer-opened
+    (lsp-proxy--on-doc-open))
+  (let* ((connection lsp-proxy--connection)
+         (root (or (car-safe lsp-proxy--workspace-roots)
+                   (lsp-proxy-project-root)
+                   default-directory))
+         (key (list connection root)))
+    (when (gethash key lsp-proxy-java--workspace-cleanups)
+      (user-error "Java workspace cache cleanup is already in progress"))
+    (puthash key t lsp-proxy-java--workspace-cleanups)
+    (message "[lsp-proxy] Backing up Java workspace cache and restarting its servers...")
+    (condition-case error
+        (jsonrpc-async-request
+         connection 'emacs/cleanJavaWorkspace
+         (lsp-proxy--build-params
+          (list :serverName lsp-proxy-java-class-file-contents-server-name))
+         :timeout 60
+         :success-fn
+         (lambda (result)
+           (remhash key lsp-proxy-java--workspace-cleanups)
+           (when (eq connection lsp-proxy--connection)
+             (lsp-proxy-java--clean-workspace-buffers
+              (plist-get result :workspaceRoot)
+              (append (plist-get result :closedDocuments) nil) t)
+             (if-let* ((failure (plist-get result :error)))
+                 (lsp-proxy--warn "Java cache cleanup failed: %s" failure)
+               (message "[lsp-proxy] Java workspace is reimporting.%s"
+                        (if-let* ((backup (plist-get result :backupDirectory)))
+                            (format " Cache backup: %s" backup)
+                          " No existing cache needed a backup.")))))
+         :error-fn
+         (lambda (failure)
+           (remhash key lsp-proxy-java--workspace-cleanups)
+           (when (eq connection lsp-proxy--connection)
+             (lsp-proxy--warn "Java cache cleanup was rejected: %s"
+                              (or (plist-get failure :message) failure))))
+         :timeout-fn
+         (lambda ()
+           (remhash key lsp-proxy-java--workspace-cleanups)
+           (when (eq connection lsp-proxy--connection)
+             (lsp-proxy-java--clean-workspace-buffers root nil)
+             (lsp-proxy--warn "Java cleanup timed out; revisit a Java buffer to reconnect after cleanup finishes"))))
+      (error
+       (remhash key lsp-proxy-java--workspace-cleanups)
+       (signal (car error) (cdr error))))))
+
 ;;;###autoload
 (defun lsp-proxy-java-update-project-configuration ()
   "Re-read this project's build file, picking up dependency changes.

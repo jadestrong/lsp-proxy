@@ -94,6 +94,7 @@ while True:
         elif command=='sts.java.removeClasspathListener': answer(mid,'removed')
         elif command=='error': send({'id':mid,'error':{'code':-32042,'message':'callback failed','data':{'owner':name}}})
         else: answer(mid,{'server':name,'arguments':p.get('arguments',[])})
+    elif method=='exit': sys.exit(0)
     elif mid is not None: answer(mid,None)
 "#;
 

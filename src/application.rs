@@ -40,6 +40,13 @@ pub(crate) struct Application {
         std::collections::HashMap<crate::msg::RequestId, (usize, crate::msg::RequestId)>,
     pub editor: Editor,
     pub(crate) spring_bridge: crate::java_spring::Bridge,
+    pub(crate) work_done_progress: crate::lsp::progress::WorkDoneProgressTracker,
+    pub(crate) java_workspace_cleanups:
+        std::collections::HashMap<std::path::PathBuf, crate::java_workspace::CleanupContext>,
+    pub(crate) java_workspace_cleanup_tx:
+        tokio::sync::mpsc::UnboundedSender<crate::java_workspace::CleanupCompleted>,
+    pub(crate) java_workspace_cleanup_rx:
+        tokio::sync::mpsc::UnboundedReceiver<crate::java_workspace::CleanupCompleted>,
     pub jobs: Jobs,
     pub shutdown_requested: bool,
     pub large_file_manager: Arc<Mutex<LargeFileManager>>,
@@ -55,6 +62,8 @@ impl Application {
             syntax::Loader::new(syn_loader_config).expect("Cound not compile loader for config");
         let syn_loader = std::sync::Arc::new(loader);
         let editor = Editor::new(syn_loader.clone());
+        let (java_workspace_cleanup_tx, java_workspace_cleanup_rx) =
+            tokio::sync::mpsc::unbounded_channel();
 
         Application {
             sender,
@@ -62,6 +71,10 @@ impl Application {
             pending_editor_choices: std::collections::HashMap::new(),
             editor,
             spring_bridge: crate::java_spring::Bridge::default(),
+            work_done_progress: crate::lsp::progress::WorkDoneProgressTracker::default(),
+            java_workspace_cleanups: std::collections::HashMap::new(),
+            java_workspace_cleanup_tx,
+            java_workspace_cleanup_rx,
             jobs: Jobs::new(),
             shutdown_requested: false,
             large_file_manager: Arc::new(Mutex::new(LargeFileManager::new())),
@@ -147,6 +160,7 @@ impl Application {
 
         // Clear request queue
         self.req_queue = req_queue::ReqQueue::default();
+        self.work_done_progress = crate::lsp::progress::WorkDoneProgressTracker::default();
 
         log::info!("Resource cleanup complete");
     }

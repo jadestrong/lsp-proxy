@@ -25,6 +25,7 @@ const REQUEST_WHITELIST: &[&str] = &[
     "emacs/workspaceRestart",
     "emacs/listWorkspaces",
     "emacs/shutdownWorkspace",
+    "emacs/cleanJavaWorkspace",
     "textDocument/diagnostic",
     "codeLens/resolve",
 ];
@@ -749,5 +750,15 @@ mod tests {
             .entries()
             .iter()
             .any(|(id, _)| **id == second_id));
+    }
+
+    #[test]
+    fn test_java_cleanup_requests_keep_both_completion_callbacks() {
+        let mut controller = test_controller();
+        for id in [1, 2] {
+            let request = Request::new(id.into(), "emacs/cleanJavaWorkspace".into(), json!({}));
+            controller.register_request(&request, Instant::now());
+        }
+        assert_eq!(controller.req_queue.incoming.entries().len(), 2);
     }
 }

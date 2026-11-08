@@ -171,7 +171,8 @@ fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabiliti
 pub struct Client {
     id: usize,
     name: String,
-    _process: Child,
+    process: tokio::sync::Mutex<Child>,
+    pub(crate) jdtls_data_path: Option<std::path::PathBuf>,
     server_tx: UnboundedSender<Payload>,
     request_counter: AtomicU64,
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
@@ -341,6 +342,16 @@ impl Client {
             other => registry::Error::Other(anyhow::anyhow!(other)),
         })?;
 
+        let jdtls_data_path =
+            crate::java_workspace::data_path(&cmd, &name, args, &root_path, &server_envirment);
+        if jdtls_data_path
+            .as_deref()
+            .is_some_and(crate::java_workspace::is_cleaning)
+        {
+            return Err(registry::Error::Other(anyhow::anyhow!(
+                "Java workspace cache is being cleaned; retry after cleanup finishes"
+            )));
+        }
         let process = Command::new(cmd)
             .envs(server_envirment)
             .args(args)
@@ -383,7 +394,8 @@ impl Client {
         let client = Self {
             id,
             name,
-            _process: process,
+            process: tokio::sync::Mutex::new(process),
+            jdtls_data_path,
             server_tx,
             request_counter: AtomicU64::new(0),
             capabilities: OnceCell::new(),
@@ -1056,6 +1068,22 @@ impl Client {
         self.exit()
     }
 
+    /// Stop the process and reap it before any workspace cache is moved.
+    pub(crate) async fn stop_and_wait(&self) -> Result<()> {
+        if self.is_initialized() {
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.shutdown()).await;
+            let _ = self.exit();
+        }
+        let mut process = self.process.lock().await;
+        match tokio::time::timeout(std::time::Duration::from_secs(5), process.wait()).await {
+            Ok(result) => {
+                result?;
+            }
+            Err(_) => process.kill().await?,
+        }
+        Ok(())
+    }
+
     /// Forcefully shuts down the language server ignoring any errors.
     pub async fn force_shutdown(&self) -> Result<()> {
         if let Err(e) = self.shutdown().await {
@@ -1422,6 +1450,47 @@ mod definition_registration_tests {
 #[cfg(test)]
 mod tests {
     use super::publish_diagnostics_capabilities;
+
+    #[tokio::test]
+    async fn test_java_cleanup_blocks_start_and_reaps_an_unresponsive_process() {
+        use super::*;
+        let temp = tempfile::tempdir().unwrap();
+        let cache = temp.path().join("cache");
+        let args = vec![
+            "-c".into(),
+            "import time; time.sleep(3600)".into(),
+            "-data".into(),
+            cache.to_string_lossy().into_owned(),
+        ];
+        let start = || {
+            Client::start(
+                "python3",
+                &args,
+                None,
+                None,
+                HashMap::new(),
+                &[],
+                101,
+                "jdtls".into(),
+                1,
+                None,
+                None,
+            )
+        };
+        let reservation = crate::java_workspace::Reservation::acquire(&cache).unwrap();
+        assert!(start().unwrap_err().to_string().contains("being cleaned"));
+        drop(reservation);
+        let (client, _, _, _) = start().unwrap();
+        assert!(client.process.lock().await.id().is_some());
+        // Even forced termination must leave the runtime free to service requests.
+        let (stopped, heartbeat) = tokio::join!(client.stop_and_wait(), async {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            client.process.try_lock().is_err()
+        });
+        stopped.unwrap();
+        assert!(heartbeat);
+        assert!(client.process.lock().await.id().is_none());
+    }
 
     #[tokio::test]
     async fn test_hierarchy_feature_filters_and_document_capabilities() {

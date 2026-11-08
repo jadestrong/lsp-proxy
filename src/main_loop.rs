@@ -113,6 +113,9 @@ impl Application {
                 Some(callback) = self.jobs.callbacks.recv() => {
                     self.jobs.handle_callback(&mut self.editor, Ok(Some(callback)));
                 }
+                Some((root, result)) = self.java_workspace_cleanup_rx.recv() => {
+                    self.complete_java_workspace_cleanup(root, result);
+                }
                 _ = cleanup_interval.tick() => {
                     self.cleanup_expired_virtual_doc_servers().await;
                 }
@@ -219,8 +222,9 @@ impl Application {
                             data: None,
                         })
                     }
-                    Ok(MethodCall::WorkDoneProgressCreate(_params)) => {
+                    Ok(MethodCall::WorkDoneProgressCreate(params)) => {
                         let language_server = language_server!();
+                        self.work_done_progress.create(server_id, params.token);
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::ApplyWorkspaceEdit(params)) => {
@@ -516,6 +520,7 @@ impl Application {
                     }
                     NotificationFromServer::InitializationFailed(message) => {
                         self.spring_bridge.remove_client(server_id);
+                        self.work_done_progress.remove_server(server_id);
                         let failed_server_id = server_id;
                         let failed_server_name = self
                             .editor
@@ -587,6 +592,7 @@ impl Application {
                     }
                     NotificationFromServer::Exit => {
                         self.spring_bridge.remove_client(server_id);
+                        self.work_done_progress.remove_server(server_id);
                         let language_server = language_server!();
                         for doc in self.editor.documents_mut() {
                             doc.clear_all_diagnostics(server_id);
@@ -734,6 +740,13 @@ impl Application {
                     }
                     NotificationFromServer::ProgressMessage(params) => {
                         let language_server = language_server!();
+                        if !self.work_done_progress.should_forward(server_id, &params) {
+                            debug!(
+                                "Ignoring late progress for completed token {:?} from server {}",
+                                params.token, server_id
+                            );
+                            return;
+                        }
                         self.send_notification::<lsp_ext::CustomProgress>(
                             lsp_ext::CustomProgressParams {
                                 root_path: language_server.root_path.to_string_lossy().to_string(),
@@ -839,6 +852,21 @@ impl Application {
     }
 
     async fn handle_msg(&mut self, msg: Message) -> Result<()> {
+        let uri = match &msg {
+            Message::Request(request) => request.params.uri.as_deref(),
+            Message::Notification(notification) => notification.params.uri.as_deref(),
+            _ => None,
+        };
+        if uri.is_some_and(|uri| self.java_workspace_cleanup_blocks(uri)) {
+            if let Message::Request(request) = msg {
+                self.respond(Response::new_err(
+                    request.id,
+                    jsonrpc::ErrorCode::InvalidRequest,
+                    "Java workspace cache cleanup is in progress; retry when it finishes".into(),
+                ));
+            }
+            return Ok(());
+        }
         match msg {
             Message::Request(req)
                 if self.shutdown_requested
@@ -1015,6 +1043,11 @@ impl Application {
             }
             Message::Request(req) if req.method == lsp_ext::WorkspaceRestart::METHOD => {
                 self.handle_workspace_restart(&req);
+            }
+            Message::Request(req) if req.method == lsp_ext::CleanJavaWorkspace::METHOD => {
+                if let Err(error) = self.begin_java_workspace_cleanup(&req) {
+                    self.respond(create_error_response(&req.id, error.to_string()));
+                }
             }
             Message::Request(req) if req.method == lsp_ext::ListWorkspaces::METHOD => {
                 self.handle_list_workspaces(&req);
@@ -1590,6 +1623,164 @@ impl Application {
         ));
     }
 
+    fn java_workspace_cleanup_blocks(&self, uri: &str) -> bool {
+        self.java_workspace_cleanups.iter().any(|(root, context)| {
+            context.closed_documents.iter().any(|path| {
+                path == uri
+                    || lsp_types::Url::from_file_path(path)
+                        .ok()
+                        .as_ref()
+                        .is_some_and(|url| url.as_str() == uri)
+            }) || lsp_types::Url::parse(uri)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+                .is_some_and(|path| {
+                    path.extension()
+                        .is_some_and(|extension| extension == "java")
+                        && crate::utils::path::canonicalize(path).starts_with(root)
+                })
+        })
+    }
+
+    fn begin_java_workspace_cleanup(&mut self, req: &msg::Request) -> Result<()> {
+        let params: lsp_ext::CleanJavaWorkspaceParams =
+            serde_json::from_value(req.params.params.clone())?;
+        let server_name = params.server_name.as_deref().unwrap_or("jdtls");
+        let doc = self.get_working_document(req).map_err(|_| {
+            anyhow::anyhow!("Open a Java project buffer before cleaning its workspace")
+        })?;
+        let jdt = doc
+            .get_all_language_servers()
+            .into_iter()
+            .find(|client| client.name() == server_name)
+            .ok_or_else(|| anyhow::anyhow!("No {} server serves this document", server_name))?;
+        let cache = jdt.jdtls_data_path.clone().ok_or_else(|| anyhow::anyhow!(
+            "Cannot determine JDTLS cache directory; configure an explicit -data argument for this launcher"
+        ))?;
+        let root = crate::utils::path::canonicalize(&jdt.root_path);
+        if Self::client_workspace_roots(&jdt).len() > 1 {
+            anyhow::bail!("JDTLS serves several workspaces; cannot clean only this workspace");
+        }
+        for other in self.editor.language_servers.iter_clients() {
+            if other.id() != jdt.id()
+                && other.jdtls_data_path.as_ref().is_some_and(|path| {
+                    crate::java_workspace::normalized(path)
+                        == crate::java_workspace::normalized(&cache)
+                })
+            {
+                anyhow::bail!("Another JDTLS server shares this cache; configure separate -data directories before cleaning");
+            }
+        }
+        crate::java_workspace::validate_cache(&cache, &root)?;
+        let reservation = crate::java_workspace::Reservation::acquire(&cache)?;
+        let mut clients = vec![jdt.clone()];
+        // STS must re-register its classpath listeners against the replacement JDT.
+        for client in self.editor.language_servers.get_project_clients(&jdt) {
+            if client.name() == "spring-boot" {
+                if Self::client_workspace_roots(&client).len() > 1 {
+                    anyhow::bail!(
+                        "Spring server serves several workspaces; cannot clean only this workspace"
+                    );
+                }
+                clients.push(client);
+            }
+        }
+        let ids: HashSet<_> = clients.iter().map(|client| client.id()).collect();
+        let document_ids: Vec<_> = self
+            .editor
+            .documents()
+            .filter_map(|doc| {
+                Self::document_clients(doc)
+                    .iter()
+                    .any(|client| ids.contains(&client.id()))
+                    .then_some(doc.id())
+            })
+            .collect();
+        let mut closed_documents = Vec::new();
+        for id in document_ids {
+            if let Some(doc) = self.editor.documents.get(&id) {
+                closed_documents.push(
+                    doc.path()
+                        .map(|path| path.to_string_lossy().to_string())
+                        .unwrap_or_else(|| doc.uri.to_string()),
+                );
+                // Other servers may also serve this Java document. Close/reopen
+                // that document, while keeping those unrelated processes alive.
+                for client in Self::document_clients(doc) {
+                    let _ = client.text_document_did_close(lsp_types::DidCloseTextDocumentParams {
+                        text_document: lsp_types::TextDocumentIdentifier {
+                            uri: doc.uri.clone(),
+                        },
+                    });
+                }
+            }
+            self.editor.remove_document_by_id(id);
+        }
+        for client in &clients {
+            self.spring_bridge.remove_client(client.id());
+            self.work_done_progress.remove_server(client.id());
+            self.editor.language_servers.remove_by_id(client.id());
+        }
+        handlers::request::clear_completion_cache();
+        self.java_workspace_cleanups.insert(
+            root.clone(),
+            crate::java_workspace::CleanupContext {
+                request_id: req.id.clone(),
+                cache: cache.clone(),
+                closed_documents,
+                _reservation: reservation,
+            },
+        );
+        let sender = self.java_workspace_cleanup_tx.clone();
+        tokio::spawn(async move {
+            let result = async {
+                for result in futures_util::future::join_all(
+                    clients.iter().map(|client| client.stop_and_wait()),
+                )
+                .await
+                {
+                    result.map_err(|error| error.to_string())?;
+                }
+                let workspace = root.clone();
+                tokio::task::spawn_blocking(move || {
+                    crate::java_workspace::backup_cache(&cache, &workspace)
+                })
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| format!("{error:#}"))
+            }
+            .await;
+            let _ = sender.send((root, result));
+        });
+        Ok(())
+    }
+
+    fn complete_java_workspace_cleanup(
+        &mut self,
+        root: PathBuf,
+        result: Result<Option<PathBuf>, String>,
+    ) {
+        let Some(context) = self.java_workspace_cleanups.remove(&root) else {
+            return;
+        };
+        let (backup, error) = match result {
+            Ok(backup) => (backup, None),
+            Err(error) => (None, Some(error)),
+        };
+        // Release the reservation before Emacs reopens documents and starts JDT.
+        drop(context._reservation);
+        self.respond(Response::new_ok(
+            context.request_id,
+            lsp_ext::CleanJavaWorkspaceResult {
+                workspace_root: root.to_string_lossy().to_string(),
+                cache_directory: context.cache.to_string_lossy().to_string(),
+                backup_directory: backup.map(|path| path.to_string_lossy().to_string()),
+                closed_documents: context.closed_documents,
+                error,
+            },
+        ));
+    }
+
     fn handle_shutdown_workspace(&mut self, req: &msg::Request) {
         let params = match from_json::<lsp_ext::ShutdownWorkspaceParams>(
             lsp_ext::ShutdownWorkspace::METHOD,
@@ -1713,6 +1904,7 @@ impl Application {
             } else {
                 shutdown_servers.push(Self::workspace_language_server_info(&client, false, 0));
                 self.spring_bridge.remove_client(client_id);
+                self.work_done_progress.remove_server(client_id);
                 self.editor.language_servers.remove_by_id(client_id);
                 tokio::spawn(async move {
                     let _ = client.shutdown_and_exit().await;
@@ -1938,6 +2130,7 @@ impl Application {
                     .collect();
                 for id in &old_client_ids {
                     self.spring_bridge.remove_client(*id);
+                    self.work_done_progress.remove_server(*id);
                 }
                 match self
                     .editor
@@ -1987,6 +2180,229 @@ impl Application {
                 "No uri provided".to_string(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod java_workspace_cleanup_tests {
+    use super::*;
+    use serde_json::json;
+    use std::fs;
+
+    fn app() -> (Application, crossbeam_channel::Receiver<Message>) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        (
+            Application::new(
+                sender,
+                syntax::Configuration {
+                    language: vec![serde_json::from_value(json!({
+                        "name":"java", "file-types":["java"],
+                        "language-servers":["jdtls", "spring-boot", "other"]
+                    }))
+                    .unwrap()],
+                    language_server: Default::default(),
+                },
+            ),
+            receiver,
+        )
+    }
+
+    fn cache(path: &std::path::Path) {
+        fs::create_dir_all(path.join(".metadata/.plugins/org.eclipse.jdt.core")).unwrap();
+        fs::write(path.join(".metadata/.lock"), "").unwrap();
+        fs::write(
+            path.join(".metadata/.plugins/org.eclipse.jdt.core/index"),
+            "old",
+        )
+        .unwrap();
+    }
+
+    async fn attach(
+        app: &mut Application,
+        name: &str,
+        id: usize,
+        root: &std::path::Path,
+        cache: Option<PathBuf>,
+    ) -> Arc<Client> {
+        let uri = lsp_types::Url::from_file_path(root.join("App.java")).unwrap();
+        let (mut client, _) = crate::test_support::client(name, id, uri.as_str(), true).await;
+        let mutable = Arc::get_mut(&mut client).unwrap();
+        mutable.root_path = root.to_owned();
+        mutable.jdtls_data_path = cache;
+        app.editor
+            .language_servers
+            .insert_test_client(client.clone());
+        let doc_id = app
+            .editor
+            .document_by_uri(&uri)
+            .map(|doc| doc.id())
+            .unwrap_or_else(|| app.editor.new_document(&uri, Some("java")).id());
+        app.editor
+            .documents
+            .get_mut(&doc_id)
+            .unwrap()
+            .language_servers
+            .insert(name.into(), client.clone());
+        client
+    }
+
+    fn request(root: &std::path::Path) -> msg::Request {
+        let mut request = crate::test_support::request(lsp_ext::CleanJavaWorkspace::METHOD, None);
+        request.params.uri = Some(
+            lsp_types::Url::from_file_path(root.join("App.java"))
+                .unwrap()
+                .into(),
+        );
+        request.params.params = json!({"serverName":"jdtls"});
+        request
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_dispatch_is_async_and_releases_cache_before_reply() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("App.java"), "saved").unwrap();
+        let data = temp.path().join("cache");
+        cache(&data);
+        let (mut app, receiver) = app();
+        let jdt = attach(&mut app, "jdtls", 1, &root, Some(data.clone())).await;
+        let spring = attach(&mut app, "spring-boot", 2, &root, None).await;
+        let other_root = temp.path().join("other");
+        let other = attach(&mut app, "other", 3, &other_root, None).await;
+        app.handle_msg(request(&root).into()).await.unwrap();
+        assert!(
+            receiver.try_recv().is_err(),
+            "must reply only after the worker completes"
+        );
+        assert!(crate::java_workspace::is_cleaning(&data));
+        assert!(data.exists());
+        assert_eq!(app.editor.documents().count(), 1);
+        assert!(app.editor.language_servers.get_by_id(jdt.id()).is_none());
+        assert!(app.editor.language_servers.get_by_id(spring.id()).is_none());
+        assert!(app.editor.language_servers.get_by_id(other.id()).is_some());
+
+        // A second cleanup cannot replace the first one's pending context.
+        app.handle_msg(request(&root).into()).await.unwrap();
+        let Message::Response(rejected) = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        assert!(rejected.error.is_some());
+        assert_eq!(app.java_workspace_cleanups.len(), 1);
+        // The proxy still services workspace queries while waiting for termination.
+        app.handle_msg(crate::test_support::request(lsp_ext::ListWorkspaces::METHOD, None).into())
+            .await
+            .unwrap();
+        let Message::Response(list) = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        assert!(list.error.is_none());
+
+        let (completed_root, result) = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            app.java_workspace_cleanup_rx.recv(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result.is_ok(), "{result:?}");
+        app.complete_java_workspace_cleanup(completed_root, result);
+        assert!(!crate::java_workspace::is_cleaning(&data));
+        let Message::Response(response) = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        let result: lsp_ext::CleanJavaWorkspaceResult =
+            serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(
+            result.closed_documents,
+            vec![root.join("App.java").to_string_lossy()]
+        );
+        assert!(result.error.is_none());
+        assert_eq!(
+            fs::read_to_string(
+                PathBuf::from(result.backup_directory.unwrap())
+                    .join(".metadata/.plugins/org.eclipse.jdt.core/index")
+            )
+            .unwrap(),
+            "old"
+        );
+        assert!(!data.exists());
+        assert_eq!(fs::read_to_string(root.join("App.java")).unwrap(), "saved");
+        assert!(app.java_workspace_cleanups.is_empty());
+        other.stop_and_wait().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_shared_cache_and_multiple_workspaces_reject_before_stopping() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let other_root = temp.path().join("other");
+        let data = temp.path().join("cache");
+        cache(&data);
+        let (mut app, _) = app();
+        let jdt = attach(&mut app, "jdtls", 1, &root, Some(data.clone())).await;
+        let other = attach(&mut app, "jdtls", 2, &other_root, Some(data.clone())).await;
+        assert!(app
+            .begin_java_workspace_cleanup(&request(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("shares this cache"));
+        assert_eq!(app.editor.documents().count(), 2);
+        assert!(app.java_workspace_cleanups.is_empty());
+        assert!(data.exists());
+        app.editor.language_servers.remove_by_id(other.id());
+        other.stop_and_wait().await.unwrap();
+        *jdt.workspace_folders.lock() = [&root, &other_root]
+            .into_iter()
+            .map(|root| lsp_types::WorkspaceFolder {
+                uri: lsp_types::Url::from_directory_path(root).unwrap(),
+                name: "project".into(),
+            })
+            .collect();
+        assert!(app
+            .begin_java_workspace_cleanup(&request(&root))
+            .unwrap_err()
+            .to_string()
+            .contains("several workspaces"));
+        assert!(app.editor.language_servers.get_by_id(jdt.id()).is_some());
+        assert!(!crate::java_workspace::is_cleaning(&data));
+        jdt.stop_and_wait().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_worker_failure_returns_documents_to_reopen_and_releases_reservation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("project");
+        let data = temp.path().join("cache");
+        cache(&data);
+        // Valid workspace metadata, but an unsafe lock discovered by the worker.
+        let lock = data.join(".metadata/.lock");
+        fs::remove_file(&lock).unwrap();
+        fs::write(temp.path().join("external-lock"), "keep").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("external-lock"), lock).unwrap();
+        let (mut app, receiver) = app();
+        attach(&mut app, "jdtls", 1, &root, Some(data.clone())).await;
+        app.handle_msg(request(&root).into()).await.unwrap();
+        let (root, result) = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            app.java_workspace_cleanup_rx.recv(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(result.is_err());
+        app.complete_java_workspace_cleanup(root, result);
+        let Message::Response(response) = receiver.try_recv().unwrap() else {
+            panic!()
+        };
+        let result: lsp_ext::CleanJavaWorkspaceResult =
+            serde_json::from_value(response.result.unwrap()).unwrap();
+        assert_eq!(result.closed_documents.len(), 1);
+        assert!(result.error.unwrap().contains("symlinked workspace lock"));
+        assert!(result.backup_directory.is_none());
+        assert!(data.exists());
+        assert!(!crate::java_workspace::is_cleaning(&data));
     }
 }
 
@@ -2081,6 +2497,77 @@ mod install_lifecycle_tests {
         assert!(receiver.try_recv().is_err());
         drop(guard);
         assert!(crate::java_install::ServerInstallGuard::acquire(directory.path()).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod work_done_progress_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_spring_late_begin_is_filtered_before_reaching_emacs() {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let mut app = Application::new(
+            sender,
+            syntax::Configuration {
+                language: vec![],
+                language_server: Default::default(),
+            },
+        );
+        let (spring, _) = crate::test_support::client("spring", 1, "file:///result", true).await;
+        app.editor
+            .language_servers
+            .insert_test_client(spring.clone());
+        let (debounce, _) = unbounded_channel();
+        let token = "index-java-source-files-task-funding-client-5";
+        // This is the wire order in the reported Spring Tools log: create,
+        // report through 100%, end, then begin from the create response callback.
+        for (id, value) in [
+            (Some("create-1"), Value::Null),
+            (None, json!({"kind":"report","percentage":100})),
+            (None, json!({"kind":"end"})),
+            (
+                None,
+                json!({"kind":"begin","title":"Indexing","percentage":0}),
+            ),
+            (None, json!({"kind":"report","percentage":1})),
+            // A new create using the same token opens a new valid lifecycle.
+            (Some("create-2"), Value::Null),
+            (
+                None,
+                json!({"kind":"begin","title":"Indexing again","percentage":0}),
+            ),
+            (None, json!({"kind":"end"})),
+        ] {
+            let call = if let Some(id) = id {
+                json!({"jsonrpc":"2.0","id":id,"method":"window/workDoneProgress/create",
+                    "params":{"token":token}})
+            } else {
+                json!({"jsonrpc":"2.0","method":"$/progress",
+                    "params":{"token":token,"value":value}})
+            };
+            app.handle_language_server_message(
+                serde_json::from_value(call).unwrap(),
+                spring.id(),
+                debounce.clone(),
+            )
+            .await;
+        }
+        let notifications: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(notifications.len(), 4);
+        for (message, kind) in notifications.iter().zip(["report", "end", "begin", "end"]) {
+            let Message::Notification(notification) = message else {
+                panic!("expected a progress notification")
+            };
+            assert_eq!(notification.method, "$/progress");
+            assert_eq!(notification.params.params["params"]["token"], token);
+            assert_eq!(notification.params.params["params"]["value"]["kind"], kind);
+            assert_eq!(
+                notification.params.params["rootPath"],
+                spring.root_path.to_string_lossy().as_ref()
+            );
+        }
+        drop(spring.shutdown_and_exit());
     }
 }
 
