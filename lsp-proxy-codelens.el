@@ -12,12 +12,10 @@
 ;; CodeLens functionality for lsp-proxy.  Displays CodeLens information as
 ;; overlays above code and supports interaction via mouse clicks and
 ;; keyboard.  Modeled after `lsp-lens.el' from lsp-mode
-;; (https://github.com/emacs-lsp/lsp-mode): on every refresh all lens
-;; overlays are deleted and rebuilt from scratch at positions computed
-;; directly from the LSP coordinates, rather than trying to reuse and
-;; reposition overlays across edits.  That trades a full rebuild per
-;; refresh for never having to reason about overlay drift, which is a far
-;; better trade here since lenses refresh at most once per debounce tick.
+;; (https://github.com/emacs-lsp/lsp-mode): when the presentation changes,
+;; overlays are rebuilt at positions computed directly from the LSP
+;; coordinates.  Unchanged presentations keep their overlays, and edits
+;; are coalesced until Emacs is idle before querying the server again.
 ;;
 ;; Adapted for lsp-proxy's transport: every request goes through the single
 ;; proxy connection instead of talking to a language server directly, so
@@ -62,8 +60,9 @@ Example: `(`java-mode' `java-ts-mode')'"
     (repeat :tag "Enabled only for specific modes" symbol))
   :group 'lsp-proxy)
 
-(defcustom lsp-proxy-codelens-debounce-interval 0.001
-  "Debounce interval for refreshing CodeLens after document changes."
+(defcustom lsp-proxy-codelens-debounce-interval 0.5
+  "Seconds Emacs must be idle before a scheduled CodeLens refresh.
+Edits, scrolling and server refresh requests are coalesced during input."
   :type 'float
   :group 'lsp-proxy)
 
@@ -120,10 +119,8 @@ adjust to taste if the default doesn't look centered for you."
 (defvar-local lsp-proxy-codelens--overlays nil
   "Lens overlays currently displayed in the buffer.")
 
-(defvar-local lsp-proxy-codelens--last-count nil
-  "The number of lenses the last time they were rendered.
-Used so a change in count (e.g. a lens disappearing) is always
-re-rendered, even when every remaining lens is already resolved.")
+(defvar-local lsp-proxy-codelens--display-signature nil
+  "Snapshot of the last rendered CodeLens presentation.")
 
 (defvar-local lsp-proxy-codelens--refresh-timer nil
   "Debounce timer for `lsp-proxy-codelens-refresh'.")
@@ -135,6 +132,21 @@ re-rendered, even when every remaining lens is already resolved.")
   "Cache of the raw CodeLens items from the last `textDocument/codeLens'.
 Each element is a plist with `:lsp_item'/`:language_server_id'
 /`:language_server_name', mutated in place as resolve requests complete.")
+
+(defvar-local lsp-proxy-codelens--cache-docver nil
+  "Document version of `lsp-proxy-codelens--backend-cache'.")
+
+(defvar-local lsp-proxy-codelens--cache-generation nil
+  "Request generation of `lsp-proxy-codelens--backend-cache'.")
+
+(defvar-local lsp-proxy-codelens--generation 0
+  "Request generation, advanced on refetch and buffer cleanup.")
+
+(defun lsp-proxy-codelens--current-response-p (docver generation)
+  "Return non-nil if DOCVER and GENERATION still belong to this buffer."
+  (and lsp-proxy-codelens-mode
+       (= generation lsp-proxy-codelens--generation)
+       (eq docver (lsp-proxy--doc-version))))
 
 (defsubst lsp-proxy-codelens--item-lsp (item)
   "Return the raw LSP CodeLens carried by ITEM."
@@ -202,7 +214,8 @@ Default method returns CODELENS unchanged."
   "Resolve ITEMS still missing a `:command' that are inside the window.
 CALLBACK is invoked with ITEMS and DOCVER once every item in ITEMS is
 either resolved or out of the window again."
-  (let ((source-buffer (current-buffer)))
+  (let ((source-buffer (current-buffer))
+        (generation lsp-proxy-codelens--generation))
     (dolist (item (seq-filter #'lsp-proxy-codelens--not-loaded-p items))
       (plist-put item :_pending t)
       (lsp-proxy--async-request
@@ -214,8 +227,7 @@ either resolved or out of the window again."
                      (when (buffer-live-p source-buffer)
                        (with-current-buffer source-buffer
                          (plist-put item :_pending nil)
-                         (when (and lsp-proxy-codelens-mode
-                                    (eq docver (lsp-proxy--doc-version)))
+                         (when (lsp-proxy-codelens--current-response-p docver generation)
                            (plist-put (lsp-proxy-codelens--item-lsp item) :command
                                       (lsp-proxy-codelens--item-command resolved))
                            (when (seq-every-p #'lsp-proxy-codelens--present-p items)
@@ -243,8 +255,9 @@ which case the CodeLens list itself is re-fetched; otherwise the existing
 unresolved items (e.g. after scrolling)."
   (if modified-p
       (let ((docver (lsp-proxy--doc-version))
-            (source-buffer (current-buffer)))
-        (setq lsp-proxy-codelens--backend-cache nil)
+            (source-buffer (current-buffer))
+            (generation (cl-incf lsp-proxy-codelens--generation)))
+        ;; Keep the previous cache and overlays until current data arrives.
         (lsp-proxy--async-request
          'textDocument/codeLens
          (lsp-proxy--build-params (list :textDocument (lsp-proxy--TextDocumentIdentifier)))
@@ -252,19 +265,24 @@ unresolved items (e.g. after scrolling)."
          (lambda (codelens-list)
            (when (buffer-live-p source-buffer)
              (with-current-buffer source-buffer
-               (when (and lsp-proxy-codelens-mode
-                          (eq docver (lsp-proxy--doc-version)))
+               (when (lsp-proxy-codelens--current-response-p docver generation)
                  (let ((uri (plist-get (lsp-proxy--TextDocumentIdentifier) :uri)))
                    (setq codelens-list (lsp-proxy-codelens-provide-codelens codelens-list uri)))
-                 (setq lsp-proxy-codelens--backend-cache (append codelens-list nil))
+                 (setq lsp-proxy-codelens--backend-cache (append codelens-list nil)
+                       lsp-proxy-codelens--cache-docver docver
+                       lsp-proxy-codelens--cache-generation generation)
                  (if (seq-every-p #'lsp-proxy-codelens--item-command lsp-proxy-codelens--backend-cache)
                      (funcall callback lsp-proxy-codelens--backend-cache docver)
                    (lsp-proxy-codelens--fetch-missing lsp-proxy-codelens--backend-cache callback docver))))))
          :error-fn #'ignore))
-    (if (seq-every-p #'lsp-proxy-codelens--present-p lsp-proxy-codelens--backend-cache)
-        (funcall callback lsp-proxy-codelens--backend-cache (lsp-proxy--doc-version))
-      (lsp-proxy-codelens--fetch-missing lsp-proxy-codelens--backend-cache callback
-                                          (lsp-proxy--doc-version)))))
+    ;; Scrolling while the document has changed must not resolve or repaint
+    ;; cached LSP coordinates against the new text.
+    (when (and (eq lsp-proxy-codelens--cache-docver (lsp-proxy--doc-version))
+               (eq lsp-proxy-codelens--cache-generation lsp-proxy-codelens--generation))
+      (if (seq-every-p #'lsp-proxy-codelens--present-p lsp-proxy-codelens--backend-cache)
+          (funcall callback lsp-proxy-codelens--backend-cache lsp-proxy-codelens--cache-docver)
+        (lsp-proxy-codelens--fetch-missing lsp-proxy-codelens--backend-cache callback
+                                         lsp-proxy-codelens--cache-docver)))))
 
 ;;; UI Display System
 
@@ -353,43 +371,46 @@ that line is edited."
         (overlay-put ov 'before-string (concat indent str "\n"))))
     ov))
 
-(defun lsp-proxy-codelens--display (items &optional _docver)
+(defun lsp-proxy-codelens--display (items &optional docver)
   "Render ITEMS (a flat list of wrapped CodeLens) as lens overlays.
-Called as the callback of `lsp-proxy-codelens--backend'/`--fetch-missing',
-which also pass the docver the data was fetched for; that version match
-is already enforced upstream (in the fetch's `:success-fn'), so _DOCVER
-is accepted here only to match the callback signature, not used.
-
-Mirrors `lsp-lens--display': rerenders when any ITEM hasn't been through
-this function yet (marked via `:_processed' on first pass) or when the
-lens count is unchanged from last time, and skips an otherwise-redundant
-rebuild when the count differs but every item here has already been
-processed once before."
-  (let ((scroll-preserve-screen-position t))
-    (when (or (seq-some (lambda (item) (not (plist-get item :_processed))) items)
-              (eq (length items) lsp-proxy-codelens--last-count)
-              (not items))
-      (setq lsp-proxy-codelens--last-count (length items))
-      (mapc #'delete-overlay lsp-proxy-codelens--overlays)
-      (setq lsp-proxy-codelens--overlays
-            (thread-last
-              items
-              (seq-filter #'lsp-proxy-codelens--item-command)
-              (mapcar (lambda (item) (plist-put item :_processed t)))
-              (seq-group-by #'lsp-proxy-codelens--item-line)
-              (mapcar
-               (lambda (line-items)
-                 (let* ((sorted (seq-sort-by
-                                 (lambda (item)
-                                   (plist-get (plist-get (lsp-proxy-codelens--item-range item) :start)
-                                             :character))
-                                 #'<
-                                 (cdr line-items)))
-                        (tokens (mapcar #'lsp-proxy-codelens--token sorted)))
-                   (lsp-proxy-codelens--show
-                    (mapconcat #'identity tokens (propertize "|" 'face 'lsp-proxy-codelens-face))
-                    (lsp-proxy-codelens--item-point (car sorted))
-                    sorted)))))))))
+DOCVER, when supplied by an asynchronous callback, must still be current.
+Rebuild only when resolved commands, positions, text or display settings
+change; an unchanged cache redisplay must not disturb window layout."
+  (when (or (null docver) (eq docver (lsp-proxy--doc-version)))
+    (let* ((scroll-preserve-screen-position t)
+           (resolved (seq-filter #'lsp-proxy-codelens--item-command items))
+           (window (lsp-proxy-codelens--window))
+           (signature
+            (list (buffer-chars-modified-tick)
+                  lsp-proxy-codelens-place-position
+                  lsp-proxy-codelens-icon-height lsp-proxy-codelens-icon-v-adjust
+                  (and window (window-body-width window))
+                  (mapcar (lambda (item)
+                            (list (lsp-proxy-codelens--item-point item)
+                                  (lsp-proxy-codelens--item-ls-id item)
+                                  (lsp-proxy-codelens--item-command item)))
+                          resolved))))
+      (unless (equal signature lsp-proxy-codelens--display-signature)
+        ;; Commands are mutated in place during resolve; retain a snapshot.
+        (setq lsp-proxy-codelens--display-signature (copy-tree signature t))
+        (mapc #'delete-overlay lsp-proxy-codelens--overlays)
+        (setq lsp-proxy-codelens--overlays
+              (thread-last
+               resolved
+               (seq-group-by #'lsp-proxy-codelens--item-line)
+               (mapcar
+                (lambda (line-items)
+                  (let* ((sorted (seq-sort-by
+                                  (lambda (item)
+                                    (plist-get (plist-get (lsp-proxy-codelens--item-range item) :start)
+                                               :character))
+                                  #'<
+                                  (cdr line-items)))
+                         (tokens (mapcar #'lsp-proxy-codelens--token sorted)))
+                    (lsp-proxy-codelens--show
+                     (mapconcat #'identity tokens (propertize "|" 'face 'lsp-proxy-codelens-face))
+                     (lsp-proxy-codelens--item-point (car sorted))
+                     sorted))))))))))
 
 ;;; Resolve / refresh orchestration
 
@@ -407,7 +428,7 @@ idle tick) is what triggered this refresh."
   (when lsp-proxy-codelens--refresh-timer
     (cancel-timer lsp-proxy-codelens--refresh-timer))
   (setq lsp-proxy-codelens--refresh-timer
-        (run-with-timer
+        (run-with-idle-timer
          lsp-proxy-codelens-debounce-interval nil
          (lambda (buf)
            (when (buffer-live-p buf)
@@ -444,7 +465,7 @@ by, and a refresh arrives about once per project import."
       (with-current-buffer buf
         (when (and (bound-and-true-p lsp-proxy-codelens-mode)
                    (bound-and-true-p lsp-proxy-mode))
-          (lsp-proxy-codelens-refresh t))))))
+          (lsp-proxy-codelens--schedule-refresh t))))))
 
 ;;; Interaction
 
@@ -549,7 +570,8 @@ If no CodeLens is found, show a message."
   "Delete all lens overlays."
   (let ((scroll-preserve-screen-position t))
     (mapc #'delete-overlay lsp-proxy-codelens--overlays)
-    (setq lsp-proxy-codelens--overlays nil)))
+    (setq lsp-proxy-codelens--overlays nil
+          lsp-proxy-codelens--display-signature nil)))
 
 (defun lsp-proxy-codelens--setup-buffer ()
   "Setup CodeLens for current buffer."
@@ -559,8 +581,6 @@ If no CodeLens is found, show a message."
     ;; reinitializing buffer-local state, so re-setup never leaves orphan
     ;; after-strings behind.
     (lsp-proxy-codelens--cleanup-buffer)
-    (setq lsp-proxy-codelens--backend-cache nil
-          lsp-proxy-codelens--last-count nil)
     (add-hook 'after-change-functions #'lsp-proxy-codelens--on-document-change nil t)
     (add-hook 'after-revert-hook #'lsp-proxy-codelens--on-document-change nil t)
     (add-hook 'window-scroll-functions #'lsp-proxy-codelens--on-scroll nil t)
@@ -568,6 +588,7 @@ If no CodeLens is found, show a message."
 
 (defun lsp-proxy-codelens--cleanup-buffer ()
   "Cleanup CodeLens for current buffer."
+  (cl-incf lsp-proxy-codelens--generation)
   (when lsp-proxy-codelens--refresh-timer
     (cancel-timer lsp-proxy-codelens--refresh-timer)
     (setq lsp-proxy-codelens--refresh-timer nil))
@@ -575,8 +596,10 @@ If no CodeLens is found, show a message."
   (lsp-proxy-codelens--hide)
 
   (setq lsp-proxy-codelens--backend-cache nil
+        lsp-proxy-codelens--cache-docver nil
+        lsp-proxy-codelens--cache-generation nil
         lsp-proxy-codelens--refresh-modified nil
-        lsp-proxy-codelens--last-count nil)
+        lsp-proxy-codelens--display-signature nil)
 
   (remove-hook 'after-change-functions #'lsp-proxy-codelens--on-document-change t)
   (remove-hook 'after-revert-hook #'lsp-proxy-codelens--on-document-change t)

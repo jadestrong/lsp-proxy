@@ -6,7 +6,7 @@
 (require 'lsp-proxy-utils)
 
 ;; Rendering tests do not need the proxy transport or its external dependencies.
-(let ((features (cons 'lsp-proxy-core features)))
+(cl-progv '(features) (list (cons 'lsp-proxy-core features))
   (require 'lsp-proxy-codelens))
 
 (defvar lsp-proxy-test--docver 1)
@@ -21,9 +21,9 @@
   `(with-temp-buffer
      (dotimes (line 200)
        (insert (format "    code line %d\n" (1+ line))))
-     (let ((lsp-proxy-codelens-mode t)
-           (lsp-proxy-codelens-place-position 'end-of-line)
-           (lsp-proxy-codelens--last-count nil)
+     (setq-local lsp-proxy-codelens-mode t)
+     (let ((lsp-proxy-codelens-place-position 'end-of-line)
+           (lsp-proxy-codelens--display-signature nil)
            (lsp-proxy-codelens--overlays nil)
            (eglot--docver 1)
            (eglot--versioned-identifier 1)
@@ -69,7 +69,7 @@
 which invoke it with (ITEMS DOCVER); it must accept the extra arg."
   (lsp-proxy-test--with-codelens
     (funcall #'lsp-proxy-codelens--display
-             (list (lsp-proxy-test--item 28 "0 references")) 7)
+             (list (lsp-proxy-test--item 28 "0 references")) 1)
     (should (= (length lsp-proxy-codelens--overlays) 1))))
 
 (ert-deftest lsp-proxy-codelens-test-above-line-uses-before-string ()
@@ -132,9 +132,7 @@ that are already resolved; once it resolves too, redisplay adds it in."
       (should (= (line-number-at-pos (overlay-start ov) t) 174)))))
 
 (ert-deftest lsp-proxy-codelens-test-redisplay-rebuilds-overlays ()
-  "Every redisplay deletes the old overlays and builds fresh ones.
-This is the core of the lsp-lens.el-derived design: never reuse or
-reposition an overlay across refreshes, so overlay drift cannot happen."
+  "Changed commands rebuild overlays at current LSP positions."
   (lsp-proxy-test--with-codelens
     (lsp-proxy-codelens--display (list (lsp-proxy-test--item 28 "0 references")))
     (let ((first-ov (car lsp-proxy-codelens--overlays)))
@@ -190,7 +188,7 @@ remaining lens is already resolved."
   "A scroll cannot downgrade a pending refetch to cache-only redisplay."
   (lsp-proxy-test--with-codelens
     (let (scheduled cancelled refreshed)
-      (cl-letf (((symbol-function 'run-with-timer)
+      (cl-letf (((symbol-function 'run-with-idle-timer)
                  (lambda (_seconds _repeat function &rest args)
                    (push (cons function args) scheduled)
                    (car scheduled)))
@@ -248,7 +246,7 @@ remaining lens is already resolved."
 
 (ert-deftest lsp-proxy-codelens-test-resolve-rejects-stale-or-disabled-response ()
   "Only a resolve for the current document with the mode enabled is applied."
-  (dolist (state '(current edited disabled))
+  (dolist (state '(current edited disabled refetched reenabled))
     (lsp-proxy-test--with-codelens
       (let ((lsp-proxy--connection 'peer)
             (lsp-proxy--has-any-servers t)
@@ -278,7 +276,9 @@ remaining lens is already resolved."
           (pcase state
             ('edited (setq lsp-proxy-test--docver 2
                            eglot--docver 2 eglot--versioned-identifier 2))
-            ('disabled (setq lsp-proxy-codelens-mode nil)))
+            ('disabled (setq lsp-proxy-codelens-mode nil))
+            ('refetched (cl-incf lsp-proxy-codelens--generation))
+            ('reenabled (lsp-proxy-codelens--cleanup-buffer)))
           (funcall success (lsp-proxy-test--item 28 "resolved references"))
           (should-not (plist-get item :_pending))
           (if (eq state 'current)
@@ -287,5 +287,198 @@ remaining lens is already resolved."
                 (should (equal displayed (list (list item) 1))))
             (should-not (lsp-proxy-codelens--item-command item))
             (should-not displayed)))))))
+
+(ert-deftest lsp-proxy-codelens-test-identical-display-preserves-overlays ()
+  "Repeated scroll redisplays, including equivalent fresh items, do not flicker."
+  (lsp-proxy-test--with-codelens
+    (let ((items (list (lsp-proxy-test--item 28 "0 references"))))
+      (lsp-proxy-codelens--display items 1)
+      (let ((overlay (car lsp-proxy-codelens--overlays)))
+        (dotimes (_ 10)
+          (lsp-proxy-codelens--display (copy-tree items t) 1)
+          (should (eq overlay (car lsp-proxy-codelens--overlays)))
+          (should (overlay-buffer overlay)))))))
+
+(ert-deftest lsp-proxy-codelens-test-mutated-command-updates-execution ()
+  "An in-place change to nested command arguments updates mouse execution."
+  (lsp-proxy-test--with-codelens
+    (let* ((item (lsp-proxy-test--item 28 "references"))
+           (args (vector "old"))
+           executed)
+      (plist-put (lsp-proxy-test--item-command item) :arguments args)
+      (lsp-proxy-codelens--display (list item) 1)
+      (let ((overlay (car lsp-proxy-codelens--overlays)))
+        (aset args 0 "new")
+        (lsp-proxy-codelens--display (list item) 1)
+        (should-not (overlay-buffer overlay)))
+      (cl-letf (((symbol-function 'lsp-proxy--execute-command)
+                 (lambda (_command arguments _server) (setq executed arguments))))
+        (let* ((text (overlay-get (car lsp-proxy-codelens--overlays) 'after-string))
+               (map (get-text-property 1 'keymap text)))
+          (funcall (lookup-key map [mouse-1])))
+        (should (equal executed ["new"]))))))
+
+(ert-deftest lsp-proxy-codelens-test-edit-and-placement-rebuild-display ()
+  "An edit corrects indentation; changing placement still changes layout."
+  (lsp-proxy-test--with-codelens
+    (let ((items (list (lsp-proxy-test--item 28 "references")))
+          (lsp-proxy-codelens-place-position 'above-line))
+      (lsp-proxy-codelens--display items 1)
+      (let ((overlay (car lsp-proxy-codelens--overlays)))
+        (goto-char (point-min))
+        (forward-line 27)
+        (insert "  ")
+        (lsp-proxy-codelens--display items 1)
+        (should-not (overlay-buffer overlay))
+        (should (string-prefix-p "      references"
+                                 (overlay-get (car lsp-proxy-codelens--overlays) 'before-string))))
+      (setq lsp-proxy-codelens-place-position 'end-of-line)
+      (lsp-proxy-codelens--display items 1)
+      (should (overlay-get (car lsp-proxy-codelens--overlays) 'after-string)))))
+
+(ert-deftest lsp-proxy-codelens-test-stale-display-and-empty-result ()
+  "Old callbacks cannot clear lenses; a current empty result does clear them."
+  (lsp-proxy-test--with-codelens
+    (lsp-proxy-codelens--display (list (lsp-proxy-test--item 28 "references")) 1)
+    (setq lsp-proxy-test--docver 2 eglot--docver 2 eglot--versioned-identifier 2)
+    (let ((overlay (car lsp-proxy-codelens--overlays)))
+      (lsp-proxy-codelens--display nil 1)
+      (should (eq overlay (car lsp-proxy-codelens--overlays)))
+      (lsp-proxy-codelens--display nil 2)
+      (should-not (overlay-buffer overlay))
+      (should-not lsp-proxy-codelens--overlays))))
+
+(ert-deftest lsp-proxy-codelens-test-input-coalesces-until-idle ()
+  "Many edits and scrolls schedule one refetch after the configured idle time."
+  (lsp-proxy-test--with-codelens
+    (let (scheduled cancelled refreshed)
+      (cl-letf (((symbol-function 'run-with-idle-timer)
+                 (lambda (seconds repeat function &rest args)
+                   (should (= seconds 0.5))
+                   (should-not repeat)
+                   (push (cons function args) scheduled)
+                   (car scheduled)))
+                ((symbol-function 'cancel-timer)
+                 (lambda (timer) (push timer cancelled)))
+                ((symbol-function 'lsp-proxy-codelens-refresh)
+                 (lambda (modified) (push modified refreshed))))
+        (dotimes (_ 10)
+          (lsp-proxy-codelens--on-document-change)
+          (lsp-proxy-codelens--on-scroll))
+        (should-not refreshed)
+        (should (= (length cancelled) 19))
+        (apply (caar scheduled) (cdar scheduled))
+        (should (equal refreshed '(t)))))))
+
+(defvar lsp-proxy-test--lens-requests nil)
+
+(defmacro lsp-proxy-test--with-lens-transport (&rest body)
+  "Capture asynchronous requests for interpreted and real-macro tests."
+  (declare (indent 0))
+  `(let ((lsp-proxy--connection 'peer)
+         (lsp-proxy--has-any-servers t)
+         (lsp-proxy--buffer-opened t)
+         (lsp-proxy-test--lens-requests nil))
+     (cl-letf (((symbol-function 'lsp-proxy--async-request)
+                (lambda (method _params &rest callbacks)
+                  (push (cons method callbacks) lsp-proxy-test--lens-requests)))
+               ((symbol-function 'jsonrpc-async-request)
+                (lambda (_connection method _params &rest callbacks)
+                  (push (cons method callbacks) lsp-proxy-test--lens-requests)))
+               ((symbol-function 'lsp-proxy--ensure-connection) #'ignore)
+               ((symbol-function 'lsp-proxy--send-did-change) #'ignore)
+               ((symbol-function 'lsp-proxy--TextDocumentIdentifier)
+                (lambda () '(:uri "file:///test.java")))
+               ((symbol-function 'lsp-proxy--build-params)
+                (lambda (params &rest _) params)))
+       ,@body)))
+
+(ert-deftest lsp-proxy-codelens-test-refetch-keeps-display-until-response ()
+  "During an async refetch scrolling cannot clear or resolve stale cache."
+  (lsp-proxy-test--with-codelens
+    (lsp-proxy-test--with-lens-transport
+      (setq lsp-proxy-codelens--backend-cache
+            (list (lsp-proxy-test--item 28 "old references") (lsp-proxy-test--item 60))
+            lsp-proxy-codelens--cache-docver 1
+            lsp-proxy-codelens--cache-generation lsp-proxy-codelens--generation)
+      (lsp-proxy-codelens--display lsp-proxy-codelens--backend-cache 1)
+      (let ((cache lsp-proxy-codelens--backend-cache)
+            (overlay (car lsp-proxy-codelens--overlays)))
+        (setq lsp-proxy-test--docver 2 eglot--docver 2 eglot--versioned-identifier 2)
+        (lsp-proxy-codelens--backend t #'lsp-proxy-codelens--display)
+        (lsp-proxy-codelens--backend nil #'lsp-proxy-codelens--display)
+        (should (eq cache lsp-proxy-codelens--backend-cache))
+        (should (eq overlay (car lsp-proxy-codelens--overlays)))
+        (should (= (length lsp-proxy-test--lens-requests) 1))
+        (funcall (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)
+                 (vector (lsp-proxy-test--item 28 "new references")))
+        (should-not (overlay-buffer overlay))
+        (should (string-match-p "new references"
+                                (overlay-get (car lsp-proxy-codelens--overlays) 'after-string)))
+        (should (= lsp-proxy-codelens--cache-docver 2))))))
+
+(ert-deftest lsp-proxy-codelens-test-refetch-rejects-out-of-order-lists ()
+  "At one document version the newest request wins, including after re-enable."
+  (lsp-proxy-test--with-codelens
+    (lsp-proxy-test--with-lens-transport
+      (lsp-proxy-codelens--backend t #'lsp-proxy-codelens--display)
+      (let ((first (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)))
+        (lsp-proxy-codelens--backend t #'lsp-proxy-codelens--display)
+        (funcall (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)
+                 (list (lsp-proxy-test--item 28 "latest references")))
+        (let ((overlay (car lsp-proxy-codelens--overlays)))
+          (funcall first (list (lsp-proxy-test--item 28 "old references")))
+          (should (eq overlay (car lsp-proxy-codelens--overlays)))
+          (should (string-match-p "latest references" (overlay-get overlay 'after-string))))
+        (lsp-proxy-codelens--cleanup-buffer)
+        (funcall first (list (lsp-proxy-test--item 28 "old references")))
+        (should-not lsp-proxy-codelens--backend-cache)
+        (should-not lsp-proxy-codelens--overlays)))))
+
+(ert-deftest lsp-proxy-codelens-test-scroll-resolves-only-current-generation ()
+  "Scrolling resolves visible current items, and waits during a same-version refetch."
+  (lsp-proxy-test--with-codelens
+    (lsp-proxy-test--with-lens-transport
+      (cl-letf (((symbol-function 'lsp-proxy-codelens--window)
+                 (lambda () (selected-window)))
+                ((symbol-function 'window-start) (lambda (&rest _) (point-min)))
+                ((symbol-function 'window-end) (lambda (&rest _) (point-max))))
+        (let ((old (lsp-proxy-test--item 28)))
+          (setq lsp-proxy-codelens--backend-cache (list old)
+                lsp-proxy-codelens--cache-docver 1
+                lsp-proxy-codelens--cache-generation lsp-proxy-codelens--generation)
+          (lsp-proxy-codelens--backend nil #'lsp-proxy-codelens--display)
+          (should (eq (caar lsp-proxy-test--lens-requests) 'codeLens/resolve))
+          (let ((old-resolve (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)))
+            (lsp-proxy-codelens--backend t #'lsp-proxy-codelens--display)
+            (lsp-proxy-codelens--backend nil #'lsp-proxy-codelens--display)
+            (should (= (length lsp-proxy-test--lens-requests) 2))
+            (funcall old-resolve (lsp-proxy-test--item 28 "old references"))
+            (should-not (lsp-proxy-test--item-command old))
+            (funcall (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)
+                     (list (lsp-proxy-test--item 28)))
+            (should (eq (caar lsp-proxy-test--lens-requests) 'codeLens/resolve))
+            (funcall (plist-get (cdar lsp-proxy-test--lens-requests) :success-fn)
+                     (lsp-proxy-test--item 28 "current references"))
+            (should (string-match-p "current references"
+                                    (overlay-get (car lsp-proxy-codelens--overlays) 'after-string)))))))))
+
+(ert-deftest lsp-proxy-codelens-test-server-refresh-coalesces ()
+  "Repeated server refresh notifications use the same idle queue as edits."
+  (lsp-proxy-test--with-codelens
+    (setq-local lsp-proxy-codelens-mode t lsp-proxy-mode t)
+    (let (scheduled refreshed)
+      (cl-letf (((symbol-function 'run-with-idle-timer)
+                 (lambda (_seconds _repeat function &rest args)
+                   (setq scheduled (cons function args))))
+                ((symbol-function 'cancel-timer) #'ignore)
+                ((symbol-function 'lsp-proxy-codelens-refresh)
+                 (lambda (modified) (push modified refreshed))))
+        (lsp-proxy-codelens-refresh-all)
+        (lsp-proxy-codelens-refresh-all)
+        (should-not refreshed)
+        (should lsp-proxy-codelens--refresh-modified)
+        (apply (car scheduled) (cdr scheduled))
+        (should (equal refreshed '(t)))))))
 
 ;;; test-codelens.el ends here
