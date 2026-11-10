@@ -126,6 +126,15 @@ bundle list, and preserves an existing installation if publishing fails.
 The proxy merges these bundles with Java Debug, Spring and user-configured
 JDTLS bundles at startup. No VS Code installation is required.
 
+Before initialization, the proxy reads bundle manifests in a background task.
+Contributed jars with the same OSGi symbolic name and version as a bundle
+registered in the active JDTLS configuration reuse that dependency. Identical
+contributions are also deduplicated. Different versions and unreadable jars
+remain available to JDTLS; jars merely present in `plugins/` are not treated
+as registered dependencies. Standard launchers and explicit Equinox
+`-jar`/`-configuration` arguments support configuration discovery. Unknown
+wrappers retain contributed dependencies when the installation cannot be found.
+
 ## Clean the Java workspace cache
 
 Run `M-x lsp-proxy-java-clean-workspace` from a local Java project buffer to

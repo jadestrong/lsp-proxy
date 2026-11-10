@@ -15,6 +15,7 @@ mod error;
 mod fuzzy;
 mod handlers;
 mod hierarchy;
+mod java_bundles;
 mod java_files;
 mod java_install;
 mod java_project;

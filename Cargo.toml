@@ -53,6 +53,7 @@ sha1 = "0.10"
 tempfile = "3.0"
 prost = "0.12"
 async-trait = "0.1"
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "fat"

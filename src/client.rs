@@ -173,6 +173,7 @@ pub struct Client {
     name: String,
     process: tokio::sync::Mutex<Child>,
     pub(crate) jdtls_data_path: Option<std::path::PathBuf>,
+    jdtls_bundle_source: Option<crate::java_bundles::BundleSource>,
     server_tx: UnboundedSender<Payload>,
     request_counter: AtomicU64,
     pub(crate) capabilities: OnceCell<lsp::ServerCapabilities>,
@@ -344,6 +345,9 @@ impl Client {
 
         let jdtls_data_path =
             crate::java_workspace::data_path(&cmd, &name, args, &root_path, &server_envirment);
+        let jdtls_bundle_source = (name == "jdtls")
+            .then(|| crate::java_bundles::discover(&cmd, args, &root_path))
+            .flatten();
         if jdtls_data_path
             .as_deref()
             .is_some_and(crate::java_workspace::is_cleaning)
@@ -396,6 +400,7 @@ impl Client {
             name,
             process: tokio::sync::Mutex::new(process),
             jdtls_data_path,
+            jdtls_bundle_source,
             server_tx,
             request_counter: AtomicU64::new(0),
             capabilities: OnceCell::new(),
@@ -916,7 +921,13 @@ impl Client {
     // -------------------------------------------------------------------------------------------
 
     pub(crate) async fn initialize(&self, enable_snippets: bool) -> Result<lsp::InitializeResult> {
-        let config = self.config();
+        let config = crate::java_bundles::prepare(
+            &self.name,
+            self.config(),
+            self.jdtls_bundle_source.clone(),
+            self.root_path.clone(),
+        )
+        .await;
         if let Some(config) = &config {
             debug!("Using custom LSP config: {config}");
         }
