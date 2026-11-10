@@ -814,7 +814,6 @@ pub struct CleanJavaWorkspaceParams {
 pub struct CleanJavaWorkspaceResult {
     pub workspace_root: String,
     pub cache_directory: String,
-    pub backup_directory: Option<String>,
     pub closed_documents: Vec<String>,
     pub error: Option<String>,
 }

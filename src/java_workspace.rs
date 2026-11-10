@@ -1,4 +1,4 @@
-//! JDTLS workspace-cache discovery and reversible cleanup.
+//! JDTLS workspace-cache discovery and cleanup.
 use anyhow::{bail, Context, Result};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -187,7 +187,7 @@ fn lock_workspace(cache: &Path) -> Result<Option<File>> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        // Deny other readers/writers, but allow our directory rename.
+        // Deny other readers/writers, but allow deleting the cache.
         options.share_mode(0x4);
     }
     let file = options
@@ -201,29 +201,21 @@ fn lock_workspace(cache: &Path) -> Result<Option<File>> {
         lock.l_whence = libc::SEEK_SET as _;
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETLK, &lock) } == -1 {
             return Err(std::io::Error::last_os_error())
-                .context("Java workspace is still in use; cache was not moved");
+                .context("Java workspace is still in use; cache was not deleted");
         }
     }
     Ok(Some(file))
 }
 
-pub(crate) fn backup_cache(cache: &Path, workspace: &Path) -> Result<Option<PathBuf>> {
+pub(crate) fn clear_cache(cache: &Path, workspace: &Path) -> Result<()> {
     validate_cache(cache, workspace)?;
     if !cache.exists() {
-        return Ok(None);
+        return Ok(());
     }
     let _lock = lock_workspace(cache)?;
-    let backup = cache.with_file_name(format!(
-        "{}.lsp-proxy-backup-{}",
-        cache
-            .file_name()
-            .context("Cache directory has no name")?
-            .to_string_lossy(),
-        uuid::Uuid::new_v4()
-    ));
-    fs::rename(cache, &backup)
-        .with_context(|| format!("Could not back up JDTLS cache {}", cache.display()))?;
-    Ok(Some(backup))
+    fs::remove_dir_all(cache)
+        .with_context(|| format!("Could not delete JDTLS cache {}", cache.display()))?;
+    Ok(())
 }
 
 pub(crate) struct CleanupContext {
@@ -233,7 +225,7 @@ pub(crate) struct CleanupContext {
     pub _reservation: Reservation,
 }
 
-pub(crate) type CleanupCompleted = (PathBuf, Result<Option<PathBuf>, String>);
+pub(crate) type CleanupCompleted = (PathBuf, Result<(), String>);
 
 #[cfg(test)]
 mod tests {
@@ -297,20 +289,20 @@ mod tests {
     }
 
     #[test]
-    fn test_cache_backup_preserves_content_and_does_not_touch_project() {
+    fn test_cache_cleanup_deletes_cache_without_backup_and_preserves_project() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = temp.path().join("project");
         fs::create_dir(&workspace).unwrap();
         fs::write(workspace.join("App.java"), "unsaved content is elsewhere").unwrap();
         let cache = cache(temp.path());
-        let backup = backup_cache(&cache, &workspace).unwrap().unwrap();
+        clear_cache(&cache, &workspace).unwrap();
         assert!(!cache.exists());
         assert_eq!(
-            fs::read(backup.join(".metadata/.plugins/org.eclipse.jdt.core/broken.index")).unwrap(),
-            [0xff, 0xfe]
+            fs::read_to_string(workspace.join("App.java")).unwrap(),
+            "unsaved content is elsewhere"
         );
-        assert!(workspace.join("App.java").exists());
-        assert!(backup_cache(&cache, &workspace).unwrap().is_none());
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+        clear_cache(&cache, &workspace).unwrap();
     }
 
     #[test]
@@ -323,25 +315,42 @@ mod tests {
         let unrelated = temp.path().join("unrelated");
         fs::create_dir(&unrelated).unwrap();
         fs::write(unrelated.join("keep"), "keep").unwrap();
-        assert!(backup_cache(&unrelated, &workspace).is_err());
+        assert!(clear_cache(&unrelated, &workspace).is_err());
         assert!(unrelated.join("keep").exists());
         #[cfg(unix)]
         {
             let cache = cache(temp.path());
             let alias = temp.path().join("alias");
             std::os::unix::fs::symlink(&cache, &alias).unwrap();
-            assert!(backup_cache(&alias, &workspace).is_err());
+            assert!(clear_cache(&alias, &workspace).is_err());
             assert!(cache.exists());
         }
     }
 
+    #[cfg(unix)]
     #[test]
-    fn test_reservation_prevents_restart_until_released_even_after_rename() {
+    fn test_cleanup_does_not_follow_nested_symlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("project");
+        fs::create_dir(&workspace).unwrap();
+        fs::write(workspace.join("App.java"), "keep").unwrap();
+        let cache = cache(temp.path());
+        std::os::unix::fs::symlink(&workspace, cache.join("linked-project")).unwrap();
+        clear_cache(&cache, &workspace).unwrap();
+        assert!(!cache.exists());
+        assert_eq!(
+            fs::read_to_string(workspace.join("App.java")).unwrap(),
+            "keep"
+        );
+    }
+
+    #[test]
+    fn test_reservation_prevents_restart_until_released_even_after_deletion() {
         let temp = tempfile::tempdir().unwrap();
         let cache = cache(temp.path());
         let reservation = Reservation::acquire(&cache).unwrap();
         assert!(Reservation::acquire(&cache).is_err());
-        fs::rename(&cache, temp.path().join("backup")).unwrap();
+        clear_cache(&cache, &temp.path().join("project")).unwrap();
         assert!(is_cleaning(&cache));
         drop(reservation);
         assert!(!is_cleaning(&cache));
@@ -361,7 +370,7 @@ mod tests {
         BufReader::new(peer.stdout.take().unwrap())
             .read_line(&mut ready)
             .unwrap();
-        let result = backup_cache(&cache, &temp.path().join("project"));
+        let result = clear_cache(&cache, &temp.path().join("project"));
         peer.kill().unwrap();
         peer.wait().unwrap();
         assert_eq!(ready.trim(), "ready");

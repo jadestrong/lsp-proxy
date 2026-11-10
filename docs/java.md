@@ -96,21 +96,19 @@ JDTLS bundles at startup. No VS Code installation is required.
 Run `M-x lsp-proxy-java-clean-workspace` from a local Java project buffer to
 recover from stale or damaged JDTLS workspace indexes. The command runs
 asynchronously, stops the project's JDTLS and Spring companion, waits for them
-to exit, and moves the JDTLS `-data` directory to a sibling backup. It then
-reopens affected buffers with their current contents so JDTLS imports the
+to exit, and deletes the JDTLS `-data` directory without creating a backup.
+It then reopens affected buffers with their current contents so JDTLS imports the
 project and rebuilds its workspace indexes. Unsaved edits are preserved.
 
-The backup location is printed in `*Messages*`. Backups are retained; remove
-them manually after checking that the reimport completed successfully. Import
-progress and errors remain available through the normal modeline and
+Import progress and errors remain available through the normal modeline and
 `lsp-proxy-java-open-import-log`.
 
 The standard `jdtls` launcher and explicit `-data` arguments are supported.
 Custom wrappers must supply an explicit `-data` path. Cleanup refuses shared
 caches, servers serving multiple workspaces, remote buffers, unsafe paths,
-and caches still locked by another process. If moving the cache fails after
-stopping the servers, affected buffers reconnect to the existing cache and
-the error is reported. This command rebuilds the workspace cache; it does not
+and caches still locked by another process. If deleting the cache fails after
+stopping the servers, affected buffers reconnect and the error is reported.
+This command rebuilds the workspace cache; it does not
 clean separately configured shared indexes.
 
 For normal build-file changes, use `lsp-proxy-java-update-project-configuration`.

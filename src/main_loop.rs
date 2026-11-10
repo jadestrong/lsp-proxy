@@ -1823,7 +1823,7 @@ impl Application {
                 }
                 let workspace = root.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::java_workspace::backup_cache(&cache, &workspace)
+                    crate::java_workspace::clear_cache(&cache, &workspace)
                 })
                 .await
                 .map_err(|error| error.to_string())?
@@ -1835,18 +1835,11 @@ impl Application {
         Ok(())
     }
 
-    fn complete_java_workspace_cleanup(
-        &mut self,
-        root: PathBuf,
-        result: Result<Option<PathBuf>, String>,
-    ) {
+    fn complete_java_workspace_cleanup(&mut self, root: PathBuf, result: Result<(), String>) {
         let Some(context) = self.java_workspace_cleanups.remove(&root) else {
             return;
         };
-        let (backup, error) = match result {
-            Ok(backup) => (backup, None),
-            Err(error) => (None, Some(error)),
-        };
+        let error = result.err();
         // Release the reservation before Emacs reopens documents and starts JDT.
         drop(context._reservation);
         self.respond(Response::new_ok(
@@ -1854,7 +1847,6 @@ impl Application {
             lsp_ext::CleanJavaWorkspaceResult {
                 workspace_root: root.to_string_lossy().to_string(),
                 cache_directory: context.cache.to_string_lossy().to_string(),
-                backup_directory: backup.map(|path| path.to_string_lossy().to_string()),
                 closed_documents: context.closed_documents,
                 error,
             },
@@ -2391,21 +2383,14 @@ mod java_workspace_cleanup_tests {
         let Message::Response(response) = receiver.try_recv().unwrap() else {
             panic!()
         };
-        let result: lsp_ext::CleanJavaWorkspaceResult =
-            serde_json::from_value(response.result.unwrap()).unwrap();
+        let value = response.result.unwrap();
+        assert!(value.get("backupDirectory").is_none());
+        let result: lsp_ext::CleanJavaWorkspaceResult = serde_json::from_value(value).unwrap();
         assert_eq!(
             result.closed_documents,
             vec![root.join("App.java").to_string_lossy()]
         );
         assert!(result.error.is_none());
-        assert_eq!(
-            fs::read_to_string(
-                PathBuf::from(result.backup_directory.unwrap())
-                    .join(".metadata/.plugins/org.eclipse.jdt.core/index")
-            )
-            .unwrap(),
-            "old"
-        );
         assert!(!data.exists());
         assert_eq!(fs::read_to_string(root.join("App.java")).unwrap(), "saved");
         assert!(app.java_workspace_cleanups.is_empty());
@@ -2480,7 +2465,6 @@ mod java_workspace_cleanup_tests {
             serde_json::from_value(response.result.unwrap()).unwrap();
         assert_eq!(result.closed_documents.len(), 1);
         assert!(result.error.unwrap().contains("symlinked workspace lock"));
-        assert!(result.backup_directory.is_none());
         assert!(data.exists());
         assert!(!crate::java_workspace::is_cleaning(&data));
     }

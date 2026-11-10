@@ -1068,7 +1068,7 @@ impl Client {
         self.exit()
     }
 
-    /// Stop the process and reap it before any workspace cache is moved.
+    /// Stop the process and reap it before any workspace cache is cleaned.
     pub(crate) async fn stop_and_wait(&self) -> Result<()> {
         if self.is_initialized() {
             let _ = tokio::time::timeout(std::time::Duration::from_secs(5), self.shutdown()).await;

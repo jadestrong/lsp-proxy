@@ -911,11 +911,11 @@ With REOPEN, send their current contents to the replacement server."
 
 ;;;###autoload
 (defun lsp-proxy-java-clean-workspace ()
-  "Back up the current JDTLS workspace cache and reimport the project.
+  "Delete the current JDTLS workspace cache and reimport the project.
 
-Stop JDTLS and its Spring companion before moving the cache.  The request
+Stop JDTLS and its Spring companion before deleting the cache.  The request
 is asynchronous; affected buffers are reopened using their current text,
-including unsaved edits.  The backup path is reported in `*Messages*'.
+including unsaved edits.  No cache backup is created.
 Run this from a local Java project buffer.  Shared caches are refused."
   (interactive)
   (unless (and (bound-and-true-p lsp-proxy-mode) buffer-file-name
@@ -939,7 +939,7 @@ Run this from a local Java project buffer.  Shared caches are refused."
     (when (gethash key lsp-proxy-java--workspace-cleanups)
       (user-error "Java workspace cache cleanup is already in progress"))
     (puthash key t lsp-proxy-java--workspace-cleanups)
-    (message "[lsp-proxy] Backing up Java workspace cache and restarting its servers...")
+    (message "[lsp-proxy] Cleaning Java workspace cache and restarting its servers...")
     (condition-case error
         (jsonrpc-async-request
          connection 'emacs/cleanJavaWorkspace
@@ -955,10 +955,7 @@ Run this from a local Java project buffer.  Shared caches are refused."
               (append (plist-get result :closedDocuments) nil) t)
              (if-let* ((failure (plist-get result :error)))
                  (lsp-proxy--warn "Java cache cleanup failed: %s" failure)
-               (message "[lsp-proxy] Java workspace is reimporting.%s"
-                        (if-let* ((backup (plist-get result :backupDirectory)))
-                            (format " Cache backup: %s" backup)
-                          " No existing cache needed a backup.")))))
+               (message "[lsp-proxy] Java workspace cache cleaned; project is reimporting."))))
          :error-fn
          (lambda (failure)
            (remhash key lsp-proxy-java--workspace-cleanups)
