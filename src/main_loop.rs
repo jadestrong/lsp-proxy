@@ -259,7 +259,8 @@ impl Application {
                             .items
                             .iter()
                             .map(|item| {
-                                let mut config = language_server.config()?;
+                                let snapshot = language_server.config()?;
+                                let mut config = &snapshot;
                                 if let Some(section) = item.section.as_ref() {
                                     // for some reason some lsps send an empty string (observed in 'vscode-eslint-language-server')
                                     if !section.is_empty() {
@@ -1170,6 +1171,7 @@ impl Application {
         };
 
         dispatcher
+            .on::<lsp_ext::JavaSearchScope, _, _>(crate::java_search_scope::handle)
             .on::<lsp_types::request::CallHierarchyPrepare, _, _>(
                 crate::hierarchy::prepare::<lsp_types::request::CallHierarchyPrepare>,
             )

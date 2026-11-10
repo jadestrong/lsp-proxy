@@ -18,6 +18,7 @@ mod hierarchy;
 mod java_files;
 mod java_install;
 mod java_project;
+mod java_search_scope;
 mod java_spring;
 mod java_test;
 mod java_workspace;

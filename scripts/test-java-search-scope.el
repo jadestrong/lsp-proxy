@@ -1,0 +1,306 @@
+;;; test-java-search-scope.el --- Search scope lifecycle tests -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'cl-lib)
+(require 'lsp-proxy-java-jdtls)
+(require 'lsp-proxy-codelens)
+
+(defmacro lsp-proxy-scope-test--with-source (&rest body)
+  (declare (indent 0))
+  `(let* ((connection (list 'scope-connection))
+          (lsp-proxy--connection connection)
+          (file "/tmp/lsp-proxy-scope.java")
+          (selection "all")
+          requests success failure timeout timers prompt choices reports)
+     (with-temp-buffer
+       (ignore requests success failure timeout timers prompt choices reports selection)
+       (setq buffer-file-name file)
+       (insert "class Scope { /* unsaved */ }")
+       (setq-local lsp-proxy-mode t lsp-proxy--buffer-opened t
+                   lsp-proxy-java--search-scope-generation 0)
+       (cl-letf (((symbol-function 'lsp-proxy--ensure-connection) #'ignore)
+                 ((symbol-function 'lsp-proxy--build-params)
+                  (lambda (params &optional context)
+                    (append (list :uri "file:///tmp/lsp-proxy-scope.java" :params params)
+                            context)))
+                 ((symbol-function 'jsonrpc-request)
+                  (lambda (&rest _) (ert-fail "Scope change used synchronous RPC")))
+                 ((symbol-function 'jsonrpc-async-request)
+                  (lambda (conn method params &rest args)
+                    (jsonrpc--json-encode params)
+                    (push (list conn method params) requests)
+                    (setq success (plist-get args :success-fn)
+                          failure (plist-get args :error-fn)
+                          timeout (plist-get args :timeout-fn))))
+                 ((symbol-function 'run-at-time)
+                  (lambda (_time _repeat fn &rest args)
+                    (push (cons fn args) timers)))
+                 ((symbol-function 'active-minibuffer-window) (lambda () nil))
+                 ((symbol-function 'lsp-proxy--completing-read)
+                  (lambda (text candidates)
+                    (setq prompt text choices candidates)
+                    selection))
+                 ((symbol-function 'lsp-proxy--info)
+                  (lambda (&rest args) (push args reports)))
+                 ((symbol-function 'lsp-proxy--warn)
+                  (lambda (&rest args) (push args reports)))
+                 ((symbol-function 'lsp-proxy--error)
+                  (lambda (&rest args) (push args reports))))
+         ,@body))))
+
+(defun lsp-proxy-scope-test--drain (timers)
+  "Run scheduled completion callbacks in TIMERS."
+  (dolist (timer timers) (apply (car timer) (cdr timer))))
+
+(ert-deftest lsp-proxy-scope-async-get-select-set-preserves-source ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (should (= (length requests) 1))
+    (should (eq (caar requests) connection))
+    (should (eq (cadar requests) 'emacs/javaSearchScope))
+    (should (equal (plist-get (plist-get (nth 2 (car requests)) :params)
+                             :serverName) "jdtls"))
+    (should-not (plist-member (plist-get (nth 2 (car requests)) :params) :scope))
+    (funcall success '(:scope "main" :serverId 7 :workspaceRoot "/tmp"))
+    (should-not choices)
+    (lsp-proxy-scope-test--drain timers)
+    (should (equal choices '("main" "all" "projectOnly")))
+    (should (string-match-p "current: main" prompt))
+    (should (= (length requests) 2))
+    (let* ((envelope (nth 2 (car requests)))
+           (params (plist-get envelope :params)))
+      (should (equal (plist-get envelope :uri) "file:///tmp/lsp-proxy-scope.java"))
+      (should (equal (plist-get params :scope) "all"))
+      (should (= (plist-get params :serverId) 7)))
+    (funcall success '(:scope "all" :serverId 7 :workspaceRoot "/tmp"))
+    (should reports)
+    (should (buffer-modified-p))
+    (should (equal (buffer-string) "class Scope { /* unsaved */ }"))))
+
+(ert-deftest lsp-proxy-scope-can-switch-from-all-to-main ()
+  (lsp-proxy-scope-test--with-source
+    (setq selection "main")
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "all" :serverId 8))
+    (lsp-proxy-scope-test--drain timers)
+    (should (equal choices '("all" "main" "projectOnly")))
+    (should (equal (plist-get (plist-get (nth 2 (car requests)) :params) :scope)
+                   "main"))))
+
+(ert-deftest lsp-proxy-scope-unchanged-selection-does-not-write ()
+  (dolist (scope '("all" "main" "projectOnly"))
+    (lsp-proxy-scope-test--with-source
+      (setq selection scope)
+      (lsp-proxy-java-change-search-scope)
+      (funcall success (list :scope scope :serverId 7))
+      (lsp-proxy-scope-test--drain timers)
+      (should (= (length requests) 1)))))
+
+(ert-deftest lsp-proxy-scope-can-switch-to-project-only-and-refresh ()
+  (lsp-proxy-scope-test--with-source
+    (setq selection "projectOnly")
+    (let (refreshes)
+      (cl-letf (((symbol-function 'lsp-proxy-codelens-refresh)
+                 (lambda (modified)
+                   (push (list (current-buffer) modified) refreshes))))
+        (lsp-proxy-java-change-search-scope)
+        (funcall success '(:scope "all" :serverId 7))
+        (lsp-proxy-scope-test--drain timers)
+        (should (equal (plist-get (plist-get (nth 2 (car requests)) :params) :scope)
+                       "projectOnly"))
+        (should-not refreshes)
+        (funcall success '(:scope "projectOnly" :serverId 7))
+        (should (equal refreshes (list (list (current-buffer) t))))))))
+
+(ert-deftest lsp-proxy-scope-can-switch-from-project-only-to-all ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "projectOnly" :serverId 7))
+    (lsp-proxy-scope-test--drain timers)
+    (should (equal choices '("projectOnly" "all" "main")))
+    (should (string-match-p "current: projectOnly" prompt))
+    (should (equal (plist-get (plist-get (nth 2 (car requests)) :params) :scope)
+                   "all"))))
+
+(ert-deftest lsp-proxy-scope-quit-does-not-write ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main" :serverId 7))
+    (cl-letf (((symbol-function 'lsp-proxy--completing-read)
+               (lambda (&rest _) (signal 'quit nil))))
+      (lsp-proxy-scope-test--drain timers))
+    (should (= (length requests) 1))))
+
+(ert-deftest lsp-proxy-scope-changed-connection-ignores-delayed-result ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main" :serverId 7))
+    (setq lsp-proxy--connection (list 'replacement))
+    (lsp-proxy-scope-test--drain timers)
+    (should-not choices)
+    (should (= (length requests) 1))))
+
+(ert-deftest lsp-proxy-scope-closed-source-ignores-delayed-result ()
+  (lsp-proxy-scope-test--with-source
+    (let ((origin (generate-new-buffer " scope-origin")))
+      (with-current-buffer origin
+        (setq buffer-file-name file)
+        (setq-local lsp-proxy-mode t lsp-proxy--buffer-opened t)
+        (lsp-proxy-java-change-search-scope))
+      (kill-buffer origin)
+      (funcall success '(:scope "main" :serverId 7))
+      (lsp-proxy-scope-test--drain timers)
+      (should-not choices)
+      (should (= (length requests) 1)))))
+
+(ert-deftest lsp-proxy-scope-new-command-invalidates-previous-read ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (let ((old-success success))
+      (lsp-proxy-java-change-search-scope)
+      (funcall old-success '(:scope "main" :serverId 7)))
+    (lsp-proxy-scope-test--drain timers)
+    (should-not choices)
+    (should (= (length requests) 2))))
+
+(ert-deftest lsp-proxy-scope-rechecks-origin-after-selection ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main" :serverId 7))
+    (cl-letf (((symbol-function 'lsp-proxy--completing-read)
+               (lambda (&rest _) (setq buffer-file-name "/tmp/Other.java") "all")))
+      (lsp-proxy-scope-test--drain timers))
+    (should (= (length requests) 1))))
+
+(ert-deftest lsp-proxy-scope-busy-minibuffer-does-not-start-nested-prompt ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main" :serverId 7))
+    (cl-letf (((symbol-function 'active-minibuffer-window) (lambda () t)))
+      (lsp-proxy-scope-test--drain timers))
+    (should-not choices)
+    (should reports)
+    (should (= (length requests) 1))))
+
+(ert-deftest lsp-proxy-scope-errors-and-timeouts-report-without-writing ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall failure '(:message "JDTLS is unavailable"))
+    (funcall timeout)
+    (should (= (length reports) 2))
+    (should (= (length requests) 1))
+    (setq lsp-proxy--connection (list 'replacement))
+    (funcall failure '(:message "obsolete error"))
+    (funcall timeout)
+    (should (= (length reports) 2))))
+
+(ert-deftest lsp-proxy-scope-missing-instance-id-does-not-write ()
+  (lsp-proxy-scope-test--with-source
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main"))
+    (lsp-proxy-scope-test--drain timers)
+    (should reports)
+    (should (= (length requests) 1))))
+
+(ert-deftest lsp-proxy-scope-requires-java-source-mode ()
+  (lsp-proxy-scope-test--with-source
+    (setq-local lsp-proxy-mode nil)
+    (should-error (lsp-proxy-java-change-search-scope) :type 'user-error)
+    (should-not requests)))
+
+(defun lsp-proxy-scope-test--lens (&optional title)
+  "Return a wrapped Java CodeLens with optional resolved TITLE."
+  (list :language_server_id 7 :language_server_name "jdtls"
+        :lsp_item
+        (append
+         '(:range (:start (:line 0 :character 1) :end (:line 0 :character 2))
+           :data ["references"])
+         (when title
+           (list :command (list :title title :command "references"))))))
+
+(ert-deftest lsp-proxy-scope-success-refreshes-the-origin-buffer-only ()
+  (lsp-proxy-scope-test--with-source
+    (let ((origin (current-buffer)) refreshes)
+      (cl-letf (((symbol-function 'lsp-proxy-codelens-refresh)
+                 (lambda (modified)
+                   (push (list (current-buffer) modified) refreshes))))
+        (lsp-proxy-java-change-search-scope)
+        (funcall success '(:scope "main" :serverId 7))
+        (lsp-proxy-scope-test--drain timers)
+        (should-not refreshes)
+        (with-temp-buffer
+          (funcall success '(:scope "all" :serverId 7)))
+        (should (equal refreshes (list (list origin t))))))))
+
+(ert-deftest lsp-proxy-scope-failure-and-obsolete-success-do-not-refresh ()
+  (lsp-proxy-scope-test--with-source
+    (let (refreshes)
+      (cl-letf (((symbol-function 'lsp-proxy-codelens-refresh)
+                 (lambda (&rest args) (push args refreshes))))
+        (lsp-proxy-java-change-search-scope)
+        (funcall success '(:scope "main" :serverId 7))
+        (lsp-proxy-scope-test--drain timers)
+        (funcall failure '(:message "Configuration update failed"))
+        (should-not refreshes)
+        (setq lsp-proxy--connection (list 'replacement))
+        (funcall success '(:scope "all" :serverId 7))
+        (should-not refreshes)))))
+
+(ert-deftest lsp-proxy-scope-does-not-enable-disabled-codelens ()
+  (lsp-proxy-scope-test--with-source
+    (setq-local lsp-proxy-codelens-mode nil)
+    (lsp-proxy-java-change-search-scope)
+    (funcall success '(:scope "main" :serverId 7))
+    (lsp-proxy-scope-test--drain timers)
+    (funcall success '(:scope "all" :serverId 7))
+    (should (= (length requests) 2))
+    (should-not lsp-proxy-codelens-mode)))
+
+(ert-deftest lsp-proxy-scope-refresh-replaces-count-and-rejects-old-range-responses ()
+  (lsp-proxy-scope-test--with-source
+    (setq-local lsp-proxy-codelens-mode t lsp-proxy--has-any-servers t)
+    (make-local-variable
+     (if (boundp 'eglot--docver) 'eglot--docver 'eglot--versioned-identifier))
+    (lsp-proxy--set-doc-version 0)
+    (let ((lsp-proxy-codelens-place-position 'end-of-line)
+          (old-resolved (lsp-proxy-scope-test--lens "1 reference"))
+          (old-pending (lsp-proxy-scope-test--lens)))
+      (cl-letf (((symbol-function 'eglot--lsp-position-to-point)
+                 (lambda (position)
+                   (+ (point-min) (plist-get position :character))))
+                ;; Model visible lenses deterministically in a batch frame.
+                ((symbol-function 'lsp-proxy-codelens--not-loaded-p)
+                 (lambda (item)
+                   (not (lsp-proxy-codelens--item-command item)))))
+        (setq lsp-proxy-codelens--backend-cache (list old-resolved)
+              lsp-proxy-codelens--cache-docver 0
+              lsp-proxy-codelens--cache-generation 0)
+        (lsp-proxy-codelens--display (list old-resolved) 0)
+        (lsp-proxy-codelens--fetch-missing
+         (list old-pending) #'lsp-proxy-codelens--display 0)
+        (let ((obsolete-resolve success))
+          (lsp-proxy-codelens-refresh t)
+          (let ((obsolete-list success))
+            (lsp-proxy-java-change-search-scope)
+            (funcall success '(:scope "main" :serverId 7))
+            (lsp-proxy-scope-test--drain timers)
+            (funcall success '(:scope "all" :serverId 7))
+            (should (eq (cadar requests) 'textDocument/codeLens))
+            (let ((fresh-list success)
+                  (old-overlay (car lsp-proxy-codelens--overlays)))
+              (funcall obsolete-resolve (lsp-proxy-scope-test--lens "99 references"))
+              (funcall obsolete-list (list (lsp-proxy-scope-test--lens "99 references")))
+              (should-not (lsp-proxy-codelens--item-command old-pending))
+              (should (eq (car lsp-proxy-codelens--backend-cache) old-resolved))
+              (should (eq (car lsp-proxy-codelens--overlays) old-overlay))
+              (should (string-match-p "1 reference"
+                                      (overlay-get old-overlay 'after-string)))
+              (funcall fresh-list (list (lsp-proxy-scope-test--lens)))
+              (should (eq (cadar requests) 'codeLens/resolve))
+              (funcall success (lsp-proxy-scope-test--lens "3 references"))
+              (should (string-match-p
+                       "3 references"
+                       (overlay-get (car lsp-proxy-codelens--overlays) 'after-string)))
+              (should (= (lsp-proxy--doc-version) 0)))))))))
+
+;;; test-java-search-scope.el ends here

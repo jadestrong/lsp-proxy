@@ -24,6 +24,7 @@
 (declare-function jsonrpc-request "jsonrpc")
 (declare-function jsonrpc-async-request "jsonrpc")
 (declare-function lsp-proxy-java-clear-file-cache "lsp-proxy-java-files")
+(declare-function lsp-proxy-codelens-refresh "lsp-proxy-codelens" (&optional modified-p))
 (defvar lsp-proxy-mode)
 
 (defcustom lsp-proxy-java-class-file-contents-server-name "jdtls"
@@ -860,6 +861,95 @@ SERVER-NAME defaults to `lsp-proxy-java-class-file-contents-server-name'."
                          :method method
                          :params params
                          :notify (if notify t :json-false))))))
+
+(defvar-local lsp-proxy-java--search-scope-generation 0
+  "Generation of the latest search scope selection in this buffer.")
+
+;;;###autoload
+(defun lsp-proxy-java-change-search-scope ()
+  "Choose the current JDTLS search scope, as in VS Code Java.
+
+Select main to exclude test sources, all to search all classpath entries,
+or projectOnly to include sources, tests and referenced projects while
+excluding the JDK and referenced libraries.  The change
+applies to subsequent References, Call Hierarchy and Workspace Symbols
+queries on this server instance.  Refresh this file's CodeLens after a
+successful change; other result buffers still require a new query.
+Both configuration requests are asynchronous and require no restart.
+Restarting JDTLS restores the default from languages.toml."
+  (interactive)
+  (unless (and (bound-and-true-p lsp-proxy-mode) buffer-file-name
+               (string-match-p "\\.java\\'" buffer-file-name)
+               (not (lsp-proxy--decompiled-file-name-to-uri buffer-file-name)))
+    (user-error "Run this from a Java source buffer with lsp-proxy-mode enabled"))
+  (lsp-proxy--ensure-connection)
+  (unless lsp-proxy--buffer-opened (lsp-proxy--on-doc-open))
+  (let* ((origin (current-buffer))
+         (file buffer-file-name)
+         (connection lsp-proxy--connection)
+         (generation (cl-incf lsp-proxy-java--search-scope-generation))
+         (envelope (lsp-proxy--build-params
+                    (list :serverName
+                          lsp-proxy-java-class-file-contents-server-name))))
+    (cl-labels
+        ((active-p ()
+           (and (buffer-live-p origin) (eq connection lsp-proxy--connection)
+                (with-current-buffer origin
+                  (and (bound-and-true-p lsp-proxy-mode)
+                       (equal file buffer-file-name)
+                       (= generation lsp-proxy-java--search-scope-generation)))))
+         (failed (error)
+           (when (active-p)
+             (lsp-proxy--error "Java search scope change failed: %s"
+                               (or (plist-get error :message) error))))
+         (timed-out ()
+           (when (active-p)
+             (lsp-proxy--error "Java search scope change timed out")))
+         (select-scope (result)
+           (when (active-p)
+             (if (active-minibuffer-window)
+                 (lsp-proxy--warn "Minibuffer is busy; run the search scope command again")
+               (condition-case error
+                   (with-current-buffer origin
+                     (let* ((current (plist-get result :scope))
+                            (server-id (plist-get result :serverId))
+                            (choices (pcase current
+                                       ("main" '("main" "all" "projectOnly"))
+                                       ("projectOnly" '("projectOnly" "all" "main"))
+                                       (_ '("all" "main" "projectOnly"))))
+                            (selected
+                             (lsp-proxy--completing-read
+                              (format "Java search scope (current: %s): " current)
+                              choices)))
+                       (when (and (active-p) (member selected choices)
+                                  (not (equal selected current)))
+                         (unless (integerp server-id)
+                           (error "Proxy returned no JDTLS instance identifier"))
+                         (jsonrpc-async-request
+                          connection 'emacs/javaSearchScope
+                          (plist-put
+                           (copy-sequence envelope) :params
+                           (append (plist-get envelope :params)
+                                   (list :serverId server-id :scope selected)))
+                          :success-fn
+                          (lambda (updated)
+                            (when (active-p)
+                              (with-current-buffer origin
+                                (when (fboundp 'lsp-proxy-codelens-refresh)
+                                  (lsp-proxy-codelens-refresh t)))
+                              (lsp-proxy--info
+                               "Java search scope: %s"
+                               (plist-get updated :scope))))
+                          :error-fn #'failed :timeout-fn #'timed-out :timeout 10))))
+                 (quit nil)
+                 (error (failed error)))))))
+      (jsonrpc-async-request
+       connection 'emacs/javaSearchScope envelope
+       :success-fn
+       (lambda (result)
+         ;; Show completion outside the JSON-RPC process filter.
+         (run-at-time 0 nil #'select-scope result))
+       :error-fn #'failed :timeout-fn #'timed-out :timeout 10))))
 
 ;;;###autoload
 (defun lsp-proxy-java-build-workspace (&optional full)

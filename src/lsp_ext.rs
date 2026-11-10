@@ -88,6 +88,44 @@ impl Request for WorkspaceRestart {
     const METHOD: &'static str = "emacs/workspaceRestart";
 }
 
+// emacs/javaSearchScope
+#[derive(Debug)]
+pub enum JavaSearchScope {}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JavaSearchScopeValue {
+    Main,
+    All,
+    #[serde(rename = "projectOnly")]
+    ProjectOnly,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaSearchScopeParams {
+    #[serde(default = "default_java_file_server")]
+    pub server_name: String,
+    /// Pin a selection to the instance whose current scope was displayed.
+    pub server_id: Option<usize>,
+    /// None reads the current scope without changing it.
+    pub scope: Option<JavaSearchScopeValue>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JavaSearchScopeResult {
+    pub scope: String,
+    pub server_id: usize,
+    pub workspace_root: String,
+}
+
+impl Request for JavaSearchScope {
+    type Params = JavaSearchScopeParams;
+    type Result = JavaSearchScopeResult;
+    const METHOD: &'static str = "emacs/javaSearchScope";
+}
+
 // emacs/javaProductionFiles
 #[derive(Debug)]
 pub enum JavaProductionFiles {}

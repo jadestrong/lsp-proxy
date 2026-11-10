@@ -183,7 +183,7 @@ pub struct Client {
     pub(crate) java_service_ready: std::sync::atomic::AtomicBool,
     pub(crate) registered_capabilities: Mutex<Vec<RegisteredCapability>>,
     definition_registration_seen: std::sync::atomic::AtomicBool,
-    config: Option<Value>,
+    config: Mutex<Option<Value>>,
     experimental: Option<Value>,
     pub(crate) root_path: std::path::PathBuf,
     root_uri: Option<lsp::Url>,
@@ -403,7 +403,7 @@ impl Client {
             java_service_ready: std::sync::atomic::AtomicBool::new(false),
             registered_capabilities: Mutex::new(Vec::new()),
             definition_registration_seen: std::sync::atomic::AtomicBool::new(false),
-            config,
+            config: Mutex::new(config),
             experimental,
             root_path,
             root_uri,
@@ -432,8 +432,23 @@ impl Client {
             .unwrap_or_default()
     }
 
-    pub fn config(&self) -> Option<&Value> {
-        self.config.as_ref()
+    pub fn config(&self) -> Option<Value> {
+        self.config.lock().clone()
+    }
+
+    pub(crate) fn java_search_scope(
+        &self,
+        scope: Option<crate::lsp_ext::JavaSearchScopeValue>,
+    ) -> anyhow::Result<String> {
+        let mut config = self.config.lock();
+        if let Some(scope) = scope {
+            let updated = crate::java_search_scope::with_scope(config.as_ref(), scope)?;
+            // JDTLS expects Java settings here, not the initialization options
+            // envelope containing bundles and extendedClientCapabilities.
+            self.did_change_configuration(updated["settings"].clone())?;
+            *config = Some(updated);
+        }
+        Ok(crate::java_search_scope::configured_scope(config.as_ref()))
     }
 
     pub async fn workspace_folders(
@@ -901,7 +916,8 @@ impl Client {
     // -------------------------------------------------------------------------------------------
 
     pub(crate) async fn initialize(&self, enable_snippets: bool) -> Result<lsp::InitializeResult> {
-        if let Some(config) = &self.config {
+        let config = self.config();
+        if let Some(config) = &config {
             debug!("Using custom LSP config: {config}");
         }
 
@@ -910,7 +926,7 @@ impl Client {
             process_id: Some(std::process::id()),
             root_path: self.root_path.to_str().map(|path| path.to_owned()),
             root_uri: self.root_uri.clone(),
-            initialization_options: Some(self.config.clone().unwrap_or(json!({}))),
+            initialization_options: Some(config.unwrap_or(json!({}))),
             capabilities: lsp::ClientCapabilities {
                 workspace: Some(workspace_capabilities()),
                 text_document: Some(lsp::TextDocumentClientCapabilities {

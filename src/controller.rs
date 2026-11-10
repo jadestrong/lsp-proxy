@@ -28,6 +28,7 @@ const REQUEST_WHITELIST: &[&str] = &[
     "emacs/cleanJavaWorkspace",
     "emacs/installJavaTest",
     "emacs/javaProductionFiles",
+    "emacs/javaSearchScope",
     "textDocument/diagnostic",
     "codeLens/resolve",
 ];
@@ -759,6 +760,16 @@ mod tests {
         let mut controller = test_controller();
         for id in [1, 2] {
             let request = Request::new(id.into(), "emacs/cleanJavaWorkspace".into(), json!({}));
+            controller.register_request(&request, Instant::now());
+        }
+        assert_eq!(controller.req_queue.incoming.entries().len(), 2);
+    }
+
+    #[test]
+    fn test_java_scope_requests_keep_completion_callbacks_across_buffers() {
+        let mut controller = test_controller();
+        for id in [1, 2] {
+            let request = Request::new(id.into(), "emacs/javaSearchScope".into(), json!({}));
             controller.register_request(&request, Instant::now());
         }
         assert_eq!(controller.req_queue.incoming.entries().len(), 2);

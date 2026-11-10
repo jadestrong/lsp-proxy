@@ -1,5 +1,40 @@
 # Java Support
 
+## Change search scope
+
+Run `M-x lsp-proxy-java-change-search-scope` from a Java source buffer with
+`lsp-proxy-mode` enabled. The prompt shows the current JDTLS scope and offers
+`main` (exclude test sources), `all` (include all classpath entries), and
+`projectOnly` (include sources, tests, and referenced projects, excluding the
+JDK and referenced libraries). Select `all` or `projectOnly`,
+then run `lsp-proxy-find-references` to inspect calls from tests. Select `main`
+again when you want to exclude tests.
+
+Like VS Code Java's **Change Search Scope**, this updates
+`java.search.scope` through `workspace/didChangeConfiguration`. Both the scope
+lookup and update are asynchronous; no JDTLS restart or index rebuild is needed.
+It affects subsequent References, Call Hierarchy and Workspace Symbols queries
+handled by the current JDTLS instance, including other buffers sharing that
+instance. After a successful change, CodeLens in the file that initiated the
+command is fetched and resolved again to update reference counts. The refresh
+is asynchronous, preserves the display while waiting, and leaves CodeLens
+disabled if you have turned it off. Existing References result buffers and
+expanded hierarchy nodes retain their old results; start a new query after
+switching.
+
+The command changes the running instance only. Restarting JDTLS restores the
+default from `languages.toml`; it does not rewrite that file. To start with tests
+excluded, configure:
+
+```toml
+[language-server.jdtls.config.settings.java.search]
+scope = "main"
+```
+
+If this setting is absent, JDTLS defaults to `all`. The `main` scope still
+includes non-test dependencies; it is not limited to files under `src/main`.
+This command does not change Find Production File's source-root filtering.
+
 ## Find production files
 
 Run `M-x lsp-proxy-java-find-production-file` from a local Java source buffer

@@ -10,6 +10,7 @@ replies=[]
 pending={}
 definition_calls=0
 initialize_params=None
+configurations=[]
 def send(value):
     value['jsonrpc']='2.0'
     body=json.dumps(value).encode()
@@ -82,6 +83,8 @@ while True:
         elif name=='goto-invalid': answer(mid,{'uri':uri})
         elif name=='goto-error': send({'id':mid,'error':{'code':-32042,'message':'goto RPC failure'}})
         else: answer(mid,[location])
+    elif method=='workspace/didChangeConfiguration': configurations.append(p['settings'])
+    elif method=='test/configurations': answer(mid,configurations)
     elif method=='test/replies': answer(mid,replies)
     elif method=='workspace/executeCommand':
         command=p['command']
