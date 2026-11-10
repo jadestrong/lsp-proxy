@@ -350,10 +350,46 @@ pub struct Response {
     pub error: Option<jsonrpc::Error>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Notification {
     pub method: String,
     pub params: Params,
+}
+
+impl<'de> Deserialize<'de> for Notification {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireNotification {
+            method: String,
+            #[serde(default)]
+            params: serde_json::Value,
+        }
+
+        let wire = WireNotification::deserialize(deserializer)?;
+        // Older Ivy/hierarchy clients sent standard flat cancellation params.
+        // Preserve the id rather than losing it while decoding the proxy envelope.
+        let params = if wire.method == "$/cancelRequest" && wire.params.get("params").is_none() {
+            Params {
+                uri: wire
+                    .params
+                    .get("uri")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned),
+                context: None,
+                virtual_doc: None,
+                params: wire.params,
+            }
+        } else {
+            serde_json::from_value(wire.params).map_err(serde::de::Error::custom)?
+        };
+        Ok(Self {
+            method: wire.method,
+            params,
+        })
+    }
 }
 
 impl Message {
@@ -541,4 +577,61 @@ fn write_msg_text(out: &mut dyn Write, msg: &str) -> io::Result<()> {
     out.write_all(msg.as_bytes())?;
     out.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod notification_tests {
+    use super::*;
+    use crate::lsp_ext::CustomizeCancelParams;
+    use serde_json::json;
+
+    #[test]
+    fn test_cancel_accepts_flat_and_wrapped_params_with_integer_or_string_ids() {
+        for id in [json!(8), json!("symbol-8")] {
+            let params = json!({"id": id, "uri": "file:///w/Source.java"});
+            for wire_params in [
+                params.clone(),
+                json!({"uri": "file:///w/Source.java", "params": params}),
+            ] {
+                let message: Message = serde_json::from_value(json!({
+                    "jsonrpc": "2.0", "method": "$/cancelRequest", "params": wire_params,
+                }))
+                .unwrap();
+                let Message::Notification(notification) = message else {
+                    panic!("expected notification")
+                };
+                assert_eq!(
+                    notification.params.uri.as_deref(),
+                    Some("file:///w/Source.java")
+                );
+                let (cancel, _, _) = notification
+                    .extract::<CustomizeCancelParams>("$/cancelRequest")
+                    .unwrap();
+                assert_eq!(serde_json::to_value(cancel.id).unwrap(), id);
+                assert_eq!(cancel.uri.as_deref(), Some("file:///w/Source.java"));
+            }
+        }
+    }
+
+    #[test]
+    fn test_cancel_without_uri_is_preserved_and_other_notifications_keep_envelopes() {
+        let notification: Notification = serde_json::from_value(json!({
+            "method": "$/cancelRequest", "params": {"id": 9},
+        }))
+        .unwrap();
+        let (cancel, _, _) = notification
+            .extract::<CustomizeCancelParams>("$/cancelRequest")
+            .unwrap();
+        assert_eq!(cancel.id, RequestId::from(9));
+        assert_eq!(cancel.uri, None);
+
+        let wire = json!({"method": "textDocument/didFocus", "params": {
+            "uri": "file:///w/Source.java", "params": {"textDocument": {"uri": "file:///w/Source.java"}}
+        }});
+        let notification: Notification = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(notification).unwrap()["params"]["params"],
+            wire["params"]["params"]
+        );
+    }
 }

@@ -327,6 +327,18 @@ Only sends requests if servers are available."
        (when lsp-proxy--has-any-servers
          (jsonrpc-request lsp-proxy--connection ,@args)))))
 
+(defun lsp-proxy--cancel-request (connection id context)
+  "Cancel request ID on CONNECTION using its saved proxy CONTEXT.
+Remove local continuations and timeouts before notifying the proxy.
+CONTEXT is the original request envelope, so cancellation also works
+after its source buffer was closed or another buffer became current."
+  (jsonrpc--remove connection id)
+  (when (jsonrpc-running-p connection)
+    (ignore-errors
+      (let ((uri (plist-get context :uri)))
+        (jsonrpc-notify connection '$/cancelRequest
+                        (list :uri uri :params (list :id id :uri uri)))))))
+
 ;;; Connection
 
 (defvar-local lsp-proxy--workspace-roots nil

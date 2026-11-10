@@ -70,14 +70,9 @@ Return nil when Ivy is not the current completion frontend."
     (setf (lsp-proxy-ivy--session-timer session) nil))
   (when-let* ((id (lsp-proxy-ivy--session-request-id session)))
     (setf (lsp-proxy-ivy--session-request-id session) nil)
-    (let ((connection (lsp-proxy-ivy--session-connection session)))
-      ;; Remove only this request's continuations, including its timeout timer.
-      (jsonrpc--remove connection id)
-      (when (jsonrpc-running-p connection)
-        (ignore-errors
-          (jsonrpc-notify connection '$/cancelRequest
-                          (list :id id :uri
-                                (plist-get (lsp-proxy-ivy--session-context session) :uri)))))))
+    (lsp-proxy--cancel-request
+     (lsp-proxy-ivy--session-connection session) id
+     (lsp-proxy-ivy--session-context session)))
   (setf (lsp-proxy-ivy--session-pending session) nil))
 
 (defun lsp-proxy-ivy--cleanup (session)

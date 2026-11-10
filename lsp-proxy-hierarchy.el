@@ -118,13 +118,8 @@ With a prefix argument, prompt for DIRECTION."
     (maphash
      (lambda (_key request)
        (when-let* ((id (lsp-proxy-hierarchy--pending-request-id request)))
-         ;; Match Ivy: remove continuations/timeouts before cancellation.
-         (jsonrpc--remove lsp-proxy-hierarchy--connection id)
-         (when (jsonrpc-running-p lsp-proxy-hierarchy--connection)
-           (ignore-errors
-             (jsonrpc-notify lsp-proxy-hierarchy--connection '$/cancelRequest
-                             (list :id id :uri
-                                   (plist-get lsp-proxy-hierarchy--context :uri)))))))
+         (lsp-proxy--cancel-request lsp-proxy-hierarchy--connection id
+                                    lsp-proxy-hierarchy--context)))
      lsp-proxy-hierarchy--pending)
     (clrhash lsp-proxy-hierarchy--pending))
   (mapc #'cancel-timer lsp-proxy-hierarchy--timers)

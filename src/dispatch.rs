@@ -107,7 +107,8 @@ impl NotificationDispatcher<'_> {
         let (params, _context, _virtual_doc) = match not.extract::<N::Params>(N::METHOD) {
             Ok(it) => it,
             Err(ExtractError::JsonError { method, error }) => {
-                panic!("Invald request\nMethod: {method}\n error: {error}");
+                error!("Ignoring invalid notification {method}: {error}");
+                return Ok(self);
             }
             Err(ExtractError::MethodMismatch(not)) => {
                 self.not = Some(not);
@@ -135,7 +136,8 @@ impl NotificationDispatcher<'_> {
         let (params, _context, virtual_doc) = match not.extract::<N::Params>(N::METHOD) {
             Ok(it) => it,
             Err(ExtractError::JsonError { method, error }) => {
-                panic!("Invald request\nMethod: {method}\n error: {error}");
+                error!("Ignoring invalid notification {method}: {error}");
+                return Ok(self);
             }
             Err(ExtractError::MethodMismatch(not)) => {
                 self.not = Some(not);

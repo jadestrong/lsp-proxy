@@ -2509,6 +2509,41 @@ mod install_lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn test_invalid_notifications_leave_application_available_for_requests() {
+        let (mut app, receiver) = application();
+        for (method, params) in [
+            (
+                "$/cancelRequest",
+                json!({"id": 8, "uri": "file:///w/Source.java"}),
+            ),
+            (
+                "$/cancelRequest",
+                json!({"uri": "file:///w/Source.java", "params": {"id": "symbol-8", "uri": "file:///w/Source.java"}}),
+            ),
+            ("$/cancelRequest", json!({"id": 9})),
+            ("$/cancelRequest", Value::Null),
+            (
+                "$/cancelRequest",
+                json!({"uri": "file:///w/Source.java", "params": {"id": []}}),
+            ),
+            ("textDocument/didChange", json!({"params": "invalid"})),
+        ] {
+            let message: Message = serde_json::from_value(json!({
+                "jsonrpc": "2.0", "method": method, "params": params,
+            }))
+            .unwrap();
+            app.handle_msg(message).await.unwrap();
+        }
+        app.handle_msg(crate::test_support::request(lsp_ext::ListWorkspaces::METHOD, None).into())
+            .await
+            .unwrap();
+        let Message::Response(response) = receiver.try_recv().unwrap() else {
+            panic!("expected workspace response")
+        };
+        assert!(response.error.is_none());
+    }
+
+    #[tokio::test]
     async fn shutdown_rejects_install_and_other_special_requests_before_dispatch() {
         let (mut app, receiver) = application();
         app.shutdown_requested = true;

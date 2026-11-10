@@ -113,7 +113,8 @@
       (let ((cancel (car (lsp-proxy-ivy-test--sent lsp-proxy--connection))))
         (should (eq (plist-get cancel :method) '$/cancelRequest))
         (should (equal (plist-get cancel :params)
-                       (list :id old-id :uri "file:///project/Origin.java"))))
+                       (list :uri "file:///project/Origin.java"
+                             :params (list :id old-id :uri "file:///project/Origin.java")))))
       (funcall callback (vector (lsp-proxy-ivy-test--item "old")))
       (should-not (lsp-proxy-ivy--session-items session))
       (lsp-proxy-ivy-test--flush session)
