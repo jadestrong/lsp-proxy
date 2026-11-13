@@ -148,7 +148,7 @@ fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
         }),
         did_change_watched_files: Some(lsp::DidChangeWatchedFilesClientCapabilities {
             dynamic_registration: Some(true),
-            relative_pattern_support: Some(false),
+            relative_pattern_support: Some(true),
         }),
         file_operations: Some(lsp::WorkspaceFileOperationsClientCapabilities {
             will_rename: Some(true),
@@ -163,6 +163,12 @@ fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
 fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabilities {
     lsp::PublishDiagnosticsClientCapabilities {
         version_support: Some(false),
+        tag_support: Some(lsp::TagSupport {
+            value_set: vec![
+                lsp::DiagnosticTag::UNNECESSARY,
+                lsp::DiagnosticTag::DEPRECATED,
+            ],
+        }),
         ..Default::default()
     }
 }

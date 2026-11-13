@@ -56,7 +56,10 @@ of diagnostics are displayed due to the limit."
 (declare-function flycheck-mode "ext:flycheck")
 (declare-function flycheck-define-generic-checker
                   "ext:flycheck" (symbol docstring &rest properties))
-(declare-function flycheck-error-new "ext:flycheck" t t)
+(declare-function flycheck-error-new-at-pos "ext:flycheck" t t)
+(declare-function flycheck-error-checker "ext:flycheck" (error))
+(declare-function flycheck-error-tags "ext:flycheck" (error))
+(declare-function flycheck-add-overlay "ext:flycheck" (error))
 (declare-function flycheck-valid-checker-p "ext:flycheck")
 (declare-function flycheck-checker-supports-major-mode-p "ext:flycheck")
 (declare-function flycheck-add-mode "ext:flycheck")
@@ -64,6 +67,7 @@ of diagnostics are displayed due to the limit."
 (declare-function flymake-mode "ext:flymake")
 (declare-function flymake-make-diagnostic "ext:flymake")
 (declare-function flymake-diag-region "ext:flymake")
+(declare-function eglot--call-with-ranged "eglot" (objects key function))
 
 ;;; Variables
 
@@ -197,32 +201,52 @@ CALLBACK is the status callback passed by Flycheck."
          (errors (lsp-proxy-diagnostics--convert-to-flycheck-errors buffer-diagnostics checker)))
     (funcall callback 'finished errors)))
 
+(defun lsp-proxy-diagnostics--map-ranges (diagnostics function)
+  "Map FUNCTION over DIAGNOSTICS and their Eglot buffer regions."
+  (save-excursion
+    (save-restriction
+      (widen)
+      (if (fboundp 'eglot--call-with-ranged)
+          (eglot--call-with-ranged diagnostics nil function)
+        (mapcar (lambda (diagnostic)
+                  (funcall function diagnostic
+                           (eglot-range-region (plist-get diagnostic :range))))
+                diagnostics)))))
+
+(defun lsp-proxy-diagnostics--flycheck-deprecated-face (error)
+  "Render deprecated lsp-proxy ERROR without an underline.
+Use Flycheck's own overlay so severity, counts and cleanup stay intact."
+  (when (and (eq (flycheck-error-checker error) 'lsp-proxy)
+             (fboundp 'flycheck-error-tags)
+             (memq 'deprecated (flycheck-error-tags error)))
+    (let ((overlay (flycheck-add-overlay error)))
+      (overlay-put overlay 'face
+                   (cons '(:underline nil)
+                         (ensure-list (overlay-get overlay 'face))))
+      overlay)))
+
 (defun lsp-proxy-diagnostics--convert-to-flycheck-errors (diagnostics checker)
   "Convert DIAGNOSTICS to flycheck errors using CHECKER.
-Optimized batch conversion to reduce repeated calculations."
-  (mapcar
-   (lambda (diagnostic)
-     (let* ((range (plist-get diagnostic :range))
-            (start (plist-get range :start))
-            (end (plist-get range :end)))
-       (flycheck-error-new
-        :buffer (current-buffer)
-        :checker checker
-        :filename (buffer-file-name)
-        :message (plist-get diagnostic :message)
-        :level (pcase (plist-get diagnostic :severity)
-                 (1 'error)
-                 (2 'warning)
-                 (3 'info)
-                 (4 'info)
-                 (_ 'error))
-        :id (plist-get diagnostic :code)
-        :group (plist-get diagnostic :source)
-        :line (1+ (plist-get start :line))
-        :column (1+ (plist-get start :character))
-        :end-line (1+ (plist-get end :line))
-        :end-column (1+ (plist-get end :character)))))
-   diagnostics))
+Use Eglot's batch range conversion before constructing Flycheck errors."
+  (lsp-proxy-diagnostics--map-ranges
+   diagnostics
+   (lambda (diagnostic region)
+    (apply #'flycheck-error-new-at-pos
+           (car region)
+           (pcase (plist-get diagnostic :severity)
+             (1 'error) (2 'warning) ((or 3 4) 'info) (_ 'error))
+           (plist-get diagnostic :message)
+           :buffer (current-buffer)
+           :checker checker
+           :filename (buffer-file-name)
+           :id (plist-get diagnostic :code)
+           :group (plist-get diagnostic :source)
+           :end-pos (cdr region)
+           (when (fboundp 'flycheck-error-tags)
+             (list :tags
+                   (cl-loop for tag across (vconcat (plist-get diagnostic :tags))
+                            for name = (alist-get tag '((1 . unnecessary) (2 . deprecated)))
+                            when name collect name)))))))
 
 ;;;###autoload
 (defun lsp-proxy-diagnostics-lsp-proxy-checker-if-needed ()
@@ -238,6 +262,8 @@ Optimized batch conversion to reduce repeated calculations."
   "Enable flycheck integration for the current buffer."
   (require 'flycheck)
   (lsp-proxy-diagnostics-lsp-proxy-checker-if-needed)
+  (add-hook 'flycheck-process-error-functions
+            #'lsp-proxy-diagnostics--flycheck-deprecated-face nil t)
   (unless lsp-proxy-diagnostics--flycheck-enabled
     (setq-local lsp-proxy-diagnostics--flycheck-enabled t)
     (add-to-list 'flycheck-checkers 'lsp-proxy)
@@ -248,6 +274,8 @@ Optimized batch conversion to reduce repeated calculations."
 (defun lsp-proxy-diagnostics-flycheck-disable (&rest _)
   "Disable flycheck integartion for the current buffer."
   (when lsp-proxy-diagnostics--flycheck-enabled
+    (remove-hook 'flycheck-process-error-functions
+                 #'lsp-proxy-diagnostics--flycheck-deprecated-face t)
     (setq-local lsp-proxy-diagnostics--flycheck-enabled nil)))
 
 ;;; Flymake integration
@@ -294,86 +322,35 @@ Optimized batch conversion to reduce repeated calculations."
 
 (defun lsp-proxy-diagnostics--convert-to-flymake-diagnostics (diagnostics)
   "Convert DIAGNOSTICS to flymake diagnostic objects.
-Optimized batch conversion using direct position calculation without
-eglot functions."
-  (if (null diagnostics)
-      nil
-    (save-excursion
-      (save-restriction
-        (widen)
-        ;; Sort diagnostics by line for efficient traversal
-        (let* ((sorted-diagnostics (sort (copy-sequence diagnostics)
-                                        (lambda (a b)
-                                          (< (plist-get (plist-get (plist-get a :range) :start) :line)
-                                             (plist-get (plist-get (plist-get b :range) :start) :line)))))
-               (current-line 0)
-               (position-cache nil))
-          (goto-char (point-min))
-
-          ;; Single pass: calculate all positions by direct line navigation
-          (dolist (diagnostic sorted-diagnostics)
-            (let* ((range (plist-get diagnostic :range))
-                   (start (plist-get range :start))
-                   (end (plist-get range :end))
-                   (start-line (plist-get start :line))
-                   (start-char (plist-get start :character))
-                   (end-line (plist-get end :line))
-                   (end-char (plist-get end :character)))
-
-              ;; Advance to target line efficiently
-              (forward-line (- start-line current-line))
-              (setq current-line start-line)
-
-              ;; Calculate start position
-              (let* ((line-start (line-beginning-position))
-                     (line-end (line-end-position))
-                     (start-point (+ line-start (min start-char (- line-end line-start))))
-                     (end-point (if (= start-line end-line)
-                                   (+ line-start (min end-char (- line-end line-start)))
-                                 ;; Handle multi-line ranges
-                                 (progn
-                                   (forward-line (- end-line start-line))
-                                   (setq current-line end-line)
-                                   (+ (line-beginning-position)
-                                      (min end-char (- (line-end-position) (line-beginning-position))))))))
-
-                ;; Let Flymake infer a useful region when the server reports a
-                ;; zero-width range, e.g. diagnostics at end of line.
-                (when (= start-point end-point)
-                  (if-let* ((diag-region
-                             (flymake-diag-region (current-buffer)
-                                                  (1+ start-line)
-                                                  start-char)))
-                      (setq start-point (car diag-region)
-                            end-point (cdr diag-region))
-                    (if (> start-point line-start)
-                        (setq start-point (1- start-point))
-                      (setq end-point (min (1+ start-point) line-end)))))
-
-                ;; Create diagnostic and cache with position key
-                (let ((flymake-diag
-                       (flymake-make-diagnostic
-                        (current-buffer)
-                        start-point
-                        end-point
-                        (cl-case (plist-get diagnostic :severity)
-                          (1 :error)
-                          (2 :warning)
-                          (t :note))
-                        (plist-get diagnostic :message))))
-                  (push (cons (cons start-line start-char) flymake-diag) position-cache)))))
-
-          ;; Reconstruct in original order
-          (let (results)
-            (dolist (orig-diagnostic diagnostics)
-              (let* ((range (plist-get orig-diagnostic :range))
-                     (start (plist-get range :start))
-                     (line (plist-get start :line))
-                     (char (plist-get start :character))
-                     (cache-entry (assoc (cons line char) position-cache)))
-                (when cache-entry
-                  (push (cdr cache-entry) results))))
-            (nreverse results)))))))
+Use Eglot's batch range conversion and diagnostic tag faces."
+  (lsp-proxy-diagnostics--map-ranges
+   diagnostics
+   (lambda (diagnostic region)
+     (pcase-let ((`(,beg . ,end) region))
+       (when (= beg end)
+         (save-excursion
+           (let* ((range (plist-get diagnostic :range))
+                  (start (plist-get range :start))
+                  (diag-region (flymake-diag-region
+                                (current-buffer) (1+ (plist-get start :line))
+                                (plist-get start :character))))
+             (if diag-region
+                 (setq beg (car diag-region) end (cdr diag-region))
+               (goto-char (point-min))
+               (forward-line (plist-get start :line))
+               (setq beg (line-beginning-position)
+                     end (line-end-position
+                          (1+ (- (plist-get (plist-get range :end) :line)
+                                 (plist-get start :line)))))))))
+       (flymake-make-diagnostic
+        (current-buffer) beg end
+        (pcase (plist-get diagnostic :severity)
+          (1 :error) (2 :warning) ((or 3 4) :note) (_ :error))
+        (plist-get diagnostic :message) nil
+        (when-let* ((faces (cl-loop for tag across (vconcat (plist-get diagnostic :tags))
+                                   when (alist-get tag eglot--tag-faces)
+                                   collect it)))
+          `((face . ,faces))))))))
 
 ;;; Pull diagnostics support
 
