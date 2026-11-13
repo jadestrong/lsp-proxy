@@ -10,7 +10,6 @@
           (file (expand-file-name "App.java" root))
           (connection (list 'test-connection))
           (lsp-proxy--connection connection)
-          (lsp-proxy-java--workspace-cleanups (make-hash-table :test 'equal))
           success failure timeout request reopened warnings)
      (unwind-protect
          (progn
@@ -20,6 +19,7 @@
                    default-directory (file-name-as-directory root))
              (insert "unsaved changes")
              (setq-local lsp-proxy-mode t
+                         lsp-proxy--language "java"
                          lsp-proxy--buffer-opened t
                          lsp-proxy--workspace-roots (list root))
              (cl-letf (((symbol-function 'lsp-proxy--ensure-connection) #'ignore)
@@ -50,13 +50,11 @@
     (should (eq (cadr request) 'emacs/cleanJavaWorkspace))
     (should (equal (plist-get (plist-get (nth 2 request) :params) :serverName) "jdtls"))
     (should-not reopened)
-    (should-error (lsp-proxy-java-clean-workspace) :type 'user-error)
     (funcall success (list :workspaceRoot root :closedDocuments (vector file)))
     (should (equal reopened (list (cons file "unsaved changes"))))
     (should (equal (buffer-string) "unsaved changes"))
     (should (buffer-modified-p))
-    (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "saved"))
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))))
+    (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string)) "saved"))))
 
 (ert-deftest lsp-proxy-clean-test-worker-failure-reopens-stopped-documents ()
   (lsp-proxy-clean-test--with-source
@@ -64,8 +62,7 @@
     (funcall success (list :workspaceRoot root :closedDocuments (list file)
                            :error "Cache is still locked"))
     (should reopened)
-    (should warnings)
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))))
+    (should warnings)))
 
 (ert-deftest lsp-proxy-clean-test-reopen-sends-widened-unsaved-text-and-resets-version ()
   (let ((open-document (symbol-function 'lsp-proxy--on-doc-open)))
@@ -96,8 +93,36 @@
     (funcall failure '(:message "Shared cache"))
     (should lsp-proxy--buffer-opened)
     (should-not reopened)
-    (should warnings)
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))))
+    (should warnings)))
+
+(ert-deftest lsp-proxy-clean-test-jsonrpc-rejection-allows-retry ()
+  (let ((async-request (symbol-function 'jsonrpc-async-request)))
+    (lsp-proxy-clean-test--with-source
+      (setq connection (make-instance 'jsonrpc-connection :name "cleanup-test")
+            lsp-proxy--connection connection)
+      (cl-letf (((symbol-function 'jsonrpc-async-request) async-request)
+                ((symbol-function 'jsonrpc-connection-send) #'ignore))
+        (unwind-protect
+            (progn
+              (lsp-proxy-java-clean-workspace)
+              (jsonrpc-connection-receive
+               connection
+               (list :jsonrpc "2.0" :id (jsonrpc--next-request-id connection)
+                     :error '(:code -32603 :message "No jdtls server serves this document")))
+              (should-not (jsonrpc--continuations connection))
+              (should warnings)
+              (should lsp-proxy--buffer-opened)
+              (lsp-proxy-java-clean-workspace)
+              (should (= (jsonrpc--next-request-id connection) 2))
+              (jsonrpc-connection-receive
+               connection
+               (list :jsonrpc "2.0" :id (jsonrpc--next-request-id connection)
+                     :result (list :workspaceRoot root :closedDocuments [])))
+              (should-not (jsonrpc--continuations connection)))
+          (dolist (cont (copy-sequence (jsonrpc--continuations connection)))
+            (jsonrpc--remove connection (car cont)))
+          (when-let* ((events (jsonrpc--events-buffer connection)))
+            (kill-buffer events)))))))
 
 (ert-deftest lsp-proxy-clean-test-old-connection-callback-is-ignored ()
   (lsp-proxy-clean-test--with-source
@@ -105,8 +130,18 @@
     (setq lsp-proxy--connection (list 'replacement-connection))
     (funcall success (list :workspaceRoot root :closedDocuments (vector file)))
     (should-not reopened)
-    (should lsp-proxy--buffer-opened)
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))))
+    (should lsp-proxy--buffer-opened)))
+
+(ert-deftest lsp-proxy-clean-test-repeated-command-is-sent-to-backend ()
+  (lsp-proxy-clean-test--with-source
+    (let (requests)
+      (cl-letf (((symbol-function 'jsonrpc-async-request)
+                 (lambda (_conn method params &rest _)
+                   (push (list method params) requests))))
+        (lsp-proxy-java-clean-workspace)
+        (lsp-proxy-java-clean-workspace))
+      (should (= (length requests) 2))
+      (should (equal (car requests) (cadr requests))))))
 
 (ert-deftest lsp-proxy-clean-test-timeout-allows-later-reconnection ()
   (lsp-proxy-clean-test--with-source
@@ -114,15 +149,13 @@
     (funcall timeout)
     (should-not lsp-proxy--buffer-opened)
     (should-not reopened)
-    (should warnings)
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))))
+    (should warnings)))
 
-(ert-deftest lsp-proxy-clean-test-dispatch-error-releases-pending-state ()
+(ert-deftest lsp-proxy-clean-test-dispatch-error-is-propagated ()
   (lsp-proxy-clean-test--with-source
     (cl-letf (((symbol-function 'jsonrpc-async-request)
                (lambda (&rest _) (error "Connection failed"))))
       (should-error (lsp-proxy-java-clean-workspace)))
-    (should (= (hash-table-count lsp-proxy-java--workspace-cleanups) 0))
     (should lsp-proxy--buffer-opened)))
 
 (ert-deftest lsp-proxy-clean-test-buffer-filter-preserves-other-workspaces ()
