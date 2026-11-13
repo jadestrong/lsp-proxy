@@ -135,6 +135,9 @@ fn workspace_capabilities() -> lsp::WorkspaceClientCapabilities {
         code_lens: Some(lsp::CodeLensWorkspaceClientCapabilities {
             refresh_support: Some(true),
         }),
+        diagnostic: Some(lsp::DiagnosticWorkspaceClientCapabilities {
+            refresh_support: Some(true),
+        }),
         workspace_edit: Some(lsp::WorkspaceEditClientCapabilities {
             document_changes: Some(true),
             resource_operations: Some(vec![
@@ -1076,8 +1079,16 @@ impl Client {
             },
         };
 
+        let mut params = serde_json::to_value(params)?;
+        // lsp-types 0.95 names this field `diagnostic`, but LSP 3.17 and
+        // vscode-languageclient use `workspace.diagnostics` on the wire.
+        if let Some(workspace) = params["capabilities"]["workspace"].as_object_mut() {
+            if let Some(diagnostics) = workspace.remove("diagnostic") {
+                workspace.insert("diagnostics".into(), diagnostics);
+            }
+        }
         let value = self
-            .call::<lsp::request::Initialize>(self.next_request_id(), params)
+            .call_method(self.next_request_id(), "initialize".into(), params)
             .await?;
         let type_hierarchy_provider =
             serde_json::from_value(value["capabilities"]["typeHierarchyProvider"].clone())?;
@@ -1627,6 +1638,29 @@ mod tests {
             Some(&serde_json::Value::Bool(true)),
             "wire shape changed: {json}"
         );
+    }
+
+    #[tokio::test]
+    async fn declares_workspace_diagnostic_refresh_support_on_the_wire() {
+        let (client, _) =
+            crate::test_support::client("diagnostic-capabilities", 1, "file:///w/App.ts", false)
+                .await;
+        client.initialize(false).await.unwrap();
+        let params = client
+            .call_method(
+                "probe".to_string().into(),
+                "test/initializeParams".into(),
+                serde_json::Value::Null,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            params["capabilities"]["workspace"]["diagnostics"]["refreshSupport"],
+            true
+        );
+        assert!(params["capabilities"]["workspace"]
+            .get("diagnostic")
+            .is_none());
     }
 
     #[test]

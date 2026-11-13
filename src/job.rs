@@ -9,14 +9,18 @@ static JOB_QUEUE: OnceCell<Sender<Callback>> = OnceCell::new();
 
 pub struct Jobs {
     pub callbacks: Receiver<Callback>,
+    pub(crate) sender: Sender<Callback>,
 }
 
 impl Jobs {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let (tx, rx) = channel(1024);
-        let _ = JOB_QUEUE.set(tx);
-        Self { callbacks: rx }
+        let _ = JOB_QUEUE.set(tx.clone());
+        Self {
+            callbacks: rx,
+            sender: tx,
+        }
     }
 
     pub fn handle_callback(&self, editor: &mut Editor, call: anyhow::Result<Option<Callback>>) {

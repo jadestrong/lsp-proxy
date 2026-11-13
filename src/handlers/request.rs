@@ -1426,7 +1426,26 @@ pub(crate) async fn handle_pull_diagnostic_response(
     limit_diagnostics: bool,
     pull_generation: u64,
 ) {
-    job::dispatch(move |editor| {
+    job::dispatch(pull_diagnostic_response_callback(
+        sender,
+        provider,
+        result,
+        document_id,
+        limit_diagnostics,
+        pull_generation,
+    ))
+    .await;
+}
+
+pub(crate) fn pull_diagnostic_response_callback(
+    sender: Sender<Message>,
+    provider: DiagnosticProvider,
+    result: lsp_types::DocumentDiagnosticReportResult,
+    document_id: DocumentId,
+    limit_diagnostics: bool,
+    pull_generation: u64,
+) -> job::Callback {
+    Box::new(move |editor| {
         // Discard the whole response if a newer pull batch has already been applied
         // for this document; see `Document::accept_pull_generation`.
         //
@@ -1577,7 +1596,6 @@ pub(crate) async fn handle_pull_diagnostic_response(
             }
         }
     })
-    .await;
 }
 
 pub(crate) async fn handle_inline_completion(

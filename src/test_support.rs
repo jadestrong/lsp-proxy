@@ -12,12 +12,26 @@ definition_calls=0
 initialize_params=None
 configurations=[]
 watched_files=[]
+diagnostic_calls=[]
+held_diagnostics=[]
 def send(value):
     value['jsonrpc']='2.0'
     body=json.dumps(value).encode()
     sys.stdout.buffer.write(('Content-Length: %d\r\n\r\n'%len(body)).encode()+body)
     sys.stdout.buffer.flush()
 def answer(mid,value): send({'id':mid,'result':value})
+def diagnostic_answer(mid,p):
+    if name=='diagnostic-error':
+        send({'id':mid,'error':{'code':-32603,'message':'diagnostic failed'}})
+        return
+    if name=='diagnostic-unchanged':
+        answer(mid,{'kind':'unchanged','resultId':'unchanged-result'})
+        return
+    items=[] if p['textDocument']['uri'].endswith('Clean.ts') else [{'range':{'start':{'line':0,'character':0},'end':{'line':0,'character':1}},'message':name,'severity':2}]
+    report={'kind':'full','resultId':'result-'+str(mid),'items':items}
+    if name=='diagnostic-related':
+        report['relatedDocuments']={'file:///other/Other.ts':{'kind':'full','resultId':'external','items':items}}
+    answer(mid,report)
 while True:
     headers={}
     while True:
@@ -88,6 +102,15 @@ while True:
     elif method=='test/configurations': answer(mid,configurations)
     elif method=='workspace/didChangeWatchedFiles': watched_files.extend(p['changes'])
     elif method=='test/watchedFiles': answer(mid,watched_files)
+    elif method=='textDocument/diagnostic':
+        diagnostic_calls.append({'id':mid,'params':p})
+        if name=='diagnostic-held': held_diagnostics.append((mid,p))
+        else: diagnostic_answer(mid,p)
+    elif method=='test/diagnosticCalls': answer(mid,diagnostic_calls)
+    elif method=='test/releaseDiagnostics':
+        for request,params in held_diagnostics: diagnostic_answer(request,params)
+        held_diagnostics=[]
+        answer(mid,None)
     elif method=='test/replies': answer(mid,replies)
     elif method=='workspace/executeCommand':
         command=p['command']

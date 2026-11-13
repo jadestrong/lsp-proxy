@@ -36,6 +36,7 @@ pub enum MethodCall {
     /// `workspace/codeLens/refresh`. Carries no parameters: it means "everything you
     /// were told about code lenses may now be stale", not "this file changed".
     CodeLensRefresh,
+    DiagnosticRefresh,
     AddClasspathListener(crate::java_spring::ClasspathListenerParams),
     RemoveClasspathListener(crate::java_spring::ClasspathListenerParams),
     ExecuteClientCommand(lsp_types::ExecuteCommandParams),
@@ -53,6 +54,7 @@ impl MethodCall {
                 Self::WorkspaceConfiguration(params)
             }
             lsp_types::request::CodeLensRefresh::METHOD => Self::CodeLensRefresh,
+            lsp_types::request::WorkspaceDiagnosticRefresh::METHOD => Self::DiagnosticRefresh,
             lsp_types::request::RegisterCapability::METHOD => {
                 let params: lsp_types::RegistrationParams = params.parse()?;
                 Self::RegisterCapability(params)
@@ -157,6 +159,24 @@ mod code_lens_refresh_tests {
             assert_eq!(
                 MethodCall::parse("workspace/codeLens/refresh", params).unwrap(),
                 MethodCall::CodeLensRefresh
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_refresh_tests {
+    use super::{jsonrpc, MethodCall};
+
+    #[test]
+    fn diagnostic_refresh_accepts_absent_null_and_empty_params() {
+        for params in [
+            jsonrpc::Params::None,
+            jsonrpc::Params::Map(Default::default()),
+        ] {
+            assert_eq!(
+                MethodCall::parse("workspace/diagnostic/refresh", params).unwrap(),
+                MethodCall::DiagnosticRefresh
             );
         }
     }

@@ -14,7 +14,7 @@ use crate::{
         request::{
             create_error_response, create_error_response_with_uri, handle_code_action,
             handle_inline_completion, handle_pull_diagnostic_response,
-            pull_diagnostics_for_document,
+            pull_diagnostic_response_callback, pull_diagnostics_for_document,
         },
     },
     lsp::{
@@ -163,6 +163,135 @@ impl Application {
         }
     }
 
+    fn refresh_diagnostics(&mut self, server: Arc<Client>) {
+        if !server.is_initialized() {
+            return;
+        }
+        let identifier =
+            server.capabilities().diagnostic_provider.as_ref().and_then(
+                |provider| match provider {
+                    lsp_types::DiagnosticServerCapabilities::Options(options) => {
+                        options.identifier.clone()
+                    }
+                    lsp_types::DiagnosticServerCapabilities::RegistrationOptions(options) => {
+                        options.diagnostic_options.identifier.clone()
+                    }
+                },
+            );
+        let mut documents = Vec::new();
+        let mut versions = HashMap::new();
+        for doc in self.editor.documents_mut() {
+            if doc
+                .language_servers_with_feature(syntax::LanguageServerFeature::PullDiagnostics)
+                .iter()
+                .any(|client| Arc::ptr_eq(client, &server))
+            {
+                versions.insert(doc.uri.clone(), (doc.id(), doc.version));
+                documents.push((
+                    doc.id(),
+                    doc.version,
+                    doc.next_pull_generation(),
+                    doc.identifier(),
+                ));
+            }
+        }
+        let versions = Arc::new(versions);
+        let sender = self.sender.clone();
+        let callbacks = self.jobs.sender.clone();
+        tokio::spawn(async move {
+            let mut responses = futures_util::stream::iter(documents.into_iter().map(
+                |(id, version, generation, document)| {
+                    let server = server.clone();
+                    let identifier = identifier.clone();
+                    async move {
+                        let result = server
+                            .request::<lsp_types::request::DocumentDiagnosticRequest>(
+                                lsp_types::DocumentDiagnosticParams {
+                                    text_document: document,
+                                    identifier,
+                                    // A refresh needs a new report; the document's cached
+                                    // result ID may belong to another diagnostic provider.
+                                    previous_result_id: None,
+                                    work_done_progress_params: Default::default(),
+                                    partial_result_params: Default::default(),
+                                },
+                            )
+                            .await;
+                        (id, version, generation, result)
+                    }
+                },
+            ))
+            .buffer_unordered(4);
+            while let Some((id, version, generation, result)) = responses.next().await {
+                let mut result = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        warn!(
+                            "Diagnostic refresh failed for document {id} on {}: {error}",
+                            server.name()
+                        );
+                        continue;
+                    }
+                };
+                let server = server.clone();
+                let versions = versions.clone();
+                let sender = sender.clone();
+                let identifier = identifier.clone();
+                let _ = callbacks
+                    .send(Box::new(move |editor| {
+                        let serves = |doc: &Document| {
+                            doc.language_servers_with_feature(
+                                syntax::LanguageServerFeature::PullDiagnostics,
+                            )
+                            .iter()
+                            .any(|client| Arc::ptr_eq(client, &server))
+                        };
+                        if !editor
+                            .document_mut(id)
+                            .is_some_and(|doc| doc.version == version && serves(doc))
+                        {
+                            return;
+                        }
+                        let related = match &mut result {
+                            lsp_types::DocumentDiagnosticReportResult::Report(
+                                lsp_types::DocumentDiagnosticReport::Full(report),
+                            ) => &mut report.related_documents,
+                            lsp_types::DocumentDiagnosticReportResult::Report(
+                                lsp_types::DocumentDiagnosticReport::Unchanged(report),
+                            ) => &mut report.related_documents,
+                            lsp_types::DocumentDiagnosticReportResult::Partial(report) => {
+                                &mut report.related_documents
+                            }
+                        };
+                        if let Some(related) = related {
+                            related.retain(|uri, _| {
+                                editor.document_by_uri(uri).is_some_and(|doc| {
+                                    versions.get(uri) == Some(&(doc.id(), doc.version))
+                                        && serves(doc)
+                                })
+                            });
+                        }
+                        pull_diagnostic_response_callback(
+                            sender,
+                            DiagnosticProvider {
+                                server_id: server.id(),
+                                identifier: Some(
+                                    identifier
+                                        .clone()
+                                        .unwrap_or_else(|| server.name().to_string()),
+                                ),
+                            },
+                            result,
+                            id,
+                            true,
+                            generation,
+                        )(editor);
+                    }))
+                    .await;
+            }
+        });
+    }
+
     pub async fn handle_language_server_message(
         &mut self,
         call: Call,
@@ -299,6 +428,10 @@ impl Application {
                     }
                     Ok(MethodCall::CodeLensRefresh) => {
                         self.send_notification::<lsp_ext::CodeLensRefresh>(());
+                        Ok(serde_json::Value::Null)
+                    }
+                    Ok(MethodCall::DiagnosticRefresh) => {
+                        self.refresh_diagnostics(language_server!());
                         Ok(serde_json::Value::Null)
                     }
                     Ok(MethodCall::RegisterCapability(params)) => {
@@ -2911,5 +3044,344 @@ mod dynamic_registration_tests {
                 root = items[0]["lsp_item"].clone();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_refresh_tests {
+    use super::*;
+
+    async fn fixture(
+        name: &str,
+        pull: bool,
+    ) -> (
+        Application,
+        crossbeam_channel::Receiver<Message>,
+        Arc<Client>,
+        Arc<Client>,
+    ) {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let mut app = Application::new(
+            sender,
+            syntax::Configuration {
+                language: vec![serde_json::from_value(json!({
+                    "name":"typescript", "file-types":["ts"], "language-servers":[name, "other"]
+                }))
+                .unwrap()],
+                language_server: Default::default(),
+            },
+        );
+        let mut clients = Vec::new();
+        for (name, id) in [(name, 1), ("other", 2)] {
+            let (client, _) =
+                crate::test_support::client(name, id, "file:///w/App.ts", false).await;
+            client
+                .capabilities
+                .set(lsp_types::ServerCapabilities {
+                    diagnostic_provider: (pull || id == 2).then(|| {
+                        lsp_types::DiagnosticServerCapabilities::Options(
+                            lsp_types::DiagnosticOptions {
+                                identifier: Some("pull".into()),
+                                ..Default::default()
+                            },
+                        )
+                    }),
+                    ..Default::default()
+                })
+                .unwrap();
+            app.editor
+                .language_servers
+                .insert_test_client(client.clone());
+            clients.push(client);
+        }
+        (app, receiver, clients.remove(0), clients.remove(0))
+    }
+
+    fn document(
+        app: &mut Application,
+        uri: &str,
+        client: &Arc<Client>,
+        message: &str,
+    ) -> DocumentId {
+        let uri = lsp_types::Url::parse(uri).unwrap();
+        let id = app.editor.new_document(&uri, Some("typescript")).id();
+        let doc = app.editor.document_mut(id).unwrap();
+        doc.language_servers
+            .insert(client.name().into(), client.clone());
+        doc.previous_diagnostic_id = Some("cached-from-another-provider".into());
+        doc.replace_diagnostics(
+            vec![DiagnosticItem {
+                item: lsp_types::Diagnostic {
+                    message: message.into(),
+                    ..Default::default()
+                },
+                provider: DiagnosticProvider {
+                    server_id: client.id(),
+                    identifier: Some("pull".into()),
+                },
+                file_path: String::new(),
+            }],
+            &DiagnosticProvider {
+                server_id: client.id(),
+                identifier: Some("pull".into()),
+            },
+        );
+        id
+    }
+
+    async fn refresh(app: &mut Application, client: &Client) {
+        let call = serde_json::from_value(json!({
+            "jsonrpc":"2.0", "id":"refresh", "method":"workspace/diagnostic/refresh"
+        }))
+        .unwrap();
+        app.handle_language_server_message(call, client.id(), unbounded_channel().0)
+            .await;
+    }
+
+    async fn query(client: &Client, method: &str, params: Value) -> Value {
+        client
+            .call_method(format!("probe-{method}").into(), method.into(), params)
+            .await
+            .unwrap()
+    }
+
+    async fn wait_calls(client: &Client, count: usize) -> Value {
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let calls = query(client, "test/diagnosticCalls", Value::Null).await;
+                if calls.as_array().unwrap().len() == count {
+                    break calls;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn apply(app: &mut Application) {
+        let callback = tokio::time::timeout(Duration::from_secs(3), app.jobs.callbacks.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        callback(&mut app.editor);
+    }
+
+    #[tokio::test]
+    async fn refresh_pulls_only_source_documents_and_publishes_merged_and_empty_reports() {
+        let (mut app, receiver, source, other) = fixture("diagnostic-related", true).await;
+        let main = document(&mut app, "file:///w/App.ts", &source, "old");
+        let clean = document(&mut app, "file:///w/Clean.ts", &source, "old");
+        let external = document(&mut app, "file:///other/Other.ts", &other, "foreign");
+        let extra_provider = DiagnosticProvider {
+            server_id: other.id(),
+            identifier: None,
+        };
+        app.editor.document_mut(main).unwrap().replace_diagnostics(
+            vec![DiagnosticItem {
+                item: lsp_types::Diagnostic {
+                    message: "other provider".into(),
+                    ..Default::default()
+                },
+                provider: extra_provider.clone(),
+                file_path: String::new(),
+            }],
+            &extra_provider,
+        );
+        refresh(&mut app, &source).await;
+        let calls = wait_calls(&source, 2).await;
+        for call in calls.as_array().unwrap() {
+            assert!(call["id"].as_str().unwrap().starts_with("req"));
+            assert_eq!(call["params"]["identifier"], "pull");
+            assert!(call["params"]["previousResultId"].is_null());
+            assert!(call["params"]["textDocument"]["uri"]
+                .as_str()
+                .unwrap()
+                .starts_with("file:///w/"));
+        }
+        apply(&mut app).await;
+        apply(&mut app).await;
+        assert_eq!(
+            query(&other, "test/diagnosticCalls", Value::Null).await,
+            json!([])
+        );
+        let replies = query(&source, "test/replies", Value::Null).await;
+        assert!(replies
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reply| reply["id"] == "refresh"
+                && reply.get("result") == Some(&Value::Null)
+                && reply.get("error").is_none()));
+        let published: Vec<Value> = receiver
+            .try_iter()
+            .map(|message| match message {
+                Message::Notification(notification) => {
+                    assert_eq!(notification.method, "textDocument/publishDiagnostics");
+                    notification.params.params
+                }
+                _ => panic!("refresh must not ask Emacs to pull"),
+            })
+            .collect();
+        assert_eq!(published.len(), 2);
+        assert!(published
+            .iter()
+            .any(|params| params["uri"] == "file:///w/Clean.ts"
+                && params["diagnostics"] == json!([])));
+        assert!(published
+            .iter()
+            .any(|params| params["uri"] == "file:///w/App.ts"
+                && params["diagnostics"].as_array().unwrap().len() == 2));
+        assert!(app
+            .editor
+            .document_mut(clean)
+            .unwrap()
+            .diagnostics()
+            .as_ref()
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            app.editor
+                .document_mut(external)
+                .unwrap()
+                .diagnostics()
+                .as_ref()
+                .unwrap()[0]
+                .item
+                .message,
+            "foreign"
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_acknowledges_without_waiting_and_discards_edited_closed_or_replaced_documents()
+    {
+        for action in ["edit", "close", "replace"] {
+            let (mut app, receiver, source, other) = fixture("diagnostic-held", true).await;
+            let id = document(&mut app, "file:///w/App.ts", &source, "old");
+            refresh(&mut app, &source).await;
+            wait_calls(&source, 1).await;
+            let replies = query(&source, "test/replies", Value::Null).await;
+            assert!(
+                replies
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|reply| reply["id"] == "refresh"
+                        && reply.get("result") == Some(&Value::Null))
+            );
+            assert!(receiver.try_recv().is_err());
+            match action {
+                "edit" => app.editor.document_mut(id).unwrap().version += 1,
+                "close" => {
+                    app.editor.documents.remove(&id);
+                }
+                _ => {
+                    app.editor
+                        .document_mut(id)
+                        .unwrap()
+                        .language_servers
+                        .insert(source.name().into(), other.clone());
+                }
+            }
+            query(&source, "test/releaseDiagnostics", Value::Null).await;
+            apply(&mut app).await;
+            assert!(
+                receiver.try_recv().is_err(),
+                "stale refresh published after {action}"
+            );
+            if let Some(doc) = app.editor.document_mut(id) {
+                assert_eq!(doc.diagnostics().as_ref().unwrap()[0].item.message, "old");
+                assert_eq!(
+                    doc.previous_diagnostic_id.as_deref(),
+                    Some("cached-from-another-provider")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_without_pull_support_acknowledges_without_queries() {
+        let (mut app, receiver, source, _) = fixture("diagnostic-unsupported", false).await;
+        document(&mut app, "file:///w/App.ts", &source, "old");
+        refresh(&mut app, &source).await;
+        assert_eq!(
+            query(&source, "test/diagnosticCalls", Value::Null).await,
+            json!([])
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn diagnostic_refresh_limits_in_flight_queries() {
+        let (mut app, receiver, source, _) = fixture("diagnostic-held", true).await;
+        for n in 0..6 {
+            document(&mut app, &format!("file:///w/App{n}.ts"), &source, "old");
+        }
+        refresh(&mut app, &source).await;
+        wait_calls(&source, 4).await;
+        assert_eq!(
+            query(&source, "test/diagnosticCalls", Value::Null)
+                .await
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        query(&source, "test/releaseDiagnostics", Value::Null).await;
+        for _ in 0..4 {
+            apply(&mut app).await;
+        }
+        wait_calls(&source, 6).await;
+        query(&source, "test/releaseDiagnostics", Value::Null).await;
+        for _ in 0..2 {
+            apply(&mut app).await;
+        }
+        assert_eq!(receiver.try_iter().count(), 6);
+    }
+
+    #[tokio::test]
+    async fn unchanged_refresh_preserves_cached_diagnostics() {
+        let (mut app, receiver, source, _) = fixture("diagnostic-unchanged", true).await;
+        let id = document(&mut app, "file:///w/App.ts", &source, "old");
+        refresh(&mut app, &source).await;
+        apply(&mut app).await;
+        assert_eq!(
+            app.editor
+                .document_mut(id)
+                .unwrap()
+                .diagnostics()
+                .as_ref()
+                .unwrap()[0]
+                .item
+                .message,
+            "old"
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn failed_refresh_preserves_cached_diagnostics() {
+        let (mut app, receiver, source, _) = fixture("diagnostic-error", true).await;
+        let id = document(&mut app, "file:///w/App.ts", &source, "old");
+        refresh(&mut app, &source).await;
+        wait_calls(&source, 1).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), app.jobs.callbacks.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            app.editor
+                .document_mut(id)
+                .unwrap()
+                .diagnostics()
+                .as_ref()
+                .unwrap()[0]
+                .item
+                .message,
+            "old"
+        );
+        assert!(receiver.try_recv().is_err());
     }
 }
