@@ -586,6 +586,15 @@ language-servers = [ "yaml-language-server" ]
 # Eclipse JDT Language Server (jdtls). Usage and field details: docs/java.md.
 [language-server.jdtls]
 command = "jdtls"
+args = [
+  "--jvm-arg=-Xms256m",
+  "--jvm-arg=-Xmx4G",
+  "--jvm-arg=-XX:+UseParallelGC",
+  "--jvm-arg=-XX:GCTimeRatio=4",
+  "--jvm-arg=-XX:AdaptiveSizePolicyWeight=90",
+  "--jvm-arg=-Dsun.zip.disableMemoryMapping=true",
+  "--jvm-arg=-Xlog:disable",
+]
 lombok-agent-arg = "--jvm-arg=-javaagent:{jar}"
 
 [language-server.jdtls.config]

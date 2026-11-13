@@ -247,8 +247,10 @@ Actuator/JMX 暴露方式和应用版本会影响 mappings 的可见性。
 
 查看 proxy 日志中的 `Spring classpath`：注册成功会记录 STS/JDT 实例 ID；
 缺少 JDT、初始化超时、扩展命令失败或 callback 未登记会返回明确错误。
-STS4 的 classpath 注册超时只有 10 秒，proxy 会等待同项目 JDT 的
-`ServiceReady` 后才初始化 STS，等待上限为 120 秒。
+proxy 会等待同项目 JDT 的 `ServiceReady` 后才初始化 STS，等待上限为 120 秒。
+后续 classpath 注册仍可能因项目导入和构建而超时；此时 proxy 会保留该
+STS/JDT 实例对的回调路由，让迟到通知正常转发。明确注册失败、注销或
+服务退出时仍会清理路由。注册超时本身不表示 JDT 索引损坏。
 缺少扩展时运行安装命令并重启整个 proxy，让 JDT 重新读取 bundles。
 workspace symbol 搜索允许某个服务器失败后保留其他服务器结果，失败详情记录在日志中。
 没有已初始化的符号服务器或全部请求失败时，搜索会返回错误。
@@ -311,11 +313,38 @@ Then choose `jdtls` and restart LSP-Proxy. The managed install puts the server's
 You can also install jdtls yourself, for example with a package manager, as long
 as the `jdtls` launcher is on `PATH`.
 
+### JVM Arguments
+
+The built-in JDTLS configuration uses a 256 MB initial heap and a 4 GB maximum
+heap per server process. It uses VS Code Java's Parallel GC tuning, disables ZIP
+memory mapping, and disables JVM unified logging. The official launcher accepts
+these options through repeated `--jvm-arg=` arguments.
+
+To change the heap sizes, override `args` in your `languages.toml`:
+
+```toml
+[language-server.jdtls]
+args = [
+  "--jvm-arg=-Xms256m",
+  "--jvm-arg=-Xmx2G",
+  "--jvm-arg=-XX:+UseParallelGC",
+  "--jvm-arg=-XX:GCTimeRatio=4",
+  "--jvm-arg=-XX:AdaptiveSizePolicyWeight=90",
+  "--jvm-arg=-Dsun.zip.disableMemoryMapping=true",
+  "--jvm-arg=-Xlog:disable",
+]
+```
+
+User `args` replace the entire default array. Restart LSP-Proxy to apply changed
+startup arguments. `-Xmx` limits the Java heap; total process memory also includes
+native allocations, threads, and mapped files.
+
 ### Configuration Fields
 
 | Field | Default/example | Purpose |
 | --- | --- | --- |
 | `command` | `"jdtls"` | Starts the official launcher. Avoid hand-built `java -jar ... -data ...` commands because the launcher derives per-project workspace data. |
+| `args` | JVM arguments above | Controls the JDTLS JVM heap and GC. A user array replaces the built-in defaults. |
 | `lombok-agent-arg` | `"--jvm-arg=-javaagent:{jar}"` | Tells LSP-Proxy how to append the managed Lombok agent when installed. |
 | `[language-server.jdtls.config]` | table | Sent as jdtls `initializationOptions`. |
 | `settings.java.referencesCodeLens.enabled` | `true` | Enables reference CodeLens. |
