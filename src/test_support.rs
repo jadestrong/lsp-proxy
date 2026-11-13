@@ -11,6 +11,7 @@ pending={}
 definition_calls=0
 initialize_params=None
 configurations=[]
+watched_files=[]
 def send(value):
     value['jsonrpc']='2.0'
     body=json.dumps(value).encode()
@@ -85,6 +86,8 @@ while True:
         else: answer(mid,[location])
     elif method=='workspace/didChangeConfiguration': configurations.append(p['settings'])
     elif method=='test/configurations': answer(mid,configurations)
+    elif method=='workspace/didChangeWatchedFiles': watched_files.extend(p['changes'])
+    elif method=='test/watchedFiles': answer(mid,watched_files)
     elif method=='test/replies': answer(mid,replies)
     elif method=='workspace/executeCommand':
         command=p['command']

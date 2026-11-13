@@ -153,6 +153,7 @@ impl Bridge {
             } else {
                 "sts.java.addClasspathListener"
             };
+            let mut registration_timed_out = false;
             let result = match wait_initialized(&jdt).await {
                 Ok(()) => {
                     if !remove
@@ -176,11 +177,16 @@ impl Bridge {
                     jdt.request::<lsp_types::request::ExecuteCommand>(command)
                         .await
                         .map(|value| value.unwrap_or(Value::Null))
-                        .map_err(forward_error)
+                        .map_err(|err| {
+                            registration_timed_out = matches!(&err, crate::lsp::Error::Timeout(_));
+                            forward_error(err)
+                        })
                 }
                 Err(err) => Err(err),
             };
-            if remove || result.is_err() {
+            // JDT may finish registration after the request times out. Keep its
+            // callback route until explicit removal or server lifecycle cleanup.
+            if remove || (result.is_err() && !registration_timed_out) {
                 let mut callbacks = bridge.callbacks.lock();
                 if callbacks
                     .get(&key)
@@ -351,7 +357,7 @@ mod tests {
     }
 
     async fn responses(client: &Client) -> Value {
-        for _ in 0..50 {
+        for _ in 0..300 {
             let response = client
                 .call_method(
                     "replies".to_string().into(),
@@ -428,6 +434,44 @@ mod tests {
             .lock()
             .contains_key(&(5, "same-callback".into())));
         bridge.remove_client(4);
+        assert!(bridge.callbacks.lock().is_empty());
+        assert!(bridge.listeners.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_transport_registration_timeout_preserves_late_callback() {
+        let bridge = Bridge::default();
+        let (jdt, mut rx) = crate::test_support::client("jdtls", 1, "file:///one", true).await;
+        let (spring, _) = crate::test_support::client("spring", 2, "file:///one", true).await;
+        bridge.classpath_request(
+            spring.clone(),
+            vec![jdt.clone()],
+            11.into(),
+            ClasspathListenerParams {
+                callback_command_id: "late-callback".into(),
+                batched: true,
+            },
+            false,
+        );
+        // Hold the callback until the registration request's two-second timeout.
+        let (id, cmd) = next_callback(&mut rx).await;
+        let arguments = cmd.arguments.clone();
+        let reply = responses(&spring).await;
+        assert_eq!(reply[0]["error"]["code"], -32603);
+        assert!(reply[0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("timed out"));
+
+        bridge.callback(jdt.clone(), id, cmd);
+        let reply = responses(&jdt).await;
+        assert_eq!(reply[0]["result"]["server"], "spring");
+        assert_eq!(
+            reply[0]["result"]["arguments"],
+            serde_json::json!(arguments)
+        );
+
+        bridge.remove_client(spring.id());
         assert!(bridge.callbacks.lock().is_empty());
         assert!(bridge.listeners.lock().is_empty());
     }

@@ -1623,6 +1623,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn declares_relative_file_watch_pattern_support() {
+        let capabilities = super::workspace_capabilities();
+        let watched = capabilities.did_change_watched_files.unwrap();
+        assert_eq!(watched.dynamic_registration, Some(true));
+        assert_eq!(watched.relative_pattern_support, Some(true));
+    }
+
     /// The inlay-hint refresh declaration sits right beside the code-lens one and is
     /// deliberately the opposite; pinning both keeps a future edit from "fixing" the
     /// wrong neighbour.
