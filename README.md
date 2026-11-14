@@ -727,6 +727,8 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 | `lsp-proxy-xref-optimization-strategy` | `'optimized` | Strategy for Xref processing: `eager` original; `lazy` minimal preview; `optimized` balanced (fast with previews). |
 | `lsp-proxy-peek-height` | `12` | Source lines shown in an inline peek. |
 | `lsp-proxy-peek-results-height` | `3` | Maximum result rows shown below the source preview. |
+| `lsp-proxy-peek-fill-fringe` | `t` | Fill both fringes with the peek border color on graphical displays. |
+| `lsp-proxy-peek-use-dashes-as-horizontal-border` | `nil` | Use dashed horizontal borders even on graphical displays; terminals always use dashes. |
 | `lsp-proxy-enable-symbol-highlighting` | `t` | Highlight occurrences of symbol at point using `documentHighlight` support. |
 | `lsp-proxy-enable-hover-eldoc` | `nil` | Request hover info automatically and integrate into Eldoc while moving point. |
 

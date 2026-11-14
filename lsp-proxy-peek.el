@@ -13,6 +13,7 @@
 (require 'subr-x)
 (require 'xref)
 (require 'eglot)
+(require 'fringe)
 (require 'lsp-proxy-core)
 (require 'lsp-proxy-utils)
 
@@ -28,6 +29,23 @@
 (defcustom lsp-proxy-peek-results-height 3
   "Maximum number of results displayed below the source preview."
   :type 'natnum :group 'lsp-proxy)
+
+(defcustom lsp-proxy-peek-fill-fringe t
+  "Whether to fill the preview's left and right fringes with its border color.
+Set this to nil if the borders look better without it when using line numbers."
+  :type 'boolean :group 'lsp-proxy)
+
+(defcustom lsp-proxy-peek-use-dashes-as-horizontal-border nil
+  "Whether to use dashes for horizontal borders even on graphical displays.
+This can look better with line numbers, which may give a thin border the
+height of a full text line.  Terminals always use dashes."
+  :type 'boolean :group 'lsp-proxy)
+
+(defface lsp-proxy-peek-border-face
+  '((t :inherit highlight :height 15 :extend t))
+  "Face for peek borders; customize its background color and height.
+Terminal borders use the background color as the color of their dashes."
+  :group 'lsp-proxy)
 
 (defface lsp-proxy-peek-header-face '((t :inherit header-line))
   "Face for the peek header and reading history." :group 'lsp-proxy)
@@ -387,6 +405,42 @@ Use `lsp-proxy-peek-definition', `lsp-proxy-peek-references' or
       (setq query (lsp-proxy-peek--query-parent query)))
     (mapconcat #'identity labels " → ")))
 
+(when (fboundp 'define-fringe-bitmap)
+  (define-fringe-bitmap 'lsp-proxy-peek-fringe [0]))
+
+(defun lsp-proxy-peek--decorate-fringes (text window)
+  "Fill both fringes on every line of TEXT displayed in WINDOW."
+  (if (not (and lsp-proxy-peek-fill-fringe
+                (display-graphic-p (and (window-live-p window) (window-frame window)))
+                (fringe-bitmap-p 'lsp-proxy-peek-fringe)))
+      text
+    (let ((start 0) pieces)
+      (while (string-match "\n" text start)
+        (let ((end (match-beginning 0)))
+          (push (concat (substring text start end)
+                        (propertize " " 'display
+                                    '(left-fringe lsp-proxy-peek-fringe lsp-proxy-peek-border-face))
+                        (propertize " " 'display
+                                    '(right-fringe lsp-proxy-peek-fringe lsp-proxy-peek-border-face))
+                        (substring text end (1+ end))) pieces)
+          (setq start (1+ end))))
+      (push (substring text start) pieces)
+      (apply #'concat (nreverse pieces)))))
+
+(defun lsp-proxy-peek--border (width window)
+  "Return a horizontal border WIDTH columns wide for WINDOW."
+  (if (and (display-graphic-p (and (window-live-p window) (window-frame window)))
+           (not lsp-proxy-peek-use-dashes-as-horizontal-border))
+      (propertize (lsp-proxy-peek--decorate-fringes "\n" window)
+                  'face 'lsp-proxy-peek-border-face)
+    (let ((color (face-attribute 'lsp-proxy-peek-border-face :background nil t)))
+      (lsp-proxy-peek--decorate-fringes
+       (propertize (concat (make-string width ?-) "\n")
+                   'face (list :inherit 'default
+                               :foreground (if (stringp color) color
+                                             (face-attribute 'shadow :foreground nil t))))
+       window))))
+
 (defun lsp-proxy-peek--render (session)
   "Render SESSION in its host buffer, without selecting a window or buffer."
   (when (lsp-proxy-peek--active-p session)
@@ -394,6 +448,7 @@ Use `lsp-proxy-peek-definition', `lsp-proxy-peek-references' or
       (let* ((window (lsp-proxy-peek--session-window session))
              (width (max 20 (if (window-live-p window) (window-body-width window) 80)))
              (overlay (lsp-proxy-peek--session-overlay session))
+             (border (lsp-proxy-peek--border width window))
              (query (lsp-proxy-peek--session-current session))
              (locations (lsp-proxy-peek--query-locations query))
              (index (lsp-proxy-peek--query-index query))
@@ -412,20 +467,24 @@ Use `lsp-proxy-peek-definition', `lsp-proxy-peek-references' or
         (move-overlay overlay (line-end-position) (line-end-position))
         (overlay-put overlay 'window window)
         (overlay-put overlay 'after-string
-                     (concat "\n"
-                             (propertize (concat (truncate-string-to-width
-                                                  (lsp-proxy-peek--query-label query) width) "\n")
-                                         'face 'lsp-proxy-peek-header-face)
-                             (when status (concat (propertize (truncate-string-to-width status width)
-                                                              'face 'shadow) "\n"))
-                             source (apply #'concat (nreverse rows))
-                             (propertize
-                              (concat (lsp-proxy-peek--tail (lsp-proxy-peek--history query) width)
-                                      (when (lsp-proxy-peek--location-branches location)
-                                        (format "  branches %d/%d"
-                                                (1+ (lsp-proxy-peek--location-branch-index location))
-                                                (length (lsp-proxy-peek--location-branches location))))
-                                      "\n") 'face 'lsp-proxy-peek-header-face)))))))
+                     (concat "\n" border
+                             (lsp-proxy-peek--decorate-fringes
+                              (concat
+                               (propertize (concat (truncate-string-to-width
+                                                    (lsp-proxy-peek--query-label query) width) "\n")
+                                           'face 'lsp-proxy-peek-header-face)
+                               (when status (concat (propertize (truncate-string-to-width status width)
+								'face 'shadow) "\n"))
+                               source (apply #'concat (nreverse rows))
+                               (propertize
+				(concat (lsp-proxy-peek--tail (lsp-proxy-peek--history query) width)
+					(when (lsp-proxy-peek--location-branches location)
+                                          (format "  branches %d/%d"
+                                                  (1+ (lsp-proxy-peek--location-branch-index location))
+                                                  (length (lsp-proxy-peek--location-branches location))))
+					"\n") 'face 'lsp-proxy-peek-header-face))
+                              window)
+                             border))))))
 
 (defun lsp-proxy-peek--post-command ()
   "Move the overlay with point; refresh code only when its source changes."
