@@ -45,6 +45,7 @@
 (require 'lsp-proxy-completion)
 (require 'lsp-proxy-large-file)
 (require 'lsp-proxy-xref)
+(require 'lsp-proxy-peek)
 (require 'lsp-proxy-hierarchy)
 (require 'lsp-proxy-workspace-symbol)
 (require 'lsp-proxy-signature)
@@ -383,6 +384,8 @@ Skip reopening notifications for buffers not currently visible."
 
 (defun lsp-proxy--mode-exit ()
   "Clean up lsp proxy mode when exiting."
+  (lsp-proxy-peek-abort)
+  (lsp-proxy-peek--source-closed)
   ;; Remove hooks
   (dolist (hook lsp-proxy--internal-hooks)
     (remove-hook (car hook) (cdr hook) t))

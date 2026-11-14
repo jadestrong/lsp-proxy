@@ -611,6 +611,45 @@ language-servers = [
  - `lsp-proxy-describe-thing-at-point`
  - `lsp-proxy-show-project-diagnostics`
 
+### Inline Peek Navigation
+
+Use `lsp-proxy-peek-definition`, `lsp-proxy-peek-references`, or
+`lsp-proxy-peek-implementations` to browse code below the current line without
+switching the selected buffer. Type definitions and declarations are available
+through `lsp-proxy-peek-type-definition` and `lsp-proxy-peek-declaration`.
+
+Inside a peek, run one of these commands again to select a visible symbol by
+its letter label and continue reading in the same preview. Each result retains
+its own query branches, so returning and exploring another symbol preserves
+the previous reading path. With `C-u`, start a new session at the editing cursor.
+
+| Key | Action |
+|---|---|
+| `M-n` / `M-p` | Scroll the source preview |
+| `M-N` / `M-P` | Preview the next / previous result |
+| Left / Right | Return to the parent query / follow its selected branch |
+| Up / Down | Switch between query branches |
+| `M-l d` / `M-l r` / `M-l i` | Continue with definitions / references / implementations |
+| `M-l t` | Continue with a type definition |
+| `M-l j` | Open the previewed location; `C-u` uses another window |
+| `C-g` | Close peek, or cancel an active symbol selection |
+
+`lsp-proxy-peek-restore` displays the last reading history below point in the
+current buffer. The original source must still be open and managed by the same
+proxy connection. An explicit jump records the editing position on the xref
+stack, so `xref-go-back` returns there.
+
+Queries and JDTLS decompiled-source loading are asynchronous. Only selected
+results load source buffers; existing unsaved text is used, and closing peek
+releases only buffers it created that remain unmodified and invisible. New
+queries use the server's current search scope; saved history retains its results.
+Uncached virtual source URIs from other providers need an asynchronous content
+provider before they can be previewed.
+
+No Citre, Projectile, or Evil dependency is required. A temporary Emacs keymap
+gives peek navigation keys precedence while its host buffer is selected,
+including in Evil states. Other editing keys keep their normal behavior.
+
 ### GitHub Copilot Integration
  - `lsp-proxy-copilot-sign-in`: Sign in to GitHub Copilot
  - `lsp-proxy-copilot-sign-out`: Sign out from GitHub Copilot  
@@ -686,6 +725,8 @@ Below is a complete list of user-facing customization variables (`defcustom`) pr
 | `lsp-proxy-enable-imenu` | `t` | Enable Imenu outline via `textDocument/documentSymbol` when server capability is present. |
 | `lsp-proxy-lazy-xref-threshold` | `10000` | Line-count threshold above which lazy/optimized Xref evaluation is considered for large buffers. |
 | `lsp-proxy-xref-optimization-strategy` | `'optimized` | Strategy for Xref processing: `eager` original; `lazy` minimal preview; `optimized` balanced (fast with previews). |
+| `lsp-proxy-peek-height` | `12` | Source lines shown in an inline peek. |
+| `lsp-proxy-peek-results-height` | `3` | Maximum result rows shown below the source preview. |
 | `lsp-proxy-enable-symbol-highlighting` | `t` | Highlight occurrences of symbol at point using `documentHighlight` support. |
 | `lsp-proxy-enable-hover-eldoc` | `nil` | Request hover info automatically and integrate into Eldoc while moving point. |
 
