@@ -728,11 +728,76 @@ impl Application {
                         self.spring_bridge.remove_client(server_id);
                         self.work_done_progress.remove_server(server_id);
                         let language_server = language_server!();
+                        let mut affected_documents = Vec::new();
                         for doc in self.editor.documents_mut() {
+                            let regular =
+                                doc.language_servers.values().any(|ls| ls.id() == server_id);
+                            let virtual_doc = doc
+                                .language_servers_of_virtual_doc
+                                .values()
+                                .any(|entry| entry.client.id() == server_id);
+                            let had_diagnostics =
+                                doc.diagnostics().as_ref().is_some_and(|diagnostics| {
+                                    diagnostics
+                                        .iter()
+                                        .any(|diag| diag.provider.server_id == server_id)
+                                });
+                            doc.language_servers.retain(|_, ls| ls.id() != server_id);
+                            doc.language_servers_of_virtual_doc
+                                .retain(|_, entry| entry.client.id() != server_id);
                             doc.clear_all_diagnostics(server_id);
+                            if regular || virtual_doc || had_diagnostics {
+                                doc.previous_diagnostic_id = None;
+                                let generation = doc.next_pull_generation();
+                                doc.accept_pull_generation(generation);
+                                affected_documents.push((
+                                    doc.uri.clone(),
+                                    regular,
+                                    virtual_doc,
+                                    had_diagnostics,
+                                ));
+                            }
                         }
-                        // Remove the language server from the registry
                         self.editor.language_servers.remove_by_id(server_id);
+                        for (uri, regular, virtual_doc, had_diagnostics) in affected_documents {
+                            if let Some(doc) = self.editor.document_by_uri(&uri) {
+                                if regular
+                                    && !doc.language_servers.values().any(|ls| !ls.is_initialized())
+                                {
+                                    self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                        doc.get_server_capabilities(),
+                                    );
+                                }
+                                if virtual_doc {
+                                    self.send_notification::<lsp_ext::CustomServerCapabilities>(
+                                        doc.get_virtual_doc_server_capabilities(),
+                                    );
+                                }
+                                if had_diagnostics {
+                                    let remaining = doc
+                                        .diagnostics()
+                                        .as_ref()
+                                        .map(|diagnostics| {
+                                            diagnostics
+                                                .iter()
+                                                .map(|diag| diag.item.clone())
+                                                .collect::<Vec<_>>()
+                                        })
+                                        .unwrap_or_default();
+                                    let max = config::MAX_DIAGNOSTICS_PUSH
+                                        .get()
+                                        .copied()
+                                        .unwrap_or(DEFAULT_MAX_DIAGNOSTICS_PUSH);
+                                    self.send_notification::<lsp_types::notification::PublishDiagnostics>(
+                                        lsp_types::PublishDiagnosticsParams {
+                                            uri,
+                                            version: Some(doc.version()),
+                                            diagnostics: limit_diagnostics_for_push(&remaining, max),
+                                        },
+                                    );
+                                }
+                            }
+                        }
                         self.send_notification::<lsp_types::notification::ShowMessage>(
                             lsp_types::ShowMessageParams {
                                 typ: lsp_types::MessageType::ERROR,
@@ -2462,6 +2527,145 @@ mod java_workspace_cleanup_tests {
         );
         request.params.params = json!({"serverName":"jdtls"});
         request
+    }
+
+    #[tokio::test]
+    async fn test_transport_exit_detaches_normal_and_virtual_documents_and_refreshes_editor() {
+        let (mut app, receiver) = app();
+        let (source, mut events) =
+            crate::test_support::client("jdtls", 11, "file:///w/App.java", true).await;
+        let (other, _other_events) =
+            crate::test_support::client("other", 12, "file:///w/App.java", true).await;
+        for client in [&source, &other] {
+            app.editor
+                .language_servers
+                .insert_test_client(client.clone());
+        }
+        let mut documents = Vec::new();
+        for (uri, virtual_doc, survivor) in [
+            ("file:///w/App.java", false, true),
+            ("file:///w/Notes.org", true, true),
+            ("file:///w/Alone.java", false, false),
+        ] {
+            let uri = lsp_types::Url::parse(uri).unwrap();
+            let doc_id = app
+                .editor
+                .new_document(&uri, Some(if virtual_doc { "org" } else { "java" }))
+                .id();
+            let doc = app.editor.document_mut(doc_id).unwrap();
+            if virtual_doc {
+                doc.insert_virtual_doc_server("java".into(), source.clone());
+                doc.insert_virtual_doc_server("other".into(), other.clone());
+            } else {
+                doc.language_servers.insert("jdtls".into(), source.clone());
+                if survivor {
+                    doc.language_servers.insert("other".into(), other.clone());
+                }
+            }
+            for client in [&source, &other] {
+                if client.id() == other.id() && !survivor {
+                    continue;
+                }
+                let provider = DiagnosticProvider {
+                    server_id: client.id(),
+                    identifier: None,
+                };
+                doc.replace_diagnostics(
+                    vec![DiagnosticItem {
+                        item: lsp_types::Diagnostic {
+                            message: client.name().into(),
+                            ..Default::default()
+                        },
+                        provider: provider.clone(),
+                        file_path: String::new(),
+                    }],
+                    &provider,
+                );
+            }
+            doc.previous_diagnostic_id = Some("old-server-result".into());
+            let old_generation = doc.next_pull_generation();
+            documents.push((doc.id(), uri, virtual_doc, survivor, old_generation));
+        }
+        assert!(matches!(
+            source
+                .call_method(
+                    "disconnect".to_owned().into(),
+                    "test/closeOutput".into(),
+                    Value::Null
+                )
+                .await,
+            Err(lsp::Error::StreamClosed)
+        ));
+        let (id, exit) = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(source.process.lock().await.try_wait().unwrap().is_some());
+        app.handle_language_server_message(exit, id, tokio::sync::mpsc::unbounded_channel().0)
+            .await;
+        assert!(app.editor.language_servers.get_by_id(source.id()).is_none());
+        assert!(app.editor.language_servers.get_by_id(other.id()).is_some());
+        let notifications = receiver
+            .try_iter()
+            .filter_map(|message| match message {
+                Message::Notification(n) => Some(n),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for (id, uri, virtual_doc, survivor, old_generation) in documents {
+            let doc = app.editor.document_mut(id).unwrap();
+            assert!(!doc
+                .language_servers
+                .values()
+                .any(|client| client.id() == source.id()));
+            assert!(!doc
+                .language_servers_of_virtual_doc
+                .values()
+                .any(|entry| entry.client.id() == source.id()));
+            let diagnostics = doc.diagnostics().as_ref().unwrap();
+            assert_eq!(diagnostics.len(), usize::from(survivor));
+            assert!(diagnostics
+                .iter()
+                .all(|diag| diag.provider.server_id == other.id()));
+            assert!(doc.previous_diagnostic_id.is_none());
+            assert!(
+                !doc.accept_pull_generation(old_generation),
+                "queued diagnostics from the old instance must not return"
+            );
+            let capabilities = if virtual_doc {
+                doc.get_virtual_doc_server_capabilities()
+            } else {
+                doc.get_server_capabilities()
+            };
+            assert_eq!(capabilities.has_any_servers, survivor);
+            assert!(notifications
+                .iter()
+                .any(|n| n.method == lsp_ext::CustomServerCapabilities::METHOD
+                    && n.params.params == serde_json::to_value(&capabilities).unwrap()));
+            let published = notifications
+                .iter()
+                .find(|n| {
+                    n.method == lsp_types::notification::PublishDiagnostics::METHOD
+                        && n.params.params["uri"] == uri.as_str()
+                })
+                .unwrap();
+            assert_eq!(
+                published.params.params["diagnostics"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                usize::from(survivor)
+            );
+        }
+        assert!(other
+            .call_method(
+                "alive".to_owned().into(),
+                "test/missingResult".into(),
+                Value::Null
+            )
+            .await
+            .is_ok());
+        other.stop_and_wait().await.unwrap();
     }
 
     #[tokio::test]

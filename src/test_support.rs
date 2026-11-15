@@ -14,9 +14,13 @@ configurations=[]
 watched_files=[]
 diagnostic_calls=[]
 held_diagnostics=[]
+held_requests=[]
 def send(value):
     value['jsonrpc']='2.0'
     body=json.dumps(value).encode()
+    sys.stdout.buffer.write(('Content-Length: %d\r\n\r\n'%len(body)).encode()+body)
+    sys.stdout.buffer.flush()
+def raw(body):
     sys.stdout.buffer.write(('Content-Length: %d\r\n\r\n'%len(body)).encode()+body)
     sys.stdout.buffer.flush()
 def answer(mid,value): send({'id':mid,'result':value})
@@ -52,6 +56,30 @@ while True:
         provider={} if name=='hierarchy-options' else name!='hierarchy-unsupported'
         answer(mid,{'capabilities':{'callHierarchyProvider':provider,'typeHierarchyProvider':provider}})
     elif method=='test/initializeParams': answer(mid,initialize_params)
+    elif method=='test/hold': held_requests.append(mid)
+    elif method=='test/heldRequests': answer(mid,len(held_requests))
+    elif method=='test/missingResult': send({'id':mid})
+    elif method=='test/malformedResponse': send({'id':mid,'error':{'code':'bad','message':'malformed'}})
+    elif method=='test/bothResults': send({'id':mid,'result':None,'error':{'code':-32042,'message':'failure'}})
+    elif method=='test/rpcError': send({'id':mid,'error':{'code':-32042,'message':'real RPC failure','data':{'detail':42}}})
+    elif method=='test/malformedMessages':
+        raw(b'{broken JSON')
+        raw(b'"\xff"')
+        raw(b'[]')
+        raw(b'{"jsonrpc":"2.0","method":3}')
+        answer(mid,'still alive')
+    elif method in ('test/closeOutput','test/truncatedFrame','test/closeInput','test/exitNotification'):
+        import os,time
+        if method=='test/closeInput':
+            os.close(0)
+            answer(mid,'input closed')
+        elif method=='test/exitNotification': send({'method':'exit'})
+        else:
+            if method=='test/truncatedFrame':
+                sys.stdout.buffer.write(b'Content-Length: 100\r\n\r\n{}')
+                sys.stdout.buffer.flush()
+            os.close(1)
+        time.sleep(60)
     elif method in ('textDocument/prepareCallHierarchy','textDocument/prepareTypeHierarchy') or method.startswith(('callHierarchy/','typeHierarchy/')):
         if name=='hierarchy-error':
             send({'id':mid,'error':{'code':-32042,'message':'hierarchy RPC failure'}})
@@ -133,7 +161,7 @@ pub(crate) async fn client(
     uri: &str,
     initialized: bool,
 ) -> (Arc<Client>, UnboundedReceiver<(usize, Call)>) {
-    let (client, rx, notify, _) = Client::start(
+    let (client, mut rx, notify, _) = Client::start(
         "python3",
         &[
             "-u".into(),
@@ -158,6 +186,13 @@ pub(crate) async fn client(
         initialize(&client);
     }
     notify.notify_one();
+    // Consume the synthetic startup notification while the test receiver is
+    // still alive. Tests may retain only Client to exercise request/response IO.
+    let (_, startup) = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(startup, Call::Notification(n) if n.method == "initialized"));
     (client, rx)
 }
 

@@ -547,7 +547,7 @@ while True:
     async fn client(tmp: &Path, id: usize, project: &Path, fixture: Value) -> Arc<Client> {
         let fixture_file = tmp.join(format!("fixture-{id}.json"));
         fs::write(&fixture_file, fixture.to_string()).unwrap();
-        let (mut client, _, notify, _) = Client::start(
+        let (mut client, mut events, notify, _) = Client::start(
             "python3",
             &[
                 "-u".into(),
@@ -569,6 +569,14 @@ while True:
         client.root_path = project.to_owned();
         client.capabilities.set(Default::default()).unwrap();
         notify.notify_one();
+        // Keep the client event channel alive until startup has been delivered.
+        let (_, startup) = tokio::time::timeout(std::time::Duration::from_secs(2), events.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(startup, crate::lsp::jsonrpc::Call::Notification(n) if n.method == "initialized")
+        );
         Arc::new(client)
     }
 

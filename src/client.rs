@@ -180,7 +180,7 @@ fn publish_diagnostics_capabilities() -> lsp::PublishDiagnosticsClientCapabiliti
 pub struct Client {
     id: usize,
     name: String,
-    process: tokio::sync::Mutex<Child>,
+    pub(crate) process: Arc<tokio::sync::Mutex<Child>>,
     pub(crate) jdtls_data_path: Option<std::path::PathBuf>,
     jdtls_bundle_source: Option<crate::java_bundles::BundleSource>,
     server_tx: UnboundedSender<Payload>,
@@ -381,9 +381,10 @@ impl Client {
         let writer = BufWriter::new(process.stdin.take().expect("Failed to open stdin"));
         let reader = BufReader::new(process.stdout.take().expect("Failed to open stdout"));
         let stderr = BufReader::new(process.stderr.take().expect("Failed to open stderr"));
+        let process = Arc::new(tokio::sync::Mutex::new(process));
 
         let (server_rx, server_tx, initialize_notify, client_tx) =
-            Transport::start(reader, writer, stderr, id, name.clone());
+            Transport::start(reader, writer, stderr, id, name.clone(), process.clone());
 
         if let Some(features) = features {
             if !features.config_files.is_empty()
@@ -407,7 +408,7 @@ impl Client {
         let client = Self {
             id,
             name,
-            process: tokio::sync::Mutex::new(process),
+            process,
             jdtls_data_path,
             jdtls_bundle_source,
             server_tx,
